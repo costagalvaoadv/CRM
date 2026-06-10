@@ -4,16 +4,14 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Costa Galvão | CRM Leads</title>
-<script src="https://cdn.tailwindcss.com"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 
-<!-- Firebase v10 -->
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
-import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, updateProfile } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
-// ── INSIRA SUAS CREDENCIAIS FIREBASE AQUI ──
 const firebaseConfig = {
   apiKey: "AIzaSyC2Jc8KUg9QBlGwuqwlN3tQ6C_B1zZi7QU",
   authDomain: "crm-costa-galvao.firebaseapp.com",
@@ -23,185 +21,323 @@ const firebaseConfig = {
   appId: "1:876223519085:web:a8fc137a9103796deb6264"
 };
 
-let app, db, unsubscribe;
+const MASTER_EMAIL = "jucineidecostagalvao@gmail.com";
+
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+const auth = getAuth(app);
+
 let currentUser = null;
+let currentProfile = null;
 let allLeads = [];
+let allUsers = [];
 let editingLeadId = null;
 let currentTab = 'kanban';
 let filterStatus = 'ALL';
 let searchQuery = '';
 
-// ── NOTAS RÁPIDAS ──
-const QUICK_NOTES = [
-  "Script inicial enviado",
-  "Áudio de qualificação enviado",
-  "Aguardando retorno",
-  "Lead não respondeu",
-  "Lead visualizou e não respondeu",
-  "Mensagem automática enviada",
-  "Follow-up agendado",
-  "Cliente sumiu",
-  "Clicou por engano",
-  "Encaminhado para a Dra.",
-  "Documentos solicitados",
-  "Contrato enviado para assinatura",
-  "Pedimos indicação",
-  "Desqualificado — sem vínculo CLT",
-  "Desqualificado — filho maior de 5 anos",
-  "Link do WhatsApp enviado",
-];
+// ─────────────────────────────────────────
+// AUTH STATE
+// ─────────────────────────────────────────
+onAuthStateChanged(auth, async user => {
+  if (user) {
+    const snap = await getDoc(doc(db, "usuarios", user.uid));
+    if (snap.exists()) {
+      currentProfile = snap.data();
+      currentUser = { uid: user.uid, email: user.email, ...currentProfile };
+      showApp();
+    } else {
+      await signOut(auth);
+      showScreen('login');
+    }
+  } else {
+    currentUser = null;
+    currentProfile = null;
+    // Checar se é primeiro acesso (sem usuários)
+    checkFirstAccess();
+  }
+});
 
-const CAMPAIGNS = ["SM - 01", "SM - 02", "SM - 03", "SM - V3", "Redes Sociais", "Indicação", "Outro"];
-const USERS = ["Isabel", "Joelma"];
-const STATUS_LIST = ["EM ANDAMENTO", "QUALIFICADO", "DESQUALIFICADO", "SEM RESPOSTA"];
-
-const STATUS_META = {
-  "EM ANDAMENTO":   { color: "#4F6EF7", bg: "rgba(79,110,247,0.12)", label: "Em Andamento" },
-  "QUALIFICADO":    { color: "#10B981", bg: "rgba(16,185,129,0.12)", label: "Qualificado" },
-  "DESQUALIFICADO": { color: "#EF4444", bg: "rgba(239,68,68,0.12)",  label: "Desqualificado" },
-  "SEM RESPOSTA":   { color: "#F5A623", bg: "rgba(245,166,35,0.12)", label: "Sem Resposta" },
-};
-
-// ── INIT ──
-function initFirebase() {
+async function checkFirstAccess() {
   try {
-    app = initializeApp(firebaseConfig);
-    db = getFirestore(app);
-    startListener();
+    const snap = await getDoc(doc(db, "config", "setup"));
+    if (!snap.exists() || !snap.data().configured) {
+      showScreen('first-setup');
+    } else {
+      showScreen('login');
+    }
   } catch(e) {
-    showToast("Erro Firebase: " + e.message, "error");
+    showScreen('login');
   }
 }
 
-function startListener() {
-  const q = query(collection(db, "leads"), orderBy("createdAt", "desc"));
-  unsubscribe = onSnapshot(q, snap => {
-    allLeads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAll();
-  }, err => {
-    showToast("Erro ao carregar leads: " + err.message, "error");
+// ─────────────────────────────────────────
+// SCREENS
+// ─────────────────────────────────────────
+function showScreen(name) {
+  ['first-setup','login','app'].forEach(s => {
+    document.getElementById('screen-' + s).style.display = 'none';
+  });
+  document.getElementById('screen-' + name).style.display = 'flex';
+}
+
+function showApp() {
+  showScreen('app');
+  document.getElementById('header-name').textContent = currentUser.nome || currentUser.email;
+  document.getElementById('header-role').textContent = currentUser.role === 'gestora' ? 'Gestora' : 'Atendente';
+  // Mostrar aba equipe só para gestora
+  document.getElementById('tab-equipe').style.display = currentUser.role === 'gestora' ? 'inline-block' : 'none';
+  startLeadsListener();
+  if (currentUser.role === 'gestora') startUsersListener();
+}
+
+// ─────────────────────────────────────────
+// PRIMEIRO ACESSO
+// ─────────────────────────────────────────
+window.criarContaGestora = async function() {
+  const nome  = document.getElementById('setup-nome').value.trim();
+  const email = document.getElementById('setup-email').value.trim();
+  const senha = document.getElementById('setup-senha').value;
+  const conf  = document.getElementById('setup-conf').value;
+
+  if (!nome || !email || !senha) return showToast('Preencha todos os campos', 'error');
+  if (senha !== conf) return showToast('As senhas não coincidem', 'error');
+  if (senha.length < 6) return showToast('Senha deve ter no mínimo 6 caracteres', 'error');
+
+  try {
+    setBtnLoading('btn-setup', true);
+    const cred = await createUserWithEmailAndPassword(auth, email, senha);
+    await setDoc(doc(db, "usuarios", cred.user.uid), {
+      nome, email, role: 'gestora', ativo: true, criadoEm: serverTimestamp()
+    });
+    await setDoc(doc(db, "config", "setup"), { configured: true, gestoraEmail: email });
+    showToast('Conta criada com sucesso!');
+  } catch(e) {
+    showToast(firebaseError(e.code), 'error');
+  } finally {
+    setBtnLoading('btn-setup', false);
+  }
+};
+
+// ─────────────────────────────────────────
+// LOGIN
+// ─────────────────────────────────────────
+window.fazerLogin = async function() {
+  const email = document.getElementById('login-email').value.trim();
+  const senha = document.getElementById('login-senha').value;
+  if (!email || !senha) return showToast('Preencha e-mail e senha', 'error');
+  try {
+    setBtnLoading('btn-login', true);
+    await signInWithEmailAndPassword(auth, email, senha);
+  } catch(e) {
+    showToast(firebaseError(e.code), 'error');
+  } finally {
+    setBtnLoading('btn-login', false);
+  }
+};
+
+window.fazerLogout = async function() {
+  if (!confirm('Deseja sair do sistema?')) return;
+  await signOut(auth);
+};
+
+// ─────────────────────────────────────────
+// GESTÃO DE EQUIPE
+// ─────────────────────────────────────────
+function startUsersListener() {
+  onSnapshot(collection(db, "usuarios"), snap => {
+    allUsers = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderEquipe();
   });
 }
 
-// ── RENDER ALL ──
+window.abrirModalEquipe = function(uid) {
+  const u = uid ? allUsers.find(x => x.id === uid) : null;
+  document.getElementById('eq-uid').value        = uid || '';
+  document.getElementById('eq-nome').value       = u?.nome || '';
+  document.getElementById('eq-email').value      = u?.email || '';
+  document.getElementById('eq-role').value       = u?.role || 'atendente';
+  document.getElementById('eq-senha').value      = '';
+  document.getElementById('eq-modal-title').textContent = u ? 'Editar Colaboradora' : 'Nova Colaboradora';
+  document.getElementById('eq-senha-row').style.display = u ? 'none' : 'flex';
+  document.getElementById('btn-eq-delete').style.display = u && u.email !== MASTER_EMAIL ? 'block' : 'none';
+  document.getElementById('modal-equipe').style.display = 'flex';
+};
+
+window.fecharModalEquipe = function() {
+  document.getElementById('modal-equipe').style.display = 'none';
+};
+
+window.salvarColaboradora = async function() {
+  const uid   = document.getElementById('eq-uid').value;
+  const nome  = document.getElementById('eq-nome').value.trim();
+  const email = document.getElementById('eq-email').value.trim();
+  const role  = document.getElementById('eq-role').value;
+  const senha = document.getElementById('eq-senha').value;
+
+  if (!nome || !email) return showToast('Nome e e-mail são obrigatórios', 'error');
+
+  if (uid) {
+    // Editar existente (só nome e role)
+    await updateDoc(doc(db, "usuarios", uid), { nome, role });
+    showToast('Colaboradora atualizada!');
+  } else {
+    // Criar nova
+    if (!senha || senha.length < 6) return showToast('Senha deve ter no mínimo 6 caracteres', 'error');
+    try {
+      setBtnLoading('btn-eq-save', true);
+      const cred = await createUserWithEmailAndPassword(auth, email, senha);
+      await setDoc(doc(db, "usuarios", cred.user.uid), {
+        nome, email, role, ativo: true, criadoEm: serverTimestamp()
+      });
+      // Re-login da gestora (criar usuário desloga)
+      showToast('Colaboradora criada! Fazendo login novamente...');
+      setTimeout(() => location.reload(), 1500);
+      return;
+    } catch(e) {
+      showToast(firebaseError(e.code), 'error');
+      return;
+    } finally {
+      setBtnLoading('btn-eq-save', false);
+    }
+  }
+  fecharModalEquipe();
+};
+
+window.excluirColaboradora = async function() {
+  const uid = document.getElementById('eq-uid').value;
+  if (!uid) return;
+  if (!confirm('Remover acesso desta colaboradora?')) return;
+  await updateDoc(doc(db, "usuarios", uid), { ativo: false });
+  showToast('Acesso removido.', 'warn');
+  fecharModalEquipe();
+};
+
+function renderEquipe() {
+  const el = document.getElementById('equipe-lista');
+  if (!el) return;
+  el.innerHTML = allUsers.map(u => `
+    <div class="user-card">
+      <div class="user-avatar">${(u.nome||'?')[0].toUpperCase()}</div>
+      <div class="user-info">
+        <div class="user-name">${u.nome}</div>
+        <div class="user-email">${u.email}</div>
+        <span class="user-role ${u.role === 'gestora' ? 'role-gestora' : 'role-atendente'}">${u.role === 'gestora' ? 'Gestora' : 'Atendente'}</span>
+      </div>
+      <button class="btn-edit-user" onclick="abrirModalEquipe('${u.id}')">Editar</button>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────────
+// LEADS
+// ─────────────────────────────────────────
+function startLeadsListener() {
+  const q = query(collection(db, "leads"), orderBy("createdAt", "desc"));
+  onSnapshot(q, snap => {
+    allLeads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderAll();
+  });
+}
+
 function renderAll() {
   renderMetrics();
-  if (currentTab === 'kanban') renderKanban();
-  else renderTable();
   renderFollowups();
+  if (currentTab === 'kanban') renderKanban();
+  else if (currentTab === 'table') renderTable();
+  else if (currentTab === 'equipe') renderEquipe();
 }
 
 function renderMetrics() {
   const now = new Date();
-  const month = now.getMonth();
-  const year = now.getFullYear();
-
+  const month = now.getMonth(), year = now.getFullYear();
   const monthly = allLeads.filter(l => {
     const d = l.createdAt?.toDate?.();
     return d && d.getMonth() === month && d.getFullYear() === year;
   });
-
-  const total   = monthly.length;
-  const andamento = monthly.filter(l => l.status === "EM ANDAMENTO").length;
-  const qualif    = monthly.filter(l => l.status === "QUALIFICADO").length;
-  const semResp   = monthly.filter(l => l.status === "SEM RESPOSTA").length;
-
-  document.getElementById('m-total').textContent    = total;
-  document.getElementById('m-andamento').textContent = andamento;
-  document.getElementById('m-qualif').textContent   = qualif;
-  document.getElementById('m-semresp').textContent  = semResp;
+  document.getElementById('m-total').textContent    = monthly.length;
+  document.getElementById('m-andamento').textContent = monthly.filter(l => l.status === 'EM ANDAMENTO').length;
+  document.getElementById('m-qualif').textContent   = monthly.filter(l => l.status === 'QUALIFICADO').length;
+  document.getElementById('m-semresp').textContent  = monthly.filter(l => l.status === 'SEM RESPOSTA').length;
 }
 
 function renderFollowups() {
   const today = new Date(); today.setHours(23,59,59,999);
   const urgent = allLeads.filter(l => {
-    if (!["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status)) return false;
+    if (!['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status)) return false;
     if (!l.nextFollowup) return false;
     const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
     return d <= today;
   });
-
   const badge = document.getElementById('fu-badge');
   badge.textContent = urgent.length;
   badge.style.display = urgent.length ? 'flex' : 'none';
-
   const container = document.getElementById('followup-cards');
   if (!urgent.length) {
-    container.innerHTML = `<div class="empty-fu">✅ Nenhum follow-up pendente hoje</div>`;
-    document.getElementById('fu-pulse').classList.remove('pulsing');
+    container.innerHTML = `<div class="empty-state-fu">✅ Nenhum follow-up pendente hoje</div>`;
+    document.getElementById('fu-panel').classList.remove('pulsing');
     return;
   }
-  document.getElementById('fu-pulse').classList.add('pulsing');
-
+  document.getElementById('fu-panel').classList.add('pulsing');
   container.innerHTML = urgent.map(l => {
     const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
     const isOverdue = fu < new Date(new Date().setHours(0,0,0,0));
-    const sm = STATUS_META[l.status] || STATUS_META["EM ANDAMENTO"];
+    const sm = STATUS_META[l.status];
     const wa = formatPhone(l.phone);
     return `
     <div class="fu-card ${isOverdue ? 'overdue' : ''}" onclick="openLead('${l.id}')">
-      <div class="fu-card-top">
+      <div class="fu-top">
         <span class="fu-name">${l.name || 'Sem Nome'}</span>
         <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
       </div>
       <div class="fu-meta">
         ${l.campaign ? `<span class="campaign-tag">${l.campaign}</span>` : ''}
-        <span class="fu-resp">${l.assignee || '—'}</span>
-        <span class="fu-date ${isOverdue ? 'overdue-text' : ''}">${isOverdue ? '⚠️ ' : '📅 '}${formatDate(fu)}</span>
+        <span class="fu-resp">${l.assignee||'—'}</span>
+        <span class="fu-date ${isOverdue?'text-red':''}">${isOverdue?'⚠️ ':'📅 '}${formatDate(fu)}</span>
       </div>
       ${l.currentNote ? `<div class="fu-note">${l.currentNote}</div>` : ''}
       <div class="fu-actions" onclick="event.stopPropagation()">
-        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-sm">WhatsApp</a>` : ''}
-        <button onclick="quickComplete('${l.id}')" class="btn-done-sm">✓ Feito</button>
+        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa">WhatsApp</a>` : ''}
+        <button onclick="quickDone('${l.id}')" class="btn-done">✓ Feito</button>
       </div>
     </div>`;
   }).join('');
 }
 
 function renderKanban() {
-  const cols = {
-    "EM ANDAMENTO": [], "SEM RESPOSTA": [], "QUALIFICADO": [], "DESQUALIFICADO": []
-  };
-  allLeads.forEach(l => {
-    if (cols[l.status] !== undefined) cols[l.status].push(l);
-  });
-
+  const cols = { 'EM ANDAMENTO':[], 'SEM RESPOSTA':[], 'QUALIFICADO':[], 'DESQUALIFICADO':[] };
+  allLeads.forEach(l => { if (cols[l.status]) cols[l.status].push(l); });
   Object.keys(cols).forEach(status => {
-    const el = document.getElementById(`col-${status}`);
+    const el = document.getElementById('col-' + status);
     if (!el) return;
-    const sm = STATUS_META[status];
-    const cards = cols[status];
-    document.getElementById(`col-count-${status}`).textContent = cards.length;
-    el.innerHTML = cards.length === 0
+    document.getElementById('col-count-' + status).textContent = cols[status].length;
+    el.innerHTML = cols[status].length === 0
       ? `<div class="col-empty">Nenhum lead</div>`
-      : cards.map(l => kanbanCard(l)).join('');
+      : cols[status].map(l => kanbanCard(l)).join('');
   });
 }
 
 function kanbanCard(l) {
   const wa = formatPhone(l.phone);
-  const sm = STATUS_META[l.status] || {};
   const today = new Date(); today.setHours(23,59,59,999);
   const hasUrgent = l.nextFollowup && (() => {
     const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
-    return d <= today && ["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status);
+    return d <= today && ['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status);
   })();
-
   return `
-  <div class="kanban-card ${hasUrgent ? 'card-urgent' : ''}" onclick="openLead('${l.id}')">
-    <div class="kc-header">
-      <span class="kc-name">${l.name || 'Sem Nome'}</span>
-      <button class="kc-menu" onclick="event.stopPropagation(); openLead('${l.id}')">⋯</button>
+  <div class="k-card ${hasUrgent ? 'k-card-urgent' : ''}" onclick="openLead('${l.id}')">
+    <div class="k-top">
+      <span class="k-name">${l.name || 'Sem Nome'}</span>
     </div>
     ${l.campaign ? `<span class="campaign-tag">${l.campaign}</span>` : ''}
-    <div class="kc-meta">
-      ${l.phone ? `<span class="kc-phone">${l.phone}</span>` : ''}
-      <span class="kc-resp">${l.assignee || '—'}</span>
+    <div class="k-meta">
+      ${l.phone ? `<span class="k-phone">${l.phone}</span>` : ''}
+      <span class="k-resp">${l.assignee||'—'}</span>
     </div>
-    ${l.currentNote ? `<div class="kc-note">${l.currentNote}</div>` : ''}
-    <div class="kc-footer" onclick="event.stopPropagation()">
+    ${l.currentNote ? `<div class="k-note">${l.currentNote}</div>` : ''}
+    <div class="k-footer" onclick="event.stopPropagation()">
       ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>` : '<span></span>'}
-      ${l.nextFollowup ? `<span class="kc-fu ${hasUrgent ? 'urgent-fu' : ''}">📅 ${formatDate(l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup))}</span>` : ''}
+      ${l.nextFollowup ? `<span class="k-fu ${hasUrgent?'urgent-fu':''}">📅 ${formatDate(l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup))}</span>` : ''}
     </div>
   </div>`;
 }
@@ -211,89 +347,76 @@ function renderTable() {
   if (filterStatus !== 'ALL') filtered = filtered.filter(l => l.status === filterStatus);
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(l =>
-      (l.name||'').toLowerCase().includes(q) ||
-      (l.phone||'').includes(q)
-    );
+    filtered = filtered.filter(l => (l.name||'').toLowerCase().includes(q) || (l.phone||'').includes(q));
   }
-
   const tbody = document.getElementById('table-body');
   if (!filtered.length) {
     tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2rem;color:#666">Nenhum lead encontrado</td></tr>`;
     return;
   }
-
   tbody.innerHTML = filtered.map(l => {
-    const sm = STATUS_META[l.status] || {};
+    const sm = STATUS_META[l.status] || STATUS_META['EM ANDAMENTO'];
     const wa = formatPhone(l.phone);
     const created = l.createdAt?.toDate ? l.createdAt.toDate() : null;
     const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : l.nextFollowup ? new Date(l.nextFollowup) : null;
     const today = new Date(); today.setHours(23,59,59,999);
-    const isUrgent = fu && fu <= today && ["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status);
-
+    const isUrgent = fu && fu <= today && ['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status);
     return `
-    <tr class="table-row" onclick="openLead('${l.id}')">
+    <tr class="t-row" onclick="openLead('${l.id}')">
       <td>${created ? formatDate(created) : '—'}</td>
-      <td class="lead-name-cell">${l.name || 'Sem Nome'}</td>
+      <td class="t-name">${l.name || 'Sem Nome'}</td>
       <td onclick="event.stopPropagation()">
-        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" title="${l.phone}">${l.phone||'—'}</a>` : l.phone||'—'}
+        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">${l.phone||'—'}</a>` : l.phone||'—'}
       </td>
-      <td>${l.campaign || '—'}</td>
-      <td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label||l.status}</span></td>
-      <td>${l.assignee || '—'}</td>
-      <td class="note-cell">${l.currentNote || '—'}</td>
-      <td class="${isUrgent ? 'urgent-fu' : ''}">${fu ? formatDate(fu) : '—'}</td>
+      <td>${l.campaign||'—'}</td>
+      <td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td>
+      <td>${l.assignee||'—'}</td>
+      <td class="t-note">${l.currentNote||'—'}</td>
+      <td class="${isUrgent?'urgent-fu':''}">${fu ? formatDate(fu) : '—'}</td>
     </tr>`;
   }).join('');
 }
 
-// ── LEAD MODAL ──
+// ─────────────────────────────────────────
+// LEAD MODAL
+// ─────────────────────────────────────────
 window.openLead = function(id) {
   const l = id === 'new' ? null : allLeads.find(x => x.id === id);
   editingLeadId = id === 'new' ? null : id;
-  const modal = document.getElementById('lead-modal');
-  const title = document.getElementById('modal-title');
-
-  title.textContent = l ? `Editar Lead — ${l.name || 'Sem Nome'}` : 'Novo Lead';
-
-  document.getElementById('f-name').value       = l?.name || '';
-  document.getElementById('f-phone').value      = l?.phone || '';
-  document.getElementById('f-campaign').value   = l?.campaign || '';
-  document.getElementById('f-status').value     = l?.status || 'EM ANDAMENTO';
-  document.getElementById('f-assignee').value   = l?.assignee || currentUser || '';
-  document.getElementById('f-note').value       = '';
-  document.getElementById('f-nextfu').value     = l?.nextFollowup ? (() => {
+  document.getElementById('modal-lead-title').textContent = l ? `Editar — ${l.name||'Sem Nome'}` : 'Novo Lead';
+  document.getElementById('f-name').value     = l?.name || '';
+  document.getElementById('f-phone').value    = l?.phone || '';
+  document.getElementById('f-campaign').value = l?.campaign || '';
+  document.getElementById('f-status').value   = l?.status || 'EM ANDAMENTO';
+  document.getElementById('f-assignee').value = l?.assignee || currentUser?.nome || '';
+  document.getElementById('f-note').value     = '';
+  document.getElementById('f-nextfu').value   = l?.nextFollowup ? (() => {
     const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
     return d.toISOString().slice(0,10);
   })() : '';
-
   renderLog(l?.log || []);
-  modal.classList.remove('hidden');
-  modal.classList.add('flex');
+  // Mostrar excluir só para gestora
+  document.getElementById('btn-delete-lead').style.display = currentUser?.role === 'gestora' ? 'block' : 'none';
+  document.getElementById('modal-lead').style.display = 'flex';
 };
 
 window.closeLead = function() {
-  document.getElementById('lead-modal').classList.add('hidden');
-  document.getElementById('lead-modal').classList.remove('flex');
+  document.getElementById('modal-lead').style.display = 'none';
   editingLeadId = null;
 };
 
 function renderLog(log) {
   const el = document.getElementById('lead-log');
-  if (!log.length) {
-    el.innerHTML = `<div class="log-empty">Nenhum histórico ainda.</div>`;
-    return;
-  }
-  el.innerHTML = [...log].reverse().map(entry => `
+  if (!log.length) { el.innerHTML = `<div class="log-empty">Nenhum histórico ainda.</div>`; return; }
+  el.innerHTML = [...log].reverse().map(e => `
     <div class="log-entry">
       <div class="log-meta">
-        <span class="log-user">${entry.user}</span>
-        <span class="log-time">${formatDatetime(entry.ts?.toDate ? entry.ts.toDate() : new Date(entry.ts))}</span>
+        <span class="log-user">${e.user}</span>
+        <span class="log-time">${formatDatetime(e.ts?.toDate ? e.ts.toDate() : new Date(e.ts))}</span>
       </div>
-      <div class="log-text">${entry.note}</div>
-      ${entry.statusChange ? `<span class="log-status-change">Status → ${entry.statusChange}</span>` : ''}
-    </div>
-  `).join('');
+      <div class="log-text">${e.note}</div>
+      ${e.statusChange ? `<span class="log-status-badge">→ ${e.statusChange}</span>` : ''}
+    </div>`).join('');
 }
 
 window.addQuickNote = function(note) {
@@ -309,608 +432,384 @@ window.saveLead = async function() {
   const assignee = document.getElementById('f-assignee').value;
   const note     = document.getElementById('f-note').value.trim();
   const nextFu   = document.getElementById('f-nextfu').value;
-
   const nextFollowup = nextFu ? Timestamp.fromDate(new Date(nextFu + 'T00:00:00')) : null;
 
   if (!editingLeadId) {
-    // Novo lead
-    const data = {
-      name, phone, campaign, status, assignee,
-      currentNote: note,
-      nextFollowup,
-      createdAt: serverTimestamp(),
-      lastContact: serverTimestamp(),
+    await addDoc(collection(db, "leads"), {
+      name, phone, campaign, status, assignee, currentNote: note, nextFollowup,
+      createdAt: serverTimestamp(), lastContact: serverTimestamp(),
       log: note ? [{ user: assignee, note, ts: new Date().toISOString(), statusChange: null }] : []
-    };
-    await addDoc(collection(db, "leads"), data);
-    showToast("Lead criado com sucesso!");
+    });
+    showToast('Lead criado!');
   } else {
     const existing = allLeads.find(l => l.id === editingLeadId);
-    const prevStatus = existing?.status;
-    const statusChanged = prevStatus && prevStatus !== status;
-
-    const updateData = {
-      name, phone, campaign, status, assignee,
-      nextFollowup,
-      lastContact: serverTimestamp(),
-    };
-    if (note) updateData.currentNote = note;
-
-    const logEntry = {
-      user: assignee,
-      note: note || (statusChanged ? `Status alterado para ${status}` : 'Lead atualizado'),
-      ts: new Date().toISOString(),
-      statusChange: statusChanged ? status : null
-    };
-    updateData.log = arrayUnion(logEntry);
-
-    await updateDoc(doc(db, "leads", editingLeadId), updateData);
-    showToast("Lead atualizado!");
+    const statusChanged = existing?.status && existing.status !== status;
+    const upd = { name, phone, campaign, status, assignee, nextFollowup, lastContact: serverTimestamp() };
+    if (note) upd.currentNote = note;
+    upd.log = arrayUnion({ user: assignee, note: note || (statusChanged ? `Status → ${status}` : 'Atualizado'), ts: new Date().toISOString(), statusChange: statusChanged ? status : null });
+    await updateDoc(doc(db, "leads", editingLeadId), upd);
+    showToast('Lead atualizado!');
   }
   closeLead();
 };
 
 window.deleteLead = async function() {
   if (!editingLeadId) return;
-  if (!confirm("Excluir este lead permanentemente?")) return;
+  if (!confirm('Excluir este lead permanentemente?')) return;
   await deleteDoc(doc(db, "leads", editingLeadId));
-  showToast("Lead removido.", "warn");
+  showToast('Lead removido.', 'warn');
   closeLead();
 };
 
-window.quickComplete = async function(id) {
-  const l = allLeads.find(x => x.id === id);
-  if (!l) return;
+window.quickDone = async function(id) {
   await updateDoc(doc(db, "leads", id), {
-    nextFollowup: null,
-    lastContact: serverTimestamp(),
-    log: arrayUnion({
-      user: currentUser || '—',
-      note: 'Follow-up realizado',
-      ts: new Date().toISOString(),
-      statusChange: null
-    })
+    nextFollowup: null, lastContact: serverTimestamp(),
+    log: arrayUnion({ user: currentUser?.nome||'—', note: 'Follow-up realizado', ts: new Date().toISOString(), statusChange: null })
   });
-  showToast("Follow-up marcado como feito!");
+  showToast('Follow-up concluído!');
 };
 
-// ── UTILS ──
-function formatPhone(p) {
-  if (!p) return '';
-  return p.replace(/\D/g,'').replace(/^0/, '').replace(/^55/, '55');
-}
-
-function formatDate(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
-}
-
-function formatDatetime(d) {
-  if (!d) return '—';
-  return new Date(d).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
-}
-
-function showToast(msg, type='success') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = `toast show ${type}`;
-  setTimeout(() => t.className = 'toast', 3000);
-}
-
-// ── TAB SWITCH ──
+// ─────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────
 window.switchTab = function(tab) {
   currentTab = tab;
-  document.getElementById('tab-kanban').classList.toggle('tab-active', tab === 'kanban');
-  document.getElementById('tab-table').classList.toggle('tab-active', tab === 'table');
-  document.getElementById('view-kanban').classList.toggle('hidden', tab !== 'kanban');
-  document.getElementById('view-table').classList.toggle('hidden', tab !== 'table');
+  ['kanban','table','equipe'].forEach(t => {
+    document.getElementById('tab-' + t)?.classList.toggle('tab-active', t === tab);
+    document.getElementById('view-' + t)?.classList.toggle('hidden', t !== tab);
+  });
   renderAll();
 };
 
 window.setFilter = function(s) {
   filterStatus = s;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('filter-' + s).classList.add('active');
+  document.getElementById('filter-' + s)?.classList.add('active');
   renderTable();
 };
 
-window.onSearch = function(v) {
-  searchQuery = v;
-  renderTable();
+window.onSearch = function(v) { searchQuery = v; renderTable(); };
+
+// ─────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────
+const STATUS_META = {
+  'EM ANDAMENTO':   { color: '#4F6EF7', bg: 'rgba(79,110,247,0.12)',  label: 'Em Andamento' },
+  'QUALIFICADO':    { color: '#10B981', bg: 'rgba(16,185,129,0.12)',  label: 'Qualificado' },
+  'DESQUALIFICADO': { color: '#EF4444', bg: 'rgba(239,68,68,0.12)',   label: 'Desqualificado' },
+  'SEM RESPOSTA':   { color: '#F5A623', bg: 'rgba(245,166,35,0.12)',  label: 'Sem Resposta' },
 };
 
-// ── USER SELECT SCREEN ──
-window.selectUser = function(user) {
-  currentUser = user;
-  document.getElementById('user-select').classList.add('hidden');
-  document.getElementById('app').classList.remove('hidden');
-  document.getElementById('header-user').textContent = user;
-  document.getElementById('f-assignee').value = user;
-  initFirebase();
-};
+function formatPhone(p) { if (!p) return ''; return '55' + p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,''); }
+function formatDate(d) { return d ? new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}) : '—'; }
+function formatDatetime(d) { return d ? new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'; }
 
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+function setBtnLoading(id, loading) {
+  const b = document.getElementById(id);
+  if (!b) return;
+  b.disabled = loading;
+  b.textContent = loading ? 'Aguarde...' : b.dataset.label || b.textContent;
+}
+
+function firebaseError(code) {
+  const map = {
+    'auth/email-already-in-use': 'Este e-mail já está em uso.',
+    'auth/invalid-email': 'E-mail inválido.',
+    'auth/wrong-password': 'Senha incorreta.',
+    'auth/user-not-found': 'Usuário não encontrado.',
+    'auth/weak-password': 'Senha muito fraca.',
+    'auth/invalid-credential': 'E-mail ou senha incorretos.',
+  };
+  return map[code] || 'Erro: ' + code;
+}
 </script>
 
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', sans-serif;
-    background: #0F1117;
-    color: #F8F9FC;
-    min-height: 100vh;
-  }
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', sans-serif; background: #0F1117; color: #F8F9FC; min-height: 100vh; }
 
-  /* ── USER SELECT ── */
-  #user-select {
-    position: fixed; inset: 0;
-    background: #0F1117;
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 2rem; z-index: 9999;
-  }
-  .us-logo { font-size: 1.1rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.05em; }
-  .us-title { font-size: 1.6rem; font-weight: 700; color: #F8F9FC; }
-  .us-sub { font-size: 0.9rem; color: #6B7280; }
-  .us-btns { display: flex; gap: 1rem; }
-  .us-btn {
-    padding: 1rem 2.5rem;
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 12px;
-    color: #F8F9FC;
-    font-size: 1rem; font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .us-btn:hover { background: #4F6EF7; border-color: #4F6EF7; transform: translateY(-2px); }
+/* ── AUTH SCREENS ── */
+.auth-screen {
+  position: fixed; inset: 0;
+  background: #0F1117;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column;
+  gap: 2rem;
+  z-index: 9999;
+}
+.auth-box {
+  background: #1A1D27;
+  border: 1px solid #252836;
+  border-radius: 16px;
+  padding: 2.5rem;
+  width: 100%; max-width: 420px;
+  display: flex; flex-direction: column; gap: 1.5rem;
+}
+.auth-logo { font-size: 0.9rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.06em; text-align: center; }
+.auth-title { font-size: 1.4rem; font-weight: 700; color: #F8F9FC; text-align: center; }
+.auth-sub { font-size: 0.85rem; color: #6B7280; text-align: center; margin-top: -1rem; }
+.auth-field { display: flex; flex-direction: column; gap: 0.4rem; }
+.auth-label { font-size: 0.75rem; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.04em; }
+.auth-input {
+  background: #252836; border: 1px solid #2E3347; border-radius: 8px;
+  padding: 0.7rem 0.9rem; color: #F8F9FC; font-size: 0.9rem;
+  font-family: 'Inter', sans-serif; outline: none; width: 100%;
+  transition: border-color 0.2s;
+}
+.auth-input:focus { border-color: #4F6EF7; }
+.btn-primary {
+  background: #4F6EF7; color: #fff; border: none; border-radius: 10px;
+  padding: 0.8rem; font-size: 0.9rem; font-weight: 700;
+  cursor: pointer; width: 100%; transition: background 0.2s;
+}
+.btn-primary:hover { background: #3B5BDB; }
+.btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 
-  /* ── HEADER ── */
-  header {
-    background: #0F1117;
-    border-bottom: 1px solid #252836;
-    padding: 0 1.5rem;
-    height: 56px;
-    display: flex; align-items: center; justify-content: space-between;
-    position: sticky; top: 0; z-index: 100;
-  }
-  .header-brand { font-size: 0.95rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.04em; }
-  .header-right { display: flex; align-items: center; gap: 1rem; }
-  .header-user-badge {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 8px;
-    padding: 0.3rem 0.8rem;
-    font-size: 0.8rem;
-    color: #9CA3AF;
-  }
-  .header-user-badge span { color: #F8F9FC; font-weight: 600; }
-  .btn-new {
-    background: #4F6EF7;
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    padding: 0.45rem 1.1rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.2s;
-  }
-  .btn-new:hover { background: #3B5BDB; }
+/* ── HEADER ── */
+header {
+  background: #0F1117; border-bottom: 1px solid #252836;
+  padding: 0 1.5rem; height: 56px;
+  display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 100;
+}
+.h-brand { font-size: 0.9rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.04em; }
+.h-right { display: flex; align-items: center; gap: 1rem; }
+.h-user { display: flex; flex-direction: column; align-items: flex-end; }
+.h-user-name { font-size: 0.82rem; font-weight: 600; color: #F8F9FC; }
+.h-user-role { font-size: 0.7rem; color: #6B7280; }
+.btn-logout {
+  background: transparent; border: 1px solid #252836; border-radius: 7px;
+  color: #9CA3AF; font-size: 0.78rem; padding: 0.35rem 0.8rem;
+  cursor: pointer; transition: all 0.2s;
+}
+.btn-logout:hover { border-color: #EF4444; color: #EF4444; }
+.btn-new {
+  background: #4F6EF7; color: #fff; border: none; border-radius: 8px;
+  padding: 0.45rem 1.1rem; font-size: 0.85rem; font-weight: 600;
+  cursor: pointer; transition: background 0.2s;
+}
+.btn-new:hover { background: #3B5BDB; }
 
-  /* ── MAIN LAYOUT ── */
-  main { padding: 1.5rem; max-width: 1600px; margin: 0 auto; }
+/* ── MAIN ── */
+main { padding: 1.5rem; max-width: 1600px; margin: 0 auto; }
 
-  /* ── METRICS ── */
-  .metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-  }
-  .metric-card {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 12px;
-    padding: 1.2rem 1.5rem;
-    display: flex; flex-direction: column; gap: 0.3rem;
-  }
-  .metric-label { font-size: 0.75rem; color: #6B7280; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
-  .metric-value { font-size: 2rem; font-weight: 700; color: #F8F9FC; line-height: 1; }
-  .metric-card.blue  { border-top: 2px solid #4F6EF7; } .metric-card.blue  .metric-value { color: #4F6EF7; }
-  .metric-card.amber { border-top: 2px solid #F5A623; } .metric-card.amber .metric-value { color: #F5A623; }
-  .metric-card.green { border-top: 2px solid #10B981; } .metric-card.green .metric-value { color: #10B981; }
-  .metric-card.red   { border-top: 2px solid #EF4444; } .metric-card.red   .metric-value { color: #EF4444; }
+/* ── METRICS ── */
+.metrics-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 1rem; margin-bottom: 1.5rem; }
+.metric-card { background: #1A1D27; border: 1px solid #252836; border-radius: 12px; padding: 1.2rem 1.5rem; }
+.metric-label { font-size: 0.72rem; color: #6B7280; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
+.metric-value { font-size: 2rem; font-weight: 700; line-height: 1; }
+.metric-card.blue  { border-top: 2px solid #4F6EF7; } .metric-card.blue  .metric-value { color: #4F6EF7; }
+.metric-card.amber { border-top: 2px solid #F5A623; } .metric-card.amber .metric-value { color: #F5A623; }
+.metric-card.green { border-top: 2px solid #10B981; } .metric-card.green .metric-value { color: #10B981; }
+.metric-card.red   { border-top: 2px solid #EF4444; } .metric-card.red   .metric-value { color: #EF4444; }
 
-  /* ── FOLLOW-UP PANEL ── */
-  .fu-panel {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 14px;
-    margin-bottom: 1.5rem;
-    overflow: hidden;
-  }
-  .fu-panel-header {
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid #252836;
-    display: flex; align-items: center; gap: 0.75rem;
-  }
-  .fu-panel-title { font-size: 0.95rem; font-weight: 700; color: #F8F9FC; }
-  .fu-badge {
-    background: #F5A623;
-    color: #0F1117;
-    font-size: 0.7rem;
-    font-weight: 700;
-    border-radius: 999px;
-    padding: 0.15rem 0.5rem;
-    display: none; align-items: center;
-  }
-  @keyframes pulseGlow {
-    0%, 100% { box-shadow: 0 0 0 0 rgba(245,166,35,0); }
-    50%       { box-shadow: 0 0 0 6px rgba(245,166,35,0.18); }
-  }
-  .pulsing { animation: pulseGlow 2.5s ease-in-out infinite; }
+/* ── FOLLOW-UP ── */
+.fu-panel { background: #1A1D27; border: 1px solid #252836; border-radius: 14px; margin-bottom: 1.5rem; overflow: hidden; }
+.fu-header { padding: 1rem 1.5rem; border-bottom: 1px solid #252836; display: flex; align-items: center; gap: 0.75rem; }
+.fu-title { font-size: 0.95rem; font-weight: 700; }
+.fu-badge { background: #F5A623; color: #0F1117; font-size: 0.7rem; font-weight: 700; border-radius: 999px; padding: 0.15rem 0.5rem; display: none; }
+@keyframes pulseGlow { 0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)} 50%{box-shadow:0 0 0 8px rgba(245,166,35,0.15)} }
+.pulsing { animation: pulseGlow 2.5s ease-in-out infinite; }
+#followup-cards { display: flex; gap: 1rem; padding: 1rem 1.5rem; overflow-x: auto; scrollbar-width: thin; scrollbar-color: #252836 transparent; }
+.fu-card { background: #252836; border: 1px solid #2E3347; border-radius: 10px; padding: 0.9rem 1rem; min-width: 230px; max-width: 260px; cursor: pointer; transition: border-color 0.2s, transform 0.15s; display: flex; flex-direction: column; gap: 0.45rem; }
+.fu-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
+.fu-card.overdue { border-left: 3px solid #EF4444; }
+.fu-top { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+.fu-name { font-size: 0.85rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fu-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+.fu-resp { font-size: 0.7rem; color: #6B7280; }
+.fu-date { font-size: 0.72rem; color: #9CA3AF; }
+.fu-date.text-red { color: #EF4444; }
+.fu-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.fu-actions { display: flex; gap: 0.4rem; }
+.empty-state-fu { padding: 1rem 1.5rem; color: #6B7280; font-size: 0.85rem; }
 
-  #followup-cards {
-    display: flex;
-    gap: 1rem;
-    padding: 1rem 1.5rem;
-    overflow-x: auto;
-    scrollbar-width: thin;
-    scrollbar-color: #252836 transparent;
-  }
-  .fu-card {
-    background: #252836;
-    border: 1px solid #2E3347;
-    border-radius: 10px;
-    padding: 0.9rem 1rem;
-    min-width: 230px;
-    max-width: 260px;
-    cursor: pointer;
-    transition: border-color 0.2s, transform 0.15s;
-    display: flex; flex-direction: column; gap: 0.5rem;
-  }
-  .fu-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
-  .fu-card.overdue { border-left: 3px solid #EF4444; }
-  .fu-card-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-  .fu-name { font-size: 0.85rem; font-weight: 600; color: #F8F9FC; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .fu-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .fu-resp { font-size: 0.7rem; color: #6B7280; }
-  .fu-date { font-size: 0.72rem; color: #9CA3AF; }
-  .fu-date.overdue-text { color: #EF4444; }
-  .fu-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .fu-actions { display: flex; gap: 0.4rem; margin-top: 0.2rem; }
-  .btn-wa-sm {
-    background: #1DAA61;
-    color: #fff;
-    border: none; border-radius: 6px;
-    padding: 0.3rem 0.7rem;
-    font-size: 0.72rem; font-weight: 600;
-    cursor: pointer; text-decoration: none;
-    white-space: nowrap;
-  }
-  .btn-done-sm {
-    background: transparent;
-    color: #10B981;
-    border: 1px solid #10B981;
-    border-radius: 6px;
-    padding: 0.3rem 0.7rem;
-    font-size: 0.72rem; font-weight: 600;
-    cursor: pointer;
-  }
-  .btn-done-sm:hover { background: rgba(16,185,129,0.12); }
-  .empty-fu { padding: 1rem; color: #6B7280; font-size: 0.85rem; }
+/* ── TABS ── */
+.tabs-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.tabs { display: flex; gap: 0.25rem; background: #1A1D27; border: 1px solid #252836; border-radius: 8px; padding: 3px; }
+.tab-btn { padding: 0.4rem 1.1rem; border-radius: 6px; border: none; background: transparent; color: #6B7280; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.tab-btn.tab-active { background: #252836; color: #F8F9FC; }
 
-  /* ── TABS ── */
-  .tabs-row {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 1rem;
-  }
-  .tabs { display: flex; gap: 0.25rem; background: #1A1D27; border: 1px solid #252836; border-radius: 8px; padding: 3px; }
-  .tab-btn {
-    padding: 0.4rem 1.1rem;
-    border-radius: 6px;
-    border: none;
-    background: transparent;
-    color: #6B7280;
-    font-size: 0.82rem; font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .tab-btn.tab-active { background: #252836; color: #F8F9FC; }
+/* ── KANBAN ── */
+.kanban-board { display: grid; grid-template-columns: repeat(4,1fr); gap: 1rem; }
+.k-col { background: #1A1D27; border: 1px solid #252836; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-height: 300px; }
+.k-col-header { padding: 0.85rem 1rem; border-bottom: 1px solid #252836; display: flex; align-items: center; justify-content: space-between; }
+.k-col-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.k-col-count { font-size: 0.7rem; font-weight: 700; background: #252836; border-radius: 999px; padding: 0.1rem 0.5rem; color: #9CA3AF; }
+.k-col-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; overflow-y: auto; max-height: 550px; }
+.col-empty { padding: 1.5rem; text-align: center; color: #374151; font-size: 0.8rem; }
+.k-card { background: #252836; border: 1px solid #2E3347; border-radius: 9px; padding: 0.85rem; cursor: pointer; transition: border-color 0.15s, transform 0.15s; display: flex; flex-direction: column; gap: 0.45rem; }
+.k-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
+.k-card-urgent { border-left: 3px solid #F5A623; }
+.k-top { display: flex; align-items: flex-start; justify-content: space-between; }
+.k-name { font-size: 0.83rem; font-weight: 600; color: #F8F9FC; }
+.k-meta { display: flex; align-items: center; gap: 0.5rem; }
+.k-phone { font-size: 0.72rem; color: #6B7280; }
+.k-resp { font-size: 0.7rem; color: #4F6EF7; font-weight: 500; }
+.k-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.k-footer { display: flex; align-items: center; justify-content: space-between; }
+.k-fu { font-size: 0.7rem; color: #9CA3AF; }
 
-  /* ── KANBAN ── */
-  .kanban-board {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
-  }
-  .kanban-col {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 12px;
-    overflow: hidden;
-    display: flex; flex-direction: column;
-    min-height: 300px;
-  }
-  .col-header {
-    padding: 0.85rem 1rem;
-    border-bottom: 1px solid #252836;
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .col-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
-  .col-count {
-    font-size: 0.7rem; font-weight: 700;
-    background: #252836;
-    border-radius: 999px;
-    padding: 0.1rem 0.5rem;
-    color: #9CA3AF;
-  }
-  .col-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; overflow-y: auto; max-height: 550px; }
-  .col-empty { padding: 1.5rem; text-align: center; color: #374151; font-size: 0.8rem; }
-  .kanban-card {
-    background: #252836;
-    border: 1px solid #2E3347;
-    border-radius: 9px;
-    padding: 0.85rem;
-    cursor: pointer;
-    transition: border-color 0.15s, transform 0.15s;
-    display: flex; flex-direction: column; gap: 0.45rem;
-  }
-  .kanban-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
-  .kanban-card.card-urgent { border-left: 3px solid #F5A623; }
-  .kc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.3rem; }
-  .kc-name { font-size: 0.83rem; font-weight: 600; color: #F8F9FC; }
-  .kc-menu { background: none; border: none; color: #6B7280; cursor: pointer; font-size: 1rem; padding: 0; line-height: 1; }
-  .kc-meta { display: flex; align-items: center; gap: 0.5rem; }
-  .kc-phone { font-size: 0.72rem; color: #6B7280; }
-  .kc-resp { font-size: 0.7rem; color: #4F6EF7; font-weight: 500; }
-  .kc-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .kc-footer { display: flex; align-items: center; justify-content: space-between; }
-  .kc-fu { font-size: 0.7rem; color: #9CA3AF; }
-  .urgent-fu { color: #F5A623; font-weight: 600; }
+/* ── TABLE ── */
+.table-controls { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+.search-input { background: #1A1D27; border: 1px solid #252836; border-radius: 8px; padding: 0.5rem 0.9rem; color: #F8F9FC; font-size: 0.85rem; outline: none; width: 220px; transition: border-color 0.2s; }
+.search-input:focus { border-color: #4F6EF7; }
+.filter-btns { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.filter-btn { padding: 0.35rem 0.8rem; border-radius: 6px; border: 1px solid #252836; background: #1A1D27; color: #6B7280; font-size: 0.75rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+.filter-btn.active { background: #4F6EF7; border-color: #4F6EF7; color: #fff; }
+.table-wrap { background: #1A1D27; border: 1px solid #252836; border-radius: 12px; overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th { padding: 0.75rem 1rem; text-align: left; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #6B7280; border-bottom: 1px solid #252836; white-space: nowrap; }
+.t-row td { padding: 0.75rem 1rem; font-size: 0.82rem; color: #D1D5DB; border-bottom: 1px solid #1E2130; vertical-align: middle; }
+.t-row:hover td { background: #1E2130; cursor: pointer; }
+.t-row:last-child td { border-bottom: none; }
+.t-name { font-weight: 600; color: #F8F9FC; }
+.t-note { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9CA3AF; }
 
-  /* ── TABLE VIEW ── */
-  .table-controls {
-    display: flex; gap: 0.75rem; align-items: center;
-    margin-bottom: 1rem; flex-wrap: wrap;
-  }
-  .search-input {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 8px;
-    padding: 0.5rem 0.9rem;
-    color: #F8F9FC;
-    font-size: 0.85rem;
-    outline: none;
-    width: 220px;
-    transition: border-color 0.2s;
-  }
-  .search-input:focus { border-color: #4F6EF7; }
-  .filter-btns { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-  .filter-btn {
-    padding: 0.35rem 0.8rem;
-    border-radius: 6px;
-    border: 1px solid #252836;
-    background: #1A1D27;
-    color: #6B7280;
-    font-size: 0.75rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .filter-btn.active { background: #4F6EF7; border-color: #4F6EF7; color: #fff; }
+/* ── EQUIPE ── */
+.equipe-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+.equipe-title { font-size: 1rem; font-weight: 700; }
+#equipe-lista { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
+.user-card { background: #1A1D27; border: 1px solid #252836; border-radius: 12px; padding: 1.2rem; display: flex; align-items: center; gap: 1rem; }
+.user-avatar { width: 44px; height: 44px; border-radius: 50%; background: #4F6EF7; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; font-weight: 700; color: #fff; flex-shrink: 0; }
+.user-info { flex: 1; display: flex; flex-direction: column; gap: 0.2rem; }
+.user-name { font-size: 0.9rem; font-weight: 600; }
+.user-email { font-size: 0.75rem; color: #6B7280; }
+.user-role { display: inline-flex; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.68rem; font-weight: 700; margin-top: 0.2rem; }
+.role-gestora { background: rgba(79,110,247,0.15); color: #4F6EF7; }
+.role-atendente { background: rgba(16,185,129,0.12); color: #10B981; }
+.btn-edit-user { background: #252836; border: 1px solid #2E3347; border-radius: 7px; color: #9CA3AF; font-size: 0.75rem; padding: 0.35rem 0.75rem; cursor: pointer; transition: all 0.2s; }
+.btn-edit-user:hover { border-color: #4F6EF7; color: #4F6EF7; }
 
-  .table-wrap {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 12px;
-    overflow: auto;
-  }
-  table { width: 100%; border-collapse: collapse; }
-  thead th {
-    padding: 0.75rem 1rem;
-    text-align: left;
-    font-size: 0.72rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #6B7280;
-    border-bottom: 1px solid #252836;
-    white-space: nowrap;
-  }
-  .table-row td {
-    padding: 0.75rem 1rem;
-    font-size: 0.82rem;
-    color: #D1D5DB;
-    border-bottom: 1px solid #1E2130;
-    vertical-align: middle;
-  }
-  .table-row:hover td { background: #1E2130; cursor: pointer; }
-  .table-row:last-child td { border-bottom: none; }
-  .lead-name-cell { font-weight: 600; color: #F8F9FC; }
-  .note-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9CA3AF; }
+/* ── SHARED ── */
+.status-pill { display: inline-flex; padding: 0.2rem 0.6rem; border-radius: 999px; font-size: 0.7rem; font-weight: 700; white-space: nowrap; }
+.campaign-tag { display: inline-flex; background: rgba(79,110,247,0.12); color: #4F6EF7; border-radius: 4px; font-size: 0.68rem; font-weight: 600; padding: 0.15rem 0.45rem; }
+.btn-wa { background: #1DAA61; color: #fff; border: none; border-radius: 6px; padding: 0.3rem 0.7rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.btn-done { background: transparent; color: #10B981; border: 1px solid #10B981; border-radius: 6px; padding: 0.3rem 0.7rem; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
+.btn-done:hover { background: rgba(16,185,129,0.12); }
+.btn-wa-xs { display: inline-flex; background: #1DAA61; color: #fff; border: none; border-radius: 5px; padding: 0.25rem 0.6rem; font-size: 0.7rem; font-weight: 600; cursor: pointer; text-decoration: none; white-space: nowrap; }
+.urgent-fu { color: #F5A623; font-weight: 600; }
 
-  /* ── SHARED PILLS / TAGS ── */
-  .status-pill {
-    display: inline-flex;
-    padding: 0.2rem 0.6rem;
-    border-radius: 999px;
-    font-size: 0.7rem;
-    font-weight: 700;
-    white-space: nowrap;
-  }
-  .campaign-tag {
-    display: inline-flex;
-    background: rgba(79,110,247,0.12);
-    color: #4F6EF7;
-    border-radius: 4px;
-    font-size: 0.68rem;
-    font-weight: 600;
-    padding: 0.15rem 0.45rem;
-  }
-  .btn-wa-xs {
-    display: inline-flex; align-items: center;
-    background: #1DAA61;
-    color: #fff;
-    border: none; border-radius: 5px;
-    padding: 0.25rem 0.6rem;
-    font-size: 0.7rem; font-weight: 600;
-    cursor: pointer; text-decoration: none;
-    white-space: nowrap;
-  }
-  .urgent-fu { color: #F5A623; font-weight: 600; }
+/* ── MODAL ── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: none; align-items: center; justify-content: center; padding: 1rem; }
+.modal-box { background: #1A1D27; border: 1px solid #252836; border-radius: 16px; width: 100%; max-width: 720px; max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; }
+.modal-head { padding: 1.25rem 1.5rem; border-bottom: 1px solid #252836; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; background: #1A1D27; z-index: 2; }
+.modal-title { font-size: 1rem; font-weight: 700; }
+.modal-close { background: none; border: none; color: #6B7280; font-size: 1.3rem; cursor: pointer; transition: color 0.2s; }
+.modal-close:hover { color: #F8F9FC; }
+.modal-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.f-group { display: flex; flex-direction: column; gap: 0.4rem; }
+.f-group.full { grid-column: 1/-1; }
+.f-label { font-size: 0.75rem; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.04em; }
+.f-input, .f-select, .f-textarea { background: #252836; border: 1px solid #2E3347; border-radius: 8px; padding: 0.6rem 0.85rem; color: #F8F9FC; font-size: 0.85rem; font-family: 'Inter',sans-serif; outline: none; transition: border-color 0.2s; width: 100%; }
+.f-input:focus, .f-select:focus, .f-textarea:focus { border-color: #4F6EF7; }
+.f-select option { background: #252836; }
+.f-textarea { resize: vertical; min-height: 70px; }
+.qn-label { font-size: 0.72rem; color: #6B7280; margin-bottom: 0.4rem; }
+.qn-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.qn-btn { background: #252836; border: 1px solid #2E3347; border-radius: 6px; color: #9CA3AF; font-size: 0.72rem; padding: 0.3rem 0.65rem; cursor: pointer; transition: all 0.15s; }
+.qn-btn:hover { background: #2E3347; color: #F8F9FC; border-color: #4F6EF7; }
+.log-section { display: flex; flex-direction: column; gap: 0.5rem; }
+.log-title { font-size: 0.75rem; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; }
+#lead-log { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+.log-entry { background: #252836; border-radius: 8px; padding: 0.65rem 0.85rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.log-meta { display: flex; gap: 0.75rem; align-items: center; }
+.log-user { font-size: 0.72rem; font-weight: 700; color: #4F6EF7; }
+.log-time { font-size: 0.7rem; color: #6B7280; }
+.log-text { font-size: 0.8rem; color: #D1D5DB; line-height: 1.4; }
+.log-status-badge { font-size: 0.7rem; color: #10B981; font-weight: 600; }
+.log-empty { font-size: 0.8rem; color: #6B7280; text-align: center; padding: 0.75rem; }
+.modal-foot { padding: 1rem 1.5rem; border-top: 1px solid #252836; display: flex; justify-content: space-between; align-items: center; position: sticky; bottom: 0; background: #1A1D27; }
+.btn-delete { background: transparent; border: 1px solid #EF4444; color: #EF4444; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; }
+.btn-delete:hover { background: rgba(239,68,68,0.12); }
+.btn-save { background: #4F6EF7; color: #fff; border: none; border-radius: 8px; padding: 0.5rem 1.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; }
+.btn-save:hover { background: #3B5BDB; }
+.btn-cancel { background: transparent; border: 1px solid #252836; color: #9CA3AF; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; cursor: pointer; }
 
-  /* ── MODAL ── */
-  #lead-modal {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.7);
-    z-index: 1000;
-    align-items: center; justify-content: center;
-    padding: 1rem;
-  }
-  .modal-box {
-    background: #1A1D27;
-    border: 1px solid #252836;
-    border-radius: 16px;
-    width: 100%; max-width: 720px;
-    max-height: 90vh;
-    overflow-y: auto;
-    display: flex; flex-direction: column;
-  }
-  .modal-header {
-    padding: 1.25rem 1.5rem;
-    border-bottom: 1px solid #252836;
-    display: flex; align-items: center; justify-content: space-between;
-    position: sticky; top: 0; background: #1A1D27; z-index: 2;
-  }
-  .modal-title { font-size: 1rem; font-weight: 700; color: #F8F9FC; }
-  .modal-close {
-    background: none; border: none; color: #6B7280;
-    font-size: 1.3rem; cursor: pointer; padding: 0;
-    transition: color 0.2s;
-  }
-  .modal-close:hover { color: #F8F9FC; }
-  .modal-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
-  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
-  .form-group.full { grid-column: 1 / -1; }
-  .form-label { font-size: 0.75rem; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.04em; }
-  .form-input, .form-select, .form-textarea {
-    background: #252836;
-    border: 1px solid #2E3347;
-    border-radius: 8px;
-    padding: 0.6rem 0.85rem;
-    color: #F8F9FC;
-    font-size: 0.85rem;
-    font-family: 'Inter', sans-serif;
-    outline: none;
-    transition: border-color 0.2s;
-    width: 100%;
-  }
-  .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: #4F6EF7; }
-  .form-select option { background: #252836; }
-  .form-textarea { resize: vertical; min-height: 70px; }
+/* ── TOAST ── */
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: #252836; color: #F8F9FC; padding: 0.75rem 1.25rem; border-radius: 10px; font-size: 0.85rem; font-weight: 500; border-left: 3px solid #4F6EF7; opacity: 0; transform: translateY(10px); transition: all 0.3s; z-index: 9999; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.warn { border-left-color: #F5A623; }
+.toast.error { border-left-color: #EF4444; }
 
-  /* Quick notes */
-  .quick-notes-label { font-size: 0.72rem; color: #6B7280; margin-bottom: 0.4rem; }
-  .quick-notes-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
-  .qn-btn {
-    background: #252836;
-    border: 1px solid #2E3347;
-    border-radius: 6px;
-    color: #9CA3AF;
-    font-size: 0.72rem;
-    padding: 0.3rem 0.65rem;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .qn-btn:hover { background: #2E3347; color: #F8F9FC; border-color: #4F6EF7; }
-
-  /* Log */
-  .log-section { display: flex; flex-direction: column; gap: 0.5rem; }
-  .log-title { font-size: 0.75rem; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; }
-  #lead-log { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
-  .log-entry {
-    background: #252836;
-    border-radius: 8px;
-    padding: 0.65rem 0.85rem;
-    display: flex; flex-direction: column; gap: 0.25rem;
-  }
-  .log-meta { display: flex; gap: 0.75rem; align-items: center; }
-  .log-user { font-size: 0.72rem; font-weight: 700; color: #4F6EF7; }
-  .log-time { font-size: 0.7rem; color: #6B7280; }
-  .log-text { font-size: 0.8rem; color: #D1D5DB; line-height: 1.4; }
-  .log-status-change { font-size: 0.7rem; color: #10B981; font-weight: 600; }
-  .log-empty { font-size: 0.8rem; color: #6B7280; text-align: center; padding: 0.75rem; }
-
-  /* Modal footer */
-  .modal-footer {
-    padding: 1rem 1.5rem;
-    border-top: 1px solid #252836;
-    display: flex; justify-content: space-between; align-items: center;
-    position: sticky; bottom: 0; background: #1A1D27;
-  }
-  .btn-delete { background: transparent; border: 1px solid #EF4444; color: #EF4444; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-  .btn-delete:hover { background: rgba(239,68,68,0.12); }
-  .btn-save { background: #4F6EF7; color: #fff; border: none; border-radius: 8px; padding: 0.5rem 1.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: background 0.2s; }
-  .btn-save:hover { background: #3B5BDB; }
-  .btn-cancel { background: transparent; border: 1px solid #252836; color: #9CA3AF; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; cursor: pointer; }
-
-  /* Toast */
-  .toast {
-    position: fixed; bottom: 1.5rem; right: 1.5rem;
-    background: #252836; color: #F8F9FC;
-    padding: 0.75rem 1.25rem;
-    border-radius: 10px;
-    font-size: 0.85rem; font-weight: 500;
-    border-left: 3px solid #4F6EF7;
-    opacity: 0; transform: translateY(10px);
-    transition: all 0.3s;
-    z-index: 9999;
-    pointer-events: none;
-  }
-  .toast.show { opacity: 1; transform: translateY(0); }
-  .toast.warn { border-left-color: #F5A623; }
-  .toast.error { border-left-color: #EF4444; }
-
-  @media (max-width: 900px) {
-    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-    .kanban-board { grid-template-columns: repeat(2, 1fr); }
-    .form-grid { grid-template-columns: 1fr; }
-  }
-  @media (max-width: 600px) {
-    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
-    .kanban-board { grid-template-columns: 1fr; }
-  }
-
-  /* scrollbar */
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #252836; border-radius: 99px; }
+.hidden { display: none !important; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #252836; border-radius: 99px; }
+@media(max-width:900px) { .metrics-grid{grid-template-columns:repeat(2,1fr)} .kanban-board{grid-template-columns:repeat(2,1fr)} .form-grid{grid-template-columns:1fr} }
+@media(max-width:600px) { .kanban-board{grid-template-columns:1fr} }
 </style>
 </head>
 <body>
 
-<!-- ── USER SELECT ── -->
-<div id="user-select">
-  <div class="us-logo">COSTA GALVÃO ADVOCACIA</div>
-  <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
-    <div class="us-title">Quem está acessando?</div>
-    <div class="us-sub">Selecione sua atendente para continuar</div>
+<!-- ── PRIMEIRO ACESSO ── -->
+<div id="screen-first-setup" class="auth-screen" style="display:none">
+  <div class="auth-box">
+    <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
+    <div>
+      <div class="auth-title">Criar sua conta</div>
+      <div class="auth-sub" style="margin-top:0.5rem">Configure o acesso de gestora do sistema</div>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Seu nome</label>
+      <input id="setup-nome" class="auth-input" type="text" placeholder="Ex: Jucineide"/>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">E-mail</label>
+      <input id="setup-email" class="auth-input" type="email" placeholder="seu@email.com" value="jucineidecostagalvao@gmail.com"/>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Senha (mínimo 6 caracteres)</label>
+      <input id="setup-senha" class="auth-input" type="password" placeholder="Crie uma senha"/>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Confirmar senha</label>
+      <input id="setup-conf" class="auth-input" type="password" placeholder="Repita a senha"/>
+    </div>
+    <button id="btn-setup" class="btn-primary" onclick="criarContaGestora()" data-label="Criar minha conta">Criar minha conta</button>
   </div>
-  <div class="us-btns">
-    <button class="us-btn" onclick="selectUser('Isabel')">Isabel</button>
-    <button class="us-btn" onclick="selectUser('Joelma')">Joelma</button>
+</div>
+
+<!-- ── LOGIN ── -->
+<div id="screen-login" class="auth-screen" style="display:none">
+  <div class="auth-box">
+    <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
+    <div>
+      <div class="auth-title">Entrar no CRM</div>
+      <div class="auth-sub" style="margin-top:0.5rem">Acesse com seu e-mail e senha</div>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">E-mail</label>
+      <input id="login-email" class="auth-input" type="email" placeholder="seu@email.com"/>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label">Senha</label>
+      <input id="login-senha" class="auth-input" type="password" placeholder="Sua senha"
+        onkeydown="if(event.key==='Enter') fazerLogin()"/>
+    </div>
+    <button id="btn-login" class="btn-primary" onclick="fazerLogin()" data-label="Entrar">Entrar</button>
   </div>
 </div>
 
 <!-- ── APP ── -->
-<div id="app" class="hidden">
+<div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
 
   <header>
-    <div class="header-brand">COSTA GALVÃO | CRM</div>
-    <div class="header-right">
-      <div class="header-user-badge">Atendente: <span id="header-user">—</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM</div>
+    <div class="h-right">
+      <div class="h-user">
+        <span class="h-user-name" id="header-name">—</span>
+        <span class="h-user-role" id="header-role">—</span>
+      </div>
+      <button class="btn-logout" onclick="fazerLogout()">Sair</button>
       <button class="btn-new" onclick="openLead('new')">+ Novo Lead</button>
     </div>
   </header>
@@ -918,34 +817,20 @@ window.selectUser = function(user) {
   <main>
     <!-- METRICS -->
     <div class="metrics-grid">
-      <div class="metric-card blue">
-        <div class="metric-label">Leads no Mês</div>
-        <div class="metric-value" id="m-total">—</div>
-      </div>
-      <div class="metric-card amber">
-        <div class="metric-label">Em Andamento</div>
-        <div class="metric-value" id="m-andamento">—</div>
-      </div>
-      <div class="metric-card green">
-        <div class="metric-label">Qualificados</div>
-        <div class="metric-value" id="m-qualif">—</div>
-      </div>
-      <div class="metric-card red">
-        <div class="metric-label">Sem Resposta</div>
-        <div class="metric-value" id="m-semresp">—</div>
-      </div>
+      <div class="metric-card blue">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
+      <div class="metric-card amber"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
+      <div class="metric-card green"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card red">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
     </div>
 
-    <!-- FOLLOW-UP PANEL -->
-    <div class="fu-panel" id="fu-pulse">
-      <div class="fu-panel-header">
+    <!-- FOLLOW-UP -->
+    <div class="fu-panel" id="fu-panel">
+      <div class="fu-header">
         <span style="font-size:1.1rem">🔥</span>
-        <span class="fu-panel-title">Follow-ups para Hoje</span>
+        <span class="fu-title">Follow-ups para Hoje</span>
         <span class="fu-badge" id="fu-badge">0</span>
       </div>
-      <div id="followup-cards">
-        <div class="empty-fu">Carregando...</div>
-      </div>
+      <div id="followup-cards"><div class="empty-state-fu">Carregando...</div></div>
     </div>
 
     <!-- TABS -->
@@ -953,143 +838,144 @@ window.selectUser = function(user) {
       <div class="tabs">
         <button id="tab-kanban" class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
         <button id="tab-table"  class="tab-btn"            onclick="switchTab('table')">Tabela</button>
+        <button id="tab-equipe" class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
       </div>
     </div>
 
-    <!-- KANBAN VIEW -->
+    <!-- KANBAN -->
     <div id="view-kanban">
       <div class="kanban-board">
-        <div class="kanban-col">
-          <div class="col-header" style="border-top:2px solid #4F6EF7">
-            <span class="col-title" style="color:#4F6EF7">Em Andamento</span>
-            <span class="col-count" id="col-count-EM ANDAMENTO">0</span>
+        <div class="k-col">
+          <div class="k-col-header" style="border-top:2px solid #4F6EF7">
+            <span class="k-col-title" style="color:#4F6EF7">Em Andamento</span>
+            <span class="k-col-count" id="col-count-EM ANDAMENTO">0</span>
           </div>
-          <div class="col-body" id="col-EM ANDAMENTO"></div>
+          <div class="k-col-body" id="col-EM ANDAMENTO"></div>
         </div>
-        <div class="kanban-col">
-          <div class="col-header" style="border-top:2px solid #F5A623">
-            <span class="col-title" style="color:#F5A623">Sem Resposta</span>
-            <span class="col-count" id="col-count-SEM RESPOSTA">0</span>
+        <div class="k-col">
+          <div class="k-col-header" style="border-top:2px solid #F5A623">
+            <span class="k-col-title" style="color:#F5A623">Sem Resposta</span>
+            <span class="k-col-count" id="col-count-SEM RESPOSTA">0</span>
           </div>
-          <div class="col-body" id="col-SEM RESPOSTA"></div>
+          <div class="k-col-body" id="col-SEM RESPOSTA"></div>
         </div>
-        <div class="kanban-col">
-          <div class="col-header" style="border-top:2px solid #10B981">
-            <span class="col-title" style="color:#10B981">Qualificados</span>
-            <span class="col-count" id="col-count-QUALIFICADO">0</span>
+        <div class="k-col">
+          <div class="k-col-header" style="border-top:2px solid #10B981">
+            <span class="k-col-title" style="color:#10B981">Qualificados</span>
+            <span class="k-col-count" id="col-count-QUALIFICADO">0</span>
           </div>
-          <div class="col-body" id="col-QUALIFICADO"></div>
+          <div class="k-col-body" id="col-QUALIFICADO"></div>
         </div>
-        <div class="kanban-col">
-          <div class="col-header" style="border-top:2px solid #EF4444">
-            <span class="col-title" style="color:#EF4444">Desqualificados</span>
-            <span class="col-count" id="col-count-DESQUALIFICADO">0</span>
+        <div class="k-col">
+          <div class="k-col-header" style="border-top:2px solid #EF4444">
+            <span class="k-col-title" style="color:#EF4444">Desqualificados</span>
+            <span class="k-col-count" id="col-count-DESQUALIFICADO">0</span>
           </div>
-          <div class="col-body" id="col-DESQUALIFICADO"></div>
+          <div class="k-col-body" id="col-DESQUALIFICADO"></div>
         </div>
       </div>
     </div>
 
-    <!-- TABLE VIEW -->
+    <!-- TABLE -->
     <div id="view-table" class="hidden">
       <div class="table-controls">
-        <input class="search-input" type="text" placeholder="Buscar por nome ou telefone..." oninput="onSearch(this.value)"/>
+        <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
         <div class="filter-btns">
-          <button id="filter-ALL"          class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
-          <button id="filter-EM ANDAMENTO" class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
-          <button id="filter-SEM RESPOSTA" class="filter-btn"        onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
-          <button id="filter-QUALIFICADO"  class="filter-btn"        onclick="setFilter('QUALIFICADO')">Qualificados</button>
-          <button id="filter-DESQUALIFICADO" class="filter-btn"      onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
+          <button id="filter-ALL"            class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
+          <button id="filter-EM ANDAMENTO"   class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
+          <button id="filter-SEM RESPOSTA"   class="filter-btn"        onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
+          <button id="filter-QUALIFICADO"    class="filter-btn"        onclick="setFilter('QUALIFICADO')">Qualificados</button>
+          <button id="filter-DESQUALIFICADO" class="filter-btn"        onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
         </div>
       </div>
       <div class="table-wrap">
         <table>
-          <thead>
-            <tr>
-              <th>Entrada</th>
-              <th>Nome</th>
-              <th>WhatsApp</th>
-              <th>Campanha</th>
-              <th>Status</th>
-              <th>Atendente</th>
-              <th>Última Nota</th>
-              <th>Próx. F-up</th>
-            </tr>
-          </thead>
-          <tbody id="table-body">
-            <tr><td colspan="8" style="text-align:center;padding:2rem;color:#666">Conectando ao Firebase...</td></tr>
-          </tbody>
+          <thead><tr>
+            <th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Campanha</th>
+            <th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th>
+          </tr></thead>
+          <tbody id="table-body"></tbody>
         </table>
       </div>
     </div>
-  </main>
-</div><!-- /app -->
 
-<!-- ── LEAD MODAL ── -->
-<div id="lead-modal" class="hidden">
+    <!-- EQUIPE -->
+    <div id="view-equipe" class="hidden">
+      <div class="equipe-header">
+        <span class="equipe-title">Gestão de Equipe</span>
+        <button class="btn-new" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button>
+      </div>
+      <div id="equipe-lista"></div>
+    </div>
+  </main>
+</div>
+
+<!-- ── MODAL LEAD ── -->
+<div id="modal-lead" class="modal-overlay">
   <div class="modal-box">
-    <div class="modal-header">
-      <span class="modal-title" id="modal-title">Lead</span>
+    <div class="modal-head">
+      <span class="modal-title" id="modal-lead-title">Lead</span>
       <button class="modal-close" onclick="closeLead()">✕</button>
     </div>
     <div class="modal-body">
       <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">Nome</label>
-          <input id="f-name" class="form-input" type="text" placeholder="Nome do lead"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Telefone / WhatsApp</label>
-          <input id="f-phone" class="form-input" type="text" placeholder="(87) 99999-0000"/>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Campanha / Origem</label>
-          <select id="f-campaign" class="form-select">
+        <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
+        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="text" placeholder="(87) 99999-0000"/></div>
+        <div class="f-group">
+          <label class="f-label">Campanha</label>
+          <select id="f-campaign" class="f-select">
             <option value="">Selecione...</option>
-            <option>SM - 01</option>
-            <option>SM - 02</option>
-            <option>SM - 03</option>
-            <option>SM - V3</option>
-            <option>Redes Sociais</option>
-            <option>Indicação</option>
-            <option>Outro</option>
+            <option>SM - 01</option><option>SM - 02</option><option>SM - 03</option>
+            <option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="form-label">Status</label>
-          <select id="f-status" class="form-select">
+        <div class="f-group">
+          <label class="f-label">Status</label>
+          <select id="f-status" class="f-select">
             <option value="EM ANDAMENTO">Em Andamento</option>
             <option value="QUALIFICADO">Qualificado</option>
             <option value="DESQUALIFICADO">Desqualificado</option>
             <option value="SEM RESPOSTA">Sem Resposta</option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="form-label">Atendente</label>
-          <select id="f-assignee" class="form-select">
-            <option>Isabel</option>
-            <option>Joelma</option>
+        <div class="f-group">
+          <label class="f-label">Atendente</label>
+          <select id="f-assignee" class="f-select">
+            <option>Isabel</option><option>Joelma</option><option>Jucineide</option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="form-label">Próximo Follow-up</label>
-          <input id="f-nextfu" class="form-input" type="date"/>
-        </div>
-        <div class="form-group full">
-          <label class="form-label">Nova Nota / Atualização</label>
-          <textarea id="f-note" class="form-textarea" placeholder="O que aconteceu neste contato?"></textarea>
-          <div class="quick-notes-label">Notas rápidas — clique para adicionar:</div>
-          <div class="quick-notes-grid" id="quick-notes-container"></div>
+        <div class="f-group"><label class="f-label">Próximo Follow-up</label><input id="f-nextfu" class="f-input" type="date"/></div>
+        <div class="f-group full">
+          <label class="f-label">Nova Nota / Atualização</label>
+          <textarea id="f-note" class="f-textarea" placeholder="O que aconteceu neste contato?"></textarea>
+          <div class="qn-label" style="margin-top:0.5rem">Notas rápidas — clique para adicionar:</div>
+          <div class="qn-grid">
+            <button class="qn-btn" onclick="addQuickNote('Script inicial enviado')">Script inicial enviado</button>
+            <button class="qn-btn" onclick="addQuickNote('Áudio de qualificação enviado')">Áudio de qualificação enviado</button>
+            <button class="qn-btn" onclick="addQuickNote('Aguardando retorno')">Aguardando retorno</button>
+            <button class="qn-btn" onclick="addQuickNote('Lead não respondeu')">Lead não respondeu</button>
+            <button class="qn-btn" onclick="addQuickNote('Lead visualizou e não respondeu')">Visualizou e não respondeu</button>
+            <button class="qn-btn" onclick="addQuickNote('Mensagem automática enviada')">Mensagem automática enviada</button>
+            <button class="qn-btn" onclick="addQuickNote('Follow-up agendado')">Follow-up agendado</button>
+            <button class="qn-btn" onclick="addQuickNote('Cliente sumiu')">Cliente sumiu</button>
+            <button class="qn-btn" onclick="addQuickNote('Clicou por engano')">Clicou por engano</button>
+            <button class="qn-btn" onclick="addQuickNote('Encaminhado para a Dra.')">Encaminhado para a Dra.</button>
+            <button class="qn-btn" onclick="addQuickNote('Documentos solicitados')">Documentos solicitados</button>
+            <button class="qn-btn" onclick="addQuickNote('Contrato enviado para assinatura')">Contrato enviado</button>
+            <button class="qn-btn" onclick="addQuickNote('Pedimos indicação')">Pedimos indicação</button>
+            <button class="qn-btn" onclick="addQuickNote('Desqualificado — sem CLT')">Desqualificado — sem CLT</button>
+            <button class="qn-btn" onclick="addQuickNote('Desqualificado — filho maior de 5 anos')">Desqualif. filho +5 anos</button>
+            <button class="qn-btn" onclick="addQuickNote('Link WhatsApp enviado')">Link WhatsApp enviado</button>
+          </div>
         </div>
       </div>
-
       <div class="log-section">
         <div class="log-title">Histórico de Atualizações</div>
         <div id="lead-log"></div>
       </div>
     </div>
-    <div class="modal-footer">
-      <button class="btn-delete" id="btn-delete" onclick="deleteLead()">Excluir Lead</button>
+    <div class="modal-foot">
+      <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir Lead</button>
       <div style="display:flex;gap:0.5rem">
         <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
         <button class="btn-save" onclick="saveLead()">Salvar</button>
@@ -1098,23 +984,41 @@ window.selectUser = function(user) {
   </div>
 </div>
 
+<!-- ── MODAL EQUIPE ── -->
+<div id="modal-equipe" class="modal-overlay">
+  <div class="modal-box" style="max-width:440px">
+    <div class="modal-head">
+      <span class="modal-title" id="eq-modal-title">Nova Colaboradora</span>
+      <button class="modal-close" onclick="fecharModalEquipe()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="eq-uid"/>
+      <div class="f-group"><label class="f-label">Nome</label><input id="eq-nome" class="f-input" type="text" placeholder="Nome completo"/></div>
+      <div class="f-group"><label class="f-label">E-mail</label><input id="eq-email" class="f-input" type="email" placeholder="email@exemplo.com"/></div>
+      <div class="f-group">
+        <label class="f-label">Perfil</label>
+        <select id="eq-role" class="f-select">
+          <option value="atendente">Atendente</option>
+          <option value="gestora">Gestora</option>
+        </select>
+      </div>
+      <div class="f-group" id="eq-senha-row">
+        <label class="f-label">Senha inicial (mínimo 6 caracteres)</label>
+        <input id="eq-senha" class="f-input" type="password" placeholder="Crie uma senha para ela"/>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button id="btn-eq-delete" class="btn-delete" onclick="excluirColaboradora()" style="display:none">Remover Acesso</button>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn-cancel" onclick="fecharModalEquipe()">Cancelar</button>
+        <button id="btn-eq-save" class="btn-save" onclick="salvarColaboradora()" data-label="Salvar">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- TOAST -->
 <div class="toast" id="toast"></div>
-
-<script type="module">
-  // Render quick notes
-  const container = document.getElementById('quick-notes-container');
-  const notes = [
-    "Script inicial enviado","Áudio de qualificação enviado","Aguardando retorno",
-    "Lead não respondeu","Lead visualizou e não respondeu","Mensagem automática enviada",
-    "Follow-up agendado","Cliente sumiu","Clicou por engano","Encaminhado para a Dra.",
-    "Documentos solicitados","Contrato enviado","Pedimos indicação",
-    "Desqualificado — sem CLT","Desqualificado — filho maior de 5 anos","Link WhatsApp enviado"
-  ];
-  container.innerHTML = notes.map(n =>
-    `<button class="qn-btn" onclick="addQuickNote('${n}')">${n}</button>`
-  ).join('');
-</script>
 
 </body>
 </html>
