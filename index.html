@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Costa Galvão | CRM Leads</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+
+<!-- Firebase v10 -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+
+// ── INSIRA SUAS CREDENCIAIS FIREBASE AQUI ──
+const firebaseConfig = {
+  apiKey: "AIzaSyC2Jc8KUg9QBlGwuqwlN3tQ6C_B1zZi7QU",
+  authDomain: "crm-costa-galvao.firebaseapp.com",
+  projectId: "crm-costa-galvao",
+  storageBucket: "crm-costa-galvao.firebasestorage.app",
+  messagingSenderId: "876223519085",
+  appId: "1:876223519085:web:a8fc137a9103796deb6264"
+};
+
+let app, db, unsubscribe;
+let currentUser = null;
+let allLeads = [];
+let editingLeadId = null;
+let currentTab = 'kanban';
+let filterStatus = 'ALL';
+let searchQuery = '';
+
+// ── NOTAS RÁPIDAS ──
+const QUICK_NOTES = [
+  "Script inicial enviado",
+  "Áudio de qualificação enviado",
+  "Aguardando retorno",
+  "Lead não respondeu",
+  "Lead visualizou e não respondeu",
+  "Mensagem automática enviada",
+  "Follow-up agendado",
+  "Cliente sumiu",
+  "Clicou por engano",
+  "Encaminhado para a Dra.",
+  "Documentos solicitados",
+  "Contrato enviado para assinatura",
+  "Pedimos indicação",
+  "Desqualificado — sem vínculo CLT",
+  "Desqualificado — filho maior de 5 anos",
+  "Link do WhatsApp enviado",
+];
+
+const CAMPAIGNS = ["SM - 01", "SM - 02", "SM - 03", "SM - V3", "Redes Sociais", "Indicação", "Outro"];
+const USERS = ["Isabel", "Joelma"];
+const STATUS_LIST = ["EM ANDAMENTO", "QUALIFICADO", "DESQUALIFICADO", "SEM RESPOSTA"];
+
+const STATUS_META = {
+  "EM ANDAMENTO":   { color: "#4F6EF7", bg: "rgba(79,110,247,0.12)", label: "Em Andamento" },
+  "QUALIFICADO":    { color: "#10B981", bg: "rgba(16,185,129,0.12)", label: "Qualificado" },
+  "DESQUALIFICADO": { color: "#EF4444", bg: "rgba(239,68,68,0.12)",  label: "Desqualificado" },
+  "SEM RESPOSTA":   { color: "#F5A623", bg: "rgba(245,166,35,0.12)", label: "Sem Resposta" },
+};
+
+// ── INIT ──
+function initFirebase() {
+  try {
+    app = initializeApp(firebaseConfig);
+    db = getFirestore(app);
+    startListener();
+  } catch(e) {
+    showToast("Erro Firebase: " + e.message, "error");
+  }
+}
+
+function startListener() {
+  const q = query(collection(db, "leads"), orderBy("createdAt", "desc"));
+  unsubscribe = onSnapshot(q, snap => {
+    allLeads = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderAll();
+  }, err => {
+    showToast("Erro ao carregar leads: " + err.message, "error");
+  });
+}
+
+// ── RENDER ALL ──
+function renderAll() {
+  renderMetrics();
+  if (currentTab === 'kanban') renderKanban();
+  else renderTable();
+  renderFollowups();
+}
+
+function renderMetrics() {
+  const now = new Date();
+  const month = now.getMonth();
+  const year = now.getFullYear();
+
+  const monthly = allLeads.filter(l => {
+    const d = l.createdAt?.toDate?.();
+    return d && d.getMonth() === month && d.getFullYear() === year;
+  });
+
+  const total   = monthly.length;
+  const andamento = monthly.filter(l => l.status === "EM ANDAMENTO").length;
+  const qualif    = monthly.filter(l => l.status === "QUALIFICADO").length;
+  const semResp   = monthly.filter(l => l.status === "SEM RESPOSTA").length;
+
+  document.getElementById('m-total').textContent    = total;
+  document.getElementById('m-andamento').textContent = andamento;
+  document.getElementById('m-qualif').textContent   = qualif;
+  document.getElementById('m-semresp').textContent  = semResp;
+}
+
+function renderFollowups() {
+  const today = new Date(); today.setHours(23,59,59,999);
+  const urgent = allLeads.filter(l => {
+    if (!["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status)) return false;
+    if (!l.nextFollowup) return false;
+    const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
+    return d <= today;
+  });
+
+  const badge = document.getElementById('fu-badge');
+  badge.textContent = urgent.length;
+  badge.style.display = urgent.length ? 'flex' : 'none';
+
+  const container = document.getElementById('followup-cards');
+  if (!urgent.length) {
+    container.innerHTML = `<div class="empty-fu">✅ Nenhum follow-up pendente hoje</div>`;
+    document.getElementById('fu-pulse').classList.remove('pulsing');
+    return;
+  }
+  document.getElementById('fu-pulse').classList.add('pulsing');
+
+  container.innerHTML = urgent.map(l => {
+    const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
+    const isOverdue = fu < new Date(new Date().setHours(0,0,0,0));
+    const sm = STATUS_META[l.status] || STATUS_META["EM ANDAMENTO"];
+    const wa = formatPhone(l.phone);
+    return `
+    <div class="fu-card ${isOverdue ? 'overdue' : ''}" onclick="openLead('${l.id}')">
+      <div class="fu-card-top">
+        <span class="fu-name">${l.name || 'Sem Nome'}</span>
+        <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
+      </div>
+      <div class="fu-meta">
+        ${l.campaign ? `<span class="campaign-tag">${l.campaign}</span>` : ''}
+        <span class="fu-resp">${l.assignee || '—'}</span>
+        <span class="fu-date ${isOverdue ? 'overdue-text' : ''}">${isOverdue ? '⚠️ ' : '📅 '}${formatDate(fu)}</span>
+      </div>
+      ${l.currentNote ? `<div class="fu-note">${l.currentNote}</div>` : ''}
+      <div class="fu-actions" onclick="event.stopPropagation()">
+        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-sm">WhatsApp</a>` : ''}
+        <button onclick="quickComplete('${l.id}')" class="btn-done-sm">✓ Feito</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderKanban() {
+  const cols = {
+    "EM ANDAMENTO": [], "SEM RESPOSTA": [], "QUALIFICADO": [], "DESQUALIFICADO": []
+  };
+  allLeads.forEach(l => {
+    if (cols[l.status] !== undefined) cols[l.status].push(l);
+  });
+
+  Object.keys(cols).forEach(status => {
+    const el = document.getElementById(`col-${status}`);
+    if (!el) return;
+    const sm = STATUS_META[status];
+    const cards = cols[status];
+    document.getElementById(`col-count-${status}`).textContent = cards.length;
+    el.innerHTML = cards.length === 0
+      ? `<div class="col-empty">Nenhum lead</div>`
+      : cards.map(l => kanbanCard(l)).join('');
+  });
+}
+
+function kanbanCard(l) {
+  const wa = formatPhone(l.phone);
+  const sm = STATUS_META[l.status] || {};
+  const today = new Date(); today.setHours(23,59,59,999);
+  const hasUrgent = l.nextFollowup && (() => {
+    const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
+    return d <= today && ["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status);
+  })();
+
+  return `
+  <div class="kanban-card ${hasUrgent ? 'card-urgent' : ''}" onclick="openLead('${l.id}')">
+    <div class="kc-header">
+      <span class="kc-name">${l.name || 'Sem Nome'}</span>
+      <button class="kc-menu" onclick="event.stopPropagation(); openLead('${l.id}')">⋯</button>
+    </div>
+    ${l.campaign ? `<span class="campaign-tag">${l.campaign}</span>` : ''}
+    <div class="kc-meta">
+      ${l.phone ? `<span class="kc-phone">${l.phone}</span>` : ''}
+      <span class="kc-resp">${l.assignee || '—'}</span>
+    </div>
+    ${l.currentNote ? `<div class="kc-note">${l.currentNote}</div>` : ''}
+    <div class="kc-footer" onclick="event.stopPropagation()">
+      ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>` : '<span></span>'}
+      ${l.nextFollowup ? `<span class="kc-fu ${hasUrgent ? 'urgent-fu' : ''}">📅 ${formatDate(l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup))}</span>` : ''}
+    </div>
+  </div>`;
+}
+
+function renderTable() {
+  let filtered = allLeads;
+  if (filterStatus !== 'ALL') filtered = filtered.filter(l => l.status === filterStatus);
+  if (searchQuery) {
+    const q = searchQuery.toLowerCase();
+    filtered = filtered.filter(l =>
+      (l.name||'').toLowerCase().includes(q) ||
+      (l.phone||'').includes(q)
+    );
+  }
+
+  const tbody = document.getElementById('table-body');
+  if (!filtered.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2rem;color:#666">Nenhum lead encontrado</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(l => {
+    const sm = STATUS_META[l.status] || {};
+    const wa = formatPhone(l.phone);
+    const created = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+    const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : l.nextFollowup ? new Date(l.nextFollowup) : null;
+    const today = new Date(); today.setHours(23,59,59,999);
+    const isUrgent = fu && fu <= today && ["EM ANDAMENTO","SEM RESPOSTA"].includes(l.status);
+
+    return `
+    <tr class="table-row" onclick="openLead('${l.id}')">
+      <td>${created ? formatDate(created) : '—'}</td>
+      <td class="lead-name-cell">${l.name || 'Sem Nome'}</td>
+      <td onclick="event.stopPropagation()">
+        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" title="${l.phone}">${l.phone||'—'}</a>` : l.phone||'—'}
+      </td>
+      <td>${l.campaign || '—'}</td>
+      <td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label||l.status}</span></td>
+      <td>${l.assignee || '—'}</td>
+      <td class="note-cell">${l.currentNote || '—'}</td>
+      <td class="${isUrgent ? 'urgent-fu' : ''}">${fu ? formatDate(fu) : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── LEAD MODAL ──
+window.openLead = function(id) {
+  const l = id === 'new' ? null : allLeads.find(x => x.id === id);
+  editingLeadId = id === 'new' ? null : id;
+  const modal = document.getElementById('lead-modal');
+  const title = document.getElementById('modal-title');
+
+  title.textContent = l ? `Editar Lead — ${l.name || 'Sem Nome'}` : 'Novo Lead';
+
+  document.getElementById('f-name').value       = l?.name || '';
+  document.getElementById('f-phone').value      = l?.phone || '';
+  document.getElementById('f-campaign').value   = l?.campaign || '';
+  document.getElementById('f-status').value     = l?.status || 'EM ANDAMENTO';
+  document.getElementById('f-assignee').value   = l?.assignee || currentUser || '';
+  document.getElementById('f-note').value       = '';
+  document.getElementById('f-nextfu').value     = l?.nextFollowup ? (() => {
+    const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
+    return d.toISOString().slice(0,10);
+  })() : '';
+
+  renderLog(l?.log || []);
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+};
+
+window.closeLead = function() {
+  document.getElementById('lead-modal').classList.add('hidden');
+  document.getElementById('lead-modal').classList.remove('flex');
+  editingLeadId = null;
+};
+
+function renderLog(log) {
+  const el = document.getElementById('lead-log');
+  if (!log.length) {
+    el.innerHTML = `<div class="log-empty">Nenhum histórico ainda.</div>`;
+    return;
+  }
+  el.innerHTML = [...log].reverse().map(entry => `
+    <div class="log-entry">
+      <div class="log-meta">
+        <span class="log-user">${entry.user}</span>
+        <span class="log-time">${formatDatetime(entry.ts?.toDate ? entry.ts.toDate() : new Date(entry.ts))}</span>
+      </div>
+      <div class="log-text">${entry.note}</div>
+      ${entry.statusChange ? `<span class="log-status-change">Status → ${entry.statusChange}</span>` : ''}
+    </div>
+  `).join('');
+}
+
+window.addQuickNote = function(note) {
+  const el = document.getElementById('f-note');
+  el.value = el.value ? el.value + ' — ' + note : note;
+};
+
+window.saveLead = async function() {
+  const name     = document.getElementById('f-name').value.trim() || 'Sem Nome';
+  const phone    = document.getElementById('f-phone').value.trim();
+  const campaign = document.getElementById('f-campaign').value;
+  const status   = document.getElementById('f-status').value;
+  const assignee = document.getElementById('f-assignee').value;
+  const note     = document.getElementById('f-note').value.trim();
+  const nextFu   = document.getElementById('f-nextfu').value;
+
+  const nextFollowup = nextFu ? Timestamp.fromDate(new Date(nextFu + 'T00:00:00')) : null;
+
+  if (!editingLeadId) {
+    // Novo lead
+    const data = {
+      name, phone, campaign, status, assignee,
+      currentNote: note,
+      nextFollowup,
+      createdAt: serverTimestamp(),
+      lastContact: serverTimestamp(),
+      log: note ? [{ user: assignee, note, ts: new Date().toISOString(), statusChange: null }] : []
+    };
+    await addDoc(collection(db, "leads"), data);
+    showToast("Lead criado com sucesso!");
+  } else {
+    const existing = allLeads.find(l => l.id === editingLeadId);
+    const prevStatus = existing?.status;
+    const statusChanged = prevStatus && prevStatus !== status;
+
+    const updateData = {
+      name, phone, campaign, status, assignee,
+      nextFollowup,
+      lastContact: serverTimestamp(),
+    };
+    if (note) updateData.currentNote = note;
+
+    const logEntry = {
+      user: assignee,
+      note: note || (statusChanged ? `Status alterado para ${status}` : 'Lead atualizado'),
+      ts: new Date().toISOString(),
+      statusChange: statusChanged ? status : null
+    };
+    updateData.log = arrayUnion(logEntry);
+
+    await updateDoc(doc(db, "leads", editingLeadId), updateData);
+    showToast("Lead atualizado!");
+  }
+  closeLead();
+};
+
+window.deleteLead = async function() {
+  if (!editingLeadId) return;
+  if (!confirm("Excluir este lead permanentemente?")) return;
+  await deleteDoc(doc(db, "leads", editingLeadId));
+  showToast("Lead removido.", "warn");
+  closeLead();
+};
+
+window.quickComplete = async function(id) {
+  const l = allLeads.find(x => x.id === id);
+  if (!l) return;
+  await updateDoc(doc(db, "leads", id), {
+    nextFollowup: null,
+    lastContact: serverTimestamp(),
+    log: arrayUnion({
+      user: currentUser || '—',
+      note: 'Follow-up realizado',
+      ts: new Date().toISOString(),
+      statusChange: null
+    })
+  });
+  showToast("Follow-up marcado como feito!");
+};
+
+// ── UTILS ──
+function formatPhone(p) {
+  if (!p) return '';
+  return p.replace(/\D/g,'').replace(/^0/, '').replace(/^55/, '55');
+}
+
+function formatDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('pt-BR', { day:'2-digit', month:'2-digit' });
+}
+
+function formatDatetime(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+}
+
+function showToast(msg, type='success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+// ── TAB SWITCH ──
+window.switchTab = function(tab) {
+  currentTab = tab;
+  document.getElementById('tab-kanban').classList.toggle('tab-active', tab === 'kanban');
+  document.getElementById('tab-table').classList.toggle('tab-active', tab === 'table');
+  document.getElementById('view-kanban').classList.toggle('hidden', tab !== 'kanban');
+  document.getElementById('view-table').classList.toggle('hidden', tab !== 'table');
+  renderAll();
+};
+
+window.setFilter = function(s) {
+  filterStatus = s;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('filter-' + s).classList.add('active');
+  renderTable();
+};
+
+window.onSearch = function(v) {
+  searchQuery = v;
+  renderTable();
+};
+
+// ── USER SELECT SCREEN ──
+window.selectUser = function(user) {
+  currentUser = user;
+  document.getElementById('user-select').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('header-user').textContent = user;
+  document.getElementById('f-assignee').value = user;
+  initFirebase();
+};
+
+</script>
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #0F1117;
+    color: #F8F9FC;
+    min-height: 100vh;
+  }
+
+  /* ── USER SELECT ── */
+  #user-select {
+    position: fixed; inset: 0;
+    background: #0F1117;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 2rem; z-index: 9999;
+  }
+  .us-logo { font-size: 1.1rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.05em; }
+  .us-title { font-size: 1.6rem; font-weight: 700; color: #F8F9FC; }
+  .us-sub { font-size: 0.9rem; color: #6B7280; }
+  .us-btns { display: flex; gap: 1rem; }
+  .us-btn {
+    padding: 1rem 2.5rem;
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 12px;
+    color: #F8F9FC;
+    font-size: 1rem; font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .us-btn:hover { background: #4F6EF7; border-color: #4F6EF7; transform: translateY(-2px); }
+
+  /* ── HEADER ── */
+  header {
+    background: #0F1117;
+    border-bottom: 1px solid #252836;
+    padding: 0 1.5rem;
+    height: 56px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header-brand { font-size: 0.95rem; font-weight: 700; color: #4F6EF7; letter-spacing: 0.04em; }
+  .header-right { display: flex; align-items: center; gap: 1rem; }
+  .header-user-badge {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 8px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.8rem;
+    color: #9CA3AF;
+  }
+  .header-user-badge span { color: #F8F9FC; font-weight: 600; }
+  .btn-new {
+    background: #4F6EF7;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 0.45rem 1.1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .btn-new:hover { background: #3B5BDB; }
+
+  /* ── MAIN LAYOUT ── */
+  main { padding: 1.5rem; max-width: 1600px; margin: 0 auto; }
+
+  /* ── METRICS ── */
+  .metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .metric-card {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 12px;
+    padding: 1.2rem 1.5rem;
+    display: flex; flex-direction: column; gap: 0.3rem;
+  }
+  .metric-label { font-size: 0.75rem; color: #6B7280; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; }
+  .metric-value { font-size: 2rem; font-weight: 700; color: #F8F9FC; line-height: 1; }
+  .metric-card.blue  { border-top: 2px solid #4F6EF7; } .metric-card.blue  .metric-value { color: #4F6EF7; }
+  .metric-card.amber { border-top: 2px solid #F5A623; } .metric-card.amber .metric-value { color: #F5A623; }
+  .metric-card.green { border-top: 2px solid #10B981; } .metric-card.green .metric-value { color: #10B981; }
+  .metric-card.red   { border-top: 2px solid #EF4444; } .metric-card.red   .metric-value { color: #EF4444; }
+
+  /* ── FOLLOW-UP PANEL ── */
+  .fu-panel {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 14px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  .fu-panel-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid #252836;
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .fu-panel-title { font-size: 0.95rem; font-weight: 700; color: #F8F9FC; }
+  .fu-badge {
+    background: #F5A623;
+    color: #0F1117;
+    font-size: 0.7rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 0.15rem 0.5rem;
+    display: none; align-items: center;
+  }
+  @keyframes pulseGlow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(245,166,35,0); }
+    50%       { box-shadow: 0 0 0 6px rgba(245,166,35,0.18); }
+  }
+  .pulsing { animation: pulseGlow 2.5s ease-in-out infinite; }
+
+  #followup-cards {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: #252836 transparent;
+  }
+  .fu-card {
+    background: #252836;
+    border: 1px solid #2E3347;
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    min-width: 230px;
+    max-width: 260px;
+    cursor: pointer;
+    transition: border-color 0.2s, transform 0.15s;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .fu-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
+  .fu-card.overdue { border-left: 3px solid #EF4444; }
+  .fu-card-top { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .fu-name { font-size: 0.85rem; font-weight: 600; color: #F8F9FC; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fu-meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .fu-resp { font-size: 0.7rem; color: #6B7280; }
+  .fu-date { font-size: 0.72rem; color: #9CA3AF; }
+  .fu-date.overdue-text { color: #EF4444; }
+  .fu-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .fu-actions { display: flex; gap: 0.4rem; margin-top: 0.2rem; }
+  .btn-wa-sm {
+    background: #1DAA61;
+    color: #fff;
+    border: none; border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.72rem; font-weight: 600;
+    cursor: pointer; text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn-done-sm {
+    background: transparent;
+    color: #10B981;
+    border: 1px solid #10B981;
+    border-radius: 6px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.72rem; font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-done-sm:hover { background: rgba(16,185,129,0.12); }
+  .empty-fu { padding: 1rem; color: #6B7280; font-size: 0.85rem; }
+
+  /* ── TABS ── */
+  .tabs-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 1rem;
+  }
+  .tabs { display: flex; gap: 0.25rem; background: #1A1D27; border: 1px solid #252836; border-radius: 8px; padding: 3px; }
+  .tab-btn {
+    padding: 0.4rem 1.1rem;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: #6B7280;
+    font-size: 0.82rem; font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .tab-btn.tab-active { background: #252836; color: #F8F9FC; }
+
+  /* ── KANBAN ── */
+  .kanban-board {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+  }
+  .kanban-col {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+    min-height: 300px;
+  }
+  .col-header {
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid #252836;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .col-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  .col-count {
+    font-size: 0.7rem; font-weight: 700;
+    background: #252836;
+    border-radius: 999px;
+    padding: 0.1rem 0.5rem;
+    color: #9CA3AF;
+  }
+  .col-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.6rem; overflow-y: auto; max-height: 550px; }
+  .col-empty { padding: 1.5rem; text-align: center; color: #374151; font-size: 0.8rem; }
+  .kanban-card {
+    background: #252836;
+    border: 1px solid #2E3347;
+    border-radius: 9px;
+    padding: 0.85rem;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+    display: flex; flex-direction: column; gap: 0.45rem;
+  }
+  .kanban-card:hover { border-color: #4F6EF7; transform: translateY(-1px); }
+  .kanban-card.card-urgent { border-left: 3px solid #F5A623; }
+  .kc-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.3rem; }
+  .kc-name { font-size: 0.83rem; font-weight: 600; color: #F8F9FC; }
+  .kc-menu { background: none; border: none; color: #6B7280; cursor: pointer; font-size: 1rem; padding: 0; line-height: 1; }
+  .kc-meta { display: flex; align-items: center; gap: 0.5rem; }
+  .kc-phone { font-size: 0.72rem; color: #6B7280; }
+  .kc-resp { font-size: 0.7rem; color: #4F6EF7; font-weight: 500; }
+  .kc-note { font-size: 0.75rem; color: #9CA3AF; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .kc-footer { display: flex; align-items: center; justify-content: space-between; }
+  .kc-fu { font-size: 0.7rem; color: #9CA3AF; }
+  .urgent-fu { color: #F5A623; font-weight: 600; }
+
+  /* ── TABLE VIEW ── */
+  .table-controls {
+    display: flex; gap: 0.75rem; align-items: center;
+    margin-bottom: 1rem; flex-wrap: wrap;
+  }
+  .search-input {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    color: #F8F9FC;
+    font-size: 0.85rem;
+    outline: none;
+    width: 220px;
+    transition: border-color 0.2s;
+  }
+  .search-input:focus { border-color: #4F6EF7; }
+  .filter-btns { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .filter-btn {
+    padding: 0.35rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid #252836;
+    background: #1A1D27;
+    color: #6B7280;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .filter-btn.active { background: #4F6EF7; border-color: #4F6EF7; color: #fff; }
+
+  .table-wrap {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 12px;
+    overflow: auto;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6B7280;
+    border-bottom: 1px solid #252836;
+    white-space: nowrap;
+  }
+  .table-row td {
+    padding: 0.75rem 1rem;
+    font-size: 0.82rem;
+    color: #D1D5DB;
+    border-bottom: 1px solid #1E2130;
+    vertical-align: middle;
+  }
+  .table-row:hover td { background: #1E2130; cursor: pointer; }
+  .table-row:last-child td { border-bottom: none; }
+  .lead-name-cell { font-weight: 600; color: #F8F9FC; }
+  .note-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9CA3AF; }
+
+  /* ── SHARED PILLS / TAGS ── */
+  .status-pill {
+    display: inline-flex;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .campaign-tag {
+    display: inline-flex;
+    background: rgba(79,110,247,0.12);
+    color: #4F6EF7;
+    border-radius: 4px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+  }
+  .btn-wa-xs {
+    display: inline-flex; align-items: center;
+    background: #1DAA61;
+    color: #fff;
+    border: none; border-radius: 5px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.7rem; font-weight: 600;
+    cursor: pointer; text-decoration: none;
+    white-space: nowrap;
+  }
+  .urgent-fu { color: #F5A623; font-weight: 600; }
+
+  /* ── MODAL ── */
+  #lead-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 1000;
+    align-items: center; justify-content: center;
+    padding: 1rem;
+  }
+  .modal-box {
+    background: #1A1D27;
+    border: 1px solid #252836;
+    border-radius: 16px;
+    width: 100%; max-width: 720px;
+    max-height: 90vh;
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .modal-header {
+    padding: 1.25rem 1.5rem;
+    border-bottom: 1px solid #252836;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; background: #1A1D27; z-index: 2;
+  }
+  .modal-title { font-size: 1rem; font-weight: 700; color: #F8F9FC; }
+  .modal-close {
+    background: none; border: none; color: #6B7280;
+    font-size: 1.3rem; cursor: pointer; padding: 0;
+    transition: color 0.2s;
+  }
+  .modal-close:hover { color: #F8F9FC; }
+  .modal-body { padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .form-group { display: flex; flex-direction: column; gap: 0.4rem; }
+  .form-group.full { grid-column: 1 / -1; }
+  .form-label { font-size: 0.75rem; font-weight: 600; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.04em; }
+  .form-input, .form-select, .form-textarea {
+    background: #252836;
+    border: 1px solid #2E3347;
+    border-radius: 8px;
+    padding: 0.6rem 0.85rem;
+    color: #F8F9FC;
+    font-size: 0.85rem;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+  .form-input:focus, .form-select:focus, .form-textarea:focus { border-color: #4F6EF7; }
+  .form-select option { background: #252836; }
+  .form-textarea { resize: vertical; min-height: 70px; }
+
+  /* Quick notes */
+  .quick-notes-label { font-size: 0.72rem; color: #6B7280; margin-bottom: 0.4rem; }
+  .quick-notes-grid { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+  .qn-btn {
+    background: #252836;
+    border: 1px solid #2E3347;
+    border-radius: 6px;
+    color: #9CA3AF;
+    font-size: 0.72rem;
+    padding: 0.3rem 0.65rem;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .qn-btn:hover { background: #2E3347; color: #F8F9FC; border-color: #4F6EF7; }
+
+  /* Log */
+  .log-section { display: flex; flex-direction: column; gap: 0.5rem; }
+  .log-title { font-size: 0.75rem; font-weight: 700; color: #6B7280; text-transform: uppercase; letter-spacing: 0.05em; }
+  #lead-log { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  .log-entry {
+    background: #252836;
+    border-radius: 8px;
+    padding: 0.65rem 0.85rem;
+    display: flex; flex-direction: column; gap: 0.25rem;
+  }
+  .log-meta { display: flex; gap: 0.75rem; align-items: center; }
+  .log-user { font-size: 0.72rem; font-weight: 700; color: #4F6EF7; }
+  .log-time { font-size: 0.7rem; color: #6B7280; }
+  .log-text { font-size: 0.8rem; color: #D1D5DB; line-height: 1.4; }
+  .log-status-change { font-size: 0.7rem; color: #10B981; font-weight: 600; }
+  .log-empty { font-size: 0.8rem; color: #6B7280; text-align: center; padding: 0.75rem; }
+
+  /* Modal footer */
+  .modal-footer {
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #252836;
+    display: flex; justify-content: space-between; align-items: center;
+    position: sticky; bottom: 0; background: #1A1D27;
+  }
+  .btn-delete { background: transparent; border: 1px solid #EF4444; color: #EF4444; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .btn-delete:hover { background: rgba(239,68,68,0.12); }
+  .btn-save { background: #4F6EF7; color: #fff; border: none; border-radius: 8px; padding: 0.5rem 1.5rem; font-size: 0.85rem; font-weight: 700; cursor: pointer; transition: background 0.2s; }
+  .btn-save:hover { background: #3B5BDB; }
+  .btn-cancel { background: transparent; border: 1px solid #252836; color: #9CA3AF; border-radius: 8px; padding: 0.5rem 1rem; font-size: 0.82rem; cursor: pointer; }
+
+  /* Toast */
+  .toast {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: #252836; color: #F8F9FC;
+    padding: 0.75rem 1.25rem;
+    border-radius: 10px;
+    font-size: 0.85rem; font-weight: 500;
+    border-left: 3px solid #4F6EF7;
+    opacity: 0; transform: translateY(10px);
+    transition: all 0.3s;
+    z-index: 9999;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.warn { border-left-color: #F5A623; }
+  .toast.error { border-left-color: #EF4444; }
+
+  @media (max-width: 900px) {
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .kanban-board { grid-template-columns: repeat(2, 1fr); }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+    .kanban-board { grid-template-columns: 1fr; }
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #252836; border-radius: 99px; }
+</style>
+</head>
+<body>
+
+<!-- ── USER SELECT ── -->
+<div id="user-select">
+  <div class="us-logo">COSTA GALVÃO ADVOCACIA</div>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:0.5rem;">
+    <div class="us-title">Quem está acessando?</div>
+    <div class="us-sub">Selecione sua atendente para continuar</div>
+  </div>
+  <div class="us-btns">
+    <button class="us-btn" onclick="selectUser('Isabel')">Isabel</button>
+    <button class="us-btn" onclick="selectUser('Joelma')">Joelma</button>
+  </div>
+</div>
+
+<!-- ── APP ── -->
+<div id="app" class="hidden">
+
+  <header>
+    <div class="header-brand">COSTA GALVÃO | CRM</div>
+    <div class="header-right">
+      <div class="header-user-badge">Atendente: <span id="header-user">—</span></div>
+      <button class="btn-new" onclick="openLead('new')">+ Novo Lead</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- METRICS -->
+    <div class="metrics-grid">
+      <div class="metric-card blue">
+        <div class="metric-label">Leads no Mês</div>
+        <div class="metric-value" id="m-total">—</div>
+      </div>
+      <div class="metric-card amber">
+        <div class="metric-label">Em Andamento</div>
+        <div class="metric-value" id="m-andamento">—</div>
+      </div>
+      <div class="metric-card green">
+        <div class="metric-label">Qualificados</div>
+        <div class="metric-value" id="m-qualif">—</div>
+      </div>
+      <div class="metric-card red">
+        <div class="metric-label">Sem Resposta</div>
+        <div class="metric-value" id="m-semresp">—</div>
+      </div>
+    </div>
+
+    <!-- FOLLOW-UP PANEL -->
+    <div class="fu-panel" id="fu-pulse">
+      <div class="fu-panel-header">
+        <span style="font-size:1.1rem">🔥</span>
+        <span class="fu-panel-title">Follow-ups para Hoje</span>
+        <span class="fu-badge" id="fu-badge">0</span>
+      </div>
+      <div id="followup-cards">
+        <div class="empty-fu">Carregando...</div>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs-row">
+      <div class="tabs">
+        <button id="tab-kanban" class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
+        <button id="tab-table"  class="tab-btn"            onclick="switchTab('table')">Tabela</button>
+      </div>
+    </div>
+
+    <!-- KANBAN VIEW -->
+    <div id="view-kanban">
+      <div class="kanban-board">
+        <div class="kanban-col">
+          <div class="col-header" style="border-top:2px solid #4F6EF7">
+            <span class="col-title" style="color:#4F6EF7">Em Andamento</span>
+            <span class="col-count" id="col-count-EM ANDAMENTO">0</span>
+          </div>
+          <div class="col-body" id="col-EM ANDAMENTO"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="col-header" style="border-top:2px solid #F5A623">
+            <span class="col-title" style="color:#F5A623">Sem Resposta</span>
+            <span class="col-count" id="col-count-SEM RESPOSTA">0</span>
+          </div>
+          <div class="col-body" id="col-SEM RESPOSTA"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="col-header" style="border-top:2px solid #10B981">
+            <span class="col-title" style="color:#10B981">Qualificados</span>
+            <span class="col-count" id="col-count-QUALIFICADO">0</span>
+          </div>
+          <div class="col-body" id="col-QUALIFICADO"></div>
+        </div>
+        <div class="kanban-col">
+          <div class="col-header" style="border-top:2px solid #EF4444">
+            <span class="col-title" style="color:#EF4444">Desqualificados</span>
+            <span class="col-count" id="col-count-DESQUALIFICADO">0</span>
+          </div>
+          <div class="col-body" id="col-DESQUALIFICADO"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TABLE VIEW -->
+    <div id="view-table" class="hidden">
+      <div class="table-controls">
+        <input class="search-input" type="text" placeholder="Buscar por nome ou telefone..." oninput="onSearch(this.value)"/>
+        <div class="filter-btns">
+          <button id="filter-ALL"          class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
+          <button id="filter-EM ANDAMENTO" class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
+          <button id="filter-SEM RESPOSTA" class="filter-btn"        onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
+          <button id="filter-QUALIFICADO"  class="filter-btn"        onclick="setFilter('QUALIFICADO')">Qualificados</button>
+          <button id="filter-DESQUALIFICADO" class="filter-btn"      onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Entrada</th>
+              <th>Nome</th>
+              <th>WhatsApp</th>
+              <th>Campanha</th>
+              <th>Status</th>
+              <th>Atendente</th>
+              <th>Última Nota</th>
+              <th>Próx. F-up</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <tr><td colspan="8" style="text-align:center;padding:2rem;color:#666">Conectando ao Firebase...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div><!-- /app -->
+
+<!-- ── LEAD MODAL ── -->
+<div id="lead-modal" class="hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="modal-title">Lead</span>
+      <button class="modal-close" onclick="closeLead()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Nome</label>
+          <input id="f-name" class="form-input" type="text" placeholder="Nome do lead"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Telefone / WhatsApp</label>
+          <input id="f-phone" class="form-input" type="text" placeholder="(87) 99999-0000"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Campanha / Origem</label>
+          <select id="f-campaign" class="form-select">
+            <option value="">Selecione...</option>
+            <option>SM - 01</option>
+            <option>SM - 02</option>
+            <option>SM - 03</option>
+            <option>SM - V3</option>
+            <option>Redes Sociais</option>
+            <option>Indicação</option>
+            <option>Outro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Status</label>
+          <select id="f-status" class="form-select">
+            <option value="EM ANDAMENTO">Em Andamento</option>
+            <option value="QUALIFICADO">Qualificado</option>
+            <option value="DESQUALIFICADO">Desqualificado</option>
+            <option value="SEM RESPOSTA">Sem Resposta</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Atendente</label>
+          <select id="f-assignee" class="form-select">
+            <option>Isabel</option>
+            <option>Joelma</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Próximo Follow-up</label>
+          <input id="f-nextfu" class="form-input" type="date"/>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Nova Nota / Atualização</label>
+          <textarea id="f-note" class="form-textarea" placeholder="O que aconteceu neste contato?"></textarea>
+          <div class="quick-notes-label">Notas rápidas — clique para adicionar:</div>
+          <div class="quick-notes-grid" id="quick-notes-container"></div>
+        </div>
+      </div>
+
+      <div class="log-section">
+        <div class="log-title">Histórico de Atualizações</div>
+        <div id="lead-log"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-delete" id="btn-delete" onclick="deleteLead()">Excluir Lead</button>
+      <div style="display:flex;gap:0.5rem">
+        <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
+        <button class="btn-save" onclick="saveLead()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script type="module">
+  // Render quick notes
+  const container = document.getElementById('quick-notes-container');
+  const notes = [
+    "Script inicial enviado","Áudio de qualificação enviado","Aguardando retorno",
+    "Lead não respondeu","Lead visualizou e não respondeu","Mensagem automática enviada",
+    "Follow-up agendado","Cliente sumiu","Clicou por engano","Encaminhado para a Dra.",
+    "Documentos solicitados","Contrato enviado","Pedimos indicação",
+    "Desqualificado — sem CLT","Desqualificado — filho maior de 5 anos","Link WhatsApp enviado"
+  ];
+  container.innerHTML = notes.map(n =>
+    `<button class="qn-btn" onclick="addQuickNote('${n}')">${n}</button>`
+  ).join('');
+</script>
+
+</body>
+</html>
