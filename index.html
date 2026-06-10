@@ -143,18 +143,43 @@ window.abrirModalEquipe=function(uid){
   document.getElementById('eq-modal-title').textContent=u?'Editar Colaboradora':'Nova Colaboradora';
   document.getElementById('eq-senha-row').style.display=u?'none':'flex';
   document.getElementById('btn-eq-delete').style.display=u?'block':'none';
+  // Mostrar opção de transferir só ao editar
+  const transferRow=document.getElementById('eq-transfer-row');
+  if(transferRow) transferRow.style.display=u?'flex':'none';
+  const leadsCount=u?allLeads.filter(l=>l.assignee===u.nome).length:0;
+  const transferLabel=document.getElementById('eq-transfer-label');
+  if(transferLabel) transferLabel.textContent=`Transferir ${leadsCount} leads para o novo nome`;
   document.getElementById('modal-equipe').style.display='flex';
 };
 window.fecharModalEquipe=()=>document.getElementById('modal-equipe').style.display='none';
 window.salvarColaboradora=async function(){
   const uid=document.getElementById('eq-uid').value;
+  const nomeAntigo=allUsers.find(x=>x.id===uid)?.nome||'';
   const nome=document.getElementById('eq-nome').value.trim();
   const email=document.getElementById('eq-email').value.trim();
   const role=document.getElementById('eq-role').value;
   const senha=document.getElementById('eq-senha').value;
+  const transferir=document.getElementById('eq-transferir')?.checked;
   if(!nome||!email)return showToast('Nome e e-mail obrigatórios','error');
-  if(uid){await updateDoc(doc(db,'usuarios',uid),{nome,role});showToast('Atualizado!');fecharModalEquipe();}
-  else{
+  if(uid){
+    await updateDoc(doc(db,'usuarios',uid),{nome,role});
+    // Se mudou o nome E marcou transferir leads
+    if(transferir && nomeAntigo && nomeAntigo!==nome){
+      const leadsParaAtualizar=allLeads.filter(l=>l.assignee===nomeAntigo);
+      let count=0;
+      for(const l of leadsParaAtualizar){
+        await updateDoc(doc(db,'leads',l.id),{
+          assignee:nome,
+          log:arrayUnion({user:'Sistema',note:`Atendente transferida de ${nomeAntigo} para ${nome}`,ts:new Date().toISOString(),statusChange:null})
+        });
+        count++;
+      }
+      showToast(`✅ ${count} leads transferidos para ${nome}!`);
+    } else {
+      showToast('Atualizado!');
+    }
+    fecharModalEquipe();
+  } else {
     if(!senha||senha.length<6)return showToast('Senha mínimo 6 caracteres','error');
     try{
       setBtnLoading('btn-eq-save',true);
@@ -174,11 +199,14 @@ window.excluirColaboradora=async function(){
 function renderEquipe(){
   const el=document.getElementById('equipe-lista');if(!el)return;
   el.innerHTML=allUsers.map(u=>`
-    <div class="user-card">
+    <div class="user-card" onclick="abrirModalEquipe('${u.id}')" style="cursor:pointer">
       <div class="user-avatar">${(u.nome||'?')[0].toUpperCase()}</div>
-      <div class="user-info"><div class="user-name">${u.nome}</div><div class="user-email">${u.email}</div>
-      <span class="user-role ${u.role==='gestora'?'role-gestora':'role-atendente'}">${u.role==='gestora'?'Gestora':'Atendente'}</span></div>
-      <button class="btn-edit-user" onclick="abrirModalEquipe('${u.id}')">Editar</button>
+      <div class="user-info">
+        <div class="user-name">${u.nome}</div>
+        <div class="user-email">${u.email}</div>
+        <span class="user-role ${u.role==='gestora'?'role-gestora':'role-atendente'}">${u.role==='gestora'?'Gestora':'Atendente'}</span>
+      </div>
+      <button class="btn-edit-user" onclick="event.stopPropagation();abrirModalEquipe('${u.id}')">✏️ Editar</button>
     </div>`).join('');
 }
 
@@ -316,24 +344,31 @@ function fuCard(l,todayStart){
 
 // ─── AVANÇAR ETAPA ───
 async function avancarEtapa(id){
-  const l=allLeads.find(x=>x.id===id);if(!l)return;
+  const l=allLeads.find(x=>x.id===id);
+  if(!l){ showToast('Lead não encontrado','error'); return; }
   const trilhaDias=getTrilhaDias(l.tipo||'SM');
   const trilhaLabels=getTrilha(l.tipo||'SM');
   const etapaAtual=l.etapaFollowup||0;
-  const etapaFeita=etapaAtual;
   const novaEtapa=etapaAtual+1;
-  const labelFeita=trilhaLabels[etapaFeita]||'Mensal';
+  const labelFeita=trilhaLabels[etapaAtual]||'Mensal';
 
-  // Calcular próximo FU a partir de AGORA (após o feito)
+  // Verificar se é último estágio — abrir modal de decisão
+  const isUltimoEstagio = (l.tipo==='SM' && novaEtapa>trilhaDias.length) ||
+                          (l.tipo!=='SM' && novaEtapa>=trilhaDias.length);
+  if(isUltimoEstagio){
+    abrirModalDecisao(l, labelFeita);
+    return;
+  }
+
+  // Calcular próximo FU a partir de AGORA
   let nextFollowup=null;
-  if(l.tipo==='SM'&&novaEtapa>=trilhaDias.length){
-    // Fase mensal
+  if(l.tipo==='SM' && novaEtapa>=trilhaDias.length){
     if(l.dataParto){
       const parto=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
       const prox=new Date();prox.setMonth(prox.getMonth()+1);
       nextFollowup=prox<=parto?Timestamp.fromDate(prox):null;
     }
-  }else if(novaEtapa<trilhaDias.length){
+  } else if(novaEtapa<trilhaDias.length){
     const prox=new Date();
     prox.setDate(prox.getDate()+trilhaDias[novaEtapa]);
     nextFollowup=Timestamp.fromDate(prox);
@@ -349,10 +384,47 @@ async function avancarEtapa(id){
   };
   if(l.tipo==='SM'&&novaEtapa>=trilhaDias.length)upd.ultimoFollowupMensal=serverTimestamp();
   await updateDoc(doc(db,'leads',id),upd);
-  showToast(nextFollowup?`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`:`✓ ${labelFeita} feito! Trilha concluída.`);
+  showToast(nextFollowup?`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`:`✓ ${labelFeita} feito!`);
 }
-// expose for HTML onclick
+window.avancarEtapa=avancarEtapa;
 window.avancarEtapaFollowup=avancarEtapa;
+
+// ─── MODAL DECISÃO FINAL ───
+function abrirModalDecisao(l, labelFeita){
+  document.getElementById('dec-lead-name').textContent=l.name||'Sem Nome';
+  document.getElementById('dec-lead-id').value=l.id;
+  document.getElementById('dec-label-feita').textContent=labelFeita;
+  document.getElementById('dec-motivo').value='';
+  document.getElementById('modal-decisao').style.display='flex';
+}
+window.fecharModalDecisao=()=>document.getElementById('modal-decisao').style.display='none';
+
+window.confirmarDecisao=async function(decisao){
+  const id=document.getElementById('dec-lead-id').value;
+  const motivo=document.getElementById('dec-motivo').value.trim();
+  const labelFeita=document.getElementById('dec-label-feita').textContent;
+  const l=allLeads.find(x=>x.id===id);if(!l)return;
+
+  const histEntry={etapa:(l.etapaFollowup||0)+1,label:labelFeita,doneAt:new Date().toISOString(),doneBy:currentUser?.nome||'—'};
+  let novoStatus=l.status;
+  let nota='';
+
+  if(decisao==='qualificar'){novoStatus='QUALIFICADO';nota=`${labelFeita} realizado — Lead qualificado`+(motivo?`: ${motivo}`:'');}
+  else if(decisao==='desqualificar'){novoStatus='DESQUALIFICADO';nota=`${labelFeita} realizado — Lead desqualificado`+(motivo?`: ${motivo}`:'');}
+  else{nota=`${labelFeita} realizado — Continua em acompanhamento`+(motivo?`: ${motivo}`:'');}
+
+  await updateDoc(doc(db,'leads',id),{
+    status:novoStatus,
+    etapaFollowup:(l.etapaFollowup||0)+1,
+    nextFollowup:null,
+    lastContact:serverTimestamp(),
+    currentNote:nota,
+    followupHistory:arrayUnion(histEntry),
+    log:arrayUnion({user:currentUser?.nome||'—',note:nota,ts:new Date().toISOString(),statusChange:novoStatus!==l.status?novoStatus:null})
+  });
+  showToast(`✓ ${labelFeita} concluído!`);
+  fecharModalDecisao();
+};
 
 // ─── KANBAN ───
 function renderKanban(){
@@ -1320,6 +1392,13 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       <div class="f-group"><label class="f-label">E-mail</label><input id="eq-email" class="f-input" type="email" placeholder="email@exemplo.com"/></div>
       <div class="f-group"><label class="f-label">Perfil</label><select id="eq-role" class="f-select"><option value="atendente">Atendente</option><option value="gestora">Gestora</option></select></div>
       <div class="f-group" id="eq-senha-row"><label class="f-label">Senha inicial</label><input id="eq-senha" class="f-input" type="password" placeholder="Mínimo 6 caracteres"/></div>
+      <div class="f-group" id="eq-transfer-row" style="display:none">
+        <label class="f-label" style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+          <input type="checkbox" id="eq-transferir" style="width:16px;height:16px;accent-color:#4F6EF7"/>
+          <span id="eq-transfer-label">Transferir leads para o novo nome</span>
+        </label>
+        <div style="font-size:.68rem;color:#6B7280;margin-top:.2rem">Ao salvar, todos os leads desta colaboradora serão automaticamente transferidos para o novo nome.</div>
+      </div>
     </div>
     <div class="modal-foot">
       <button id="btn-eq-delete" class="btn-delete" onclick="excluirColaboradora()" style="display:none">Remover</button>
@@ -1327,6 +1406,42 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     </div>
   </div>
 </div>
+<!-- MODAL DECISÃO FINAL TRILHA -->
+<div id="modal-decisao" class="modal-overlay">
+  <div class="modal-box" style="max-width:460px">
+    <div class="modal-head">
+      <span class="modal-title">🎯 Trilha Concluída</span>
+      <button class="modal-close" onclick="fecharModalDecisao()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="dec-lead-id"/>
+      <input type="hidden" id="dec-label-feita"/>
+      <div style="background:rgba(79,110,247,.08);border:1px solid rgba(79,110,247,.2);border-radius:8px;padding:.85rem 1rem;margin-bottom:.5rem">
+        <div style="font-size:.82rem;font-weight:700;color:#F1F3F9" id="dec-lead-name"></div>
+        <div style="font-size:.72rem;color:#9CA3AF;margin-top:.2rem">Todos os follow-ups da trilha foram realizados. Qual é a decisão sobre este lead?</div>
+      </div>
+      <div class="f-group">
+        <label class="f-label">Observação (opcional)</label>
+        <textarea id="dec-motivo" class="f-textarea" placeholder="Ex: Cliente não respondeu mais, sem interesse confirmado..." style="min-height:55px"></textarea>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        <button onclick="confirmarDecisao('qualificar')" style="background:rgba(16,185,129,.12);border:1px solid #10B981;color:#10B981;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.1rem">✅</span>
+          <div><div>Qualificar lead</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Lead tem potencial — mover para Qualificados</div></div>
+        </button>
+        <button onclick="confirmarDecisao('continuar')" style="background:rgba(79,110,247,.08);border:1px solid #4F6EF7;color:#4F6EF7;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.1rem">🔄</span>
+          <div><div>Continuar acompanhando</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Manter em andamento sem follow-up agendado</div></div>
+        </button>
+        <button onclick="confirmarDecisao('desqualificar')" style="background:rgba(239,68,68,.08);border:1px solid #EF4444;color:#EF4444;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.1rem">❌</span>
+          <div><div>Desqualificar lead</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Sem interesse — arquivar como desqualificado</div></div>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script>
 function maskPhone(el){
