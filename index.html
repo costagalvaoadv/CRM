@@ -73,7 +73,9 @@ function showApp(){
   document.getElementById('header-name').textContent=currentUser.nome||currentUser.email;
   document.getElementById('header-role').textContent=currentUser.role==='gestora'?'Gestora':'Atendente';
   const isG=currentUser.role==='gestora';
-  ['tab-relatorios','tab-equipe','tab-estrategia'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
+  ['tab-relatorios','tab-equipe'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
+  const tabEst=document.getElementById('tab-estrategia');
+  if(tabEst)tabEst.style.display='inline-block';
   startLeadsListener();startPresence();
   if(isG)startUsersListener();
 }
@@ -252,15 +254,9 @@ function renderFollowups(){
   const stagesContainer=document.getElementById('fu-stages');
   if(!stagesContainer)return;
 
-  // Only show stages that have leads or are relevant
-  const relevantStages=ALL_STAGES.filter(s=>stageMap[s]&&stageMap[s].length>0);
-  if(!relevantStages.length){
-    stagesContainer.innerHTML=`<div class="fu-empty-all">✅ Nenhum follow-up pendente</div>`;
-    return;
-  }
-
-  stagesContainer.innerHTML=relevantStages.map(stage=>{
-    const stageleads=stageMap[stage];
+  // Always show ALL stages — empty ones show placeholder
+  stagesContainer.innerHTML=ALL_STAGES.map(stage=>{
+    const stageleads=stageMap[stage]||[];
     const overdueCount=stageleads.filter(l=>{
       const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
       return d<todayStart;
@@ -269,11 +265,13 @@ function renderFollowups(){
     <div class="fu-stage-col">
       <div class="fu-stage-header">
         <span class="fu-stage-title">${stage}</span>
-        <span class="fu-stage-count">${stageleads.length}</span>
-        ${overdueCount?`<span class="fu-stage-late" title="${overdueCount} em atraso">⚠️ ${overdueCount}</span>`:''}
+        <span class="fu-stage-count" style="${stageleads.length?'':'opacity:.4'}">${stageleads.length}</span>
+        ${overdueCount?`<span class="fu-stage-late">⚠️ ${overdueCount}</span>`:''}
       </div>
       <div class="fu-stage-body">
-        ${stageleads.map(l=>fuCard(l,todayStart)).join('')}
+        ${stageleads.length
+          ? stageleads.map(l=>fuCard(l,todayStart)).join('')
+          : `<div class="fu-stage-empty">Nenhum lead aqui</div>`}
       </div>
     </div>`;
   }).join('');
@@ -712,8 +710,12 @@ window.renderEstrategia=function(){
   const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
   const ini=new Date(now.getFullYear(),now.getMonth(),1);
   const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
-  const mesLeads=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
-  const partoProximo=allLeads.filter(l=>{
+  const isG=currentUser?.role==='gestora';
+
+  // Atendentes veem apenas seus próprios leads
+  const leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
+  const mesLeads=leadsBase.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
+  const partoProximo=leadsBase.filter(l=>{
     if(['CONTRATO FECHADO','DESQUALIFICADO'].includes(l.status))return false;
     if(!l.dataParto)return false;
     const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
@@ -724,17 +726,17 @@ window.renderEstrategia=function(){
     const pb=b.dataParto?.toDate?b.dataParto.toDate():new Date(b.dataParto);
     return pa-pb;
   });
-  const qualifParados=allLeads.filter(l=>{
+  const qualifParados=leadsBase.filter(l=>{
     if(l.status!=='QUALIFICADO')return false;
     const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
     return !lc||Math.floor((now-lc)/(1000*60*60*24))>=7;
   });
-  const esfriando=allLeads.filter(l=>{
+  const esfriando=leadsBase.filter(l=>{
     if(!['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status))return false;
     const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
     return lc&&Math.floor((now-lc)/(1000*60*60*24))>=15;
   });
-  const fuAtrasados=allLeads.filter(l=>{
+  const fuAtrasados=leadsBase.filter(l=>{
     if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
     if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
@@ -892,6 +894,7 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .fu-stage-title{font-size:.75rem;font-weight:700;color:#4F6EF7;flex:1}
 .fu-stage-count{font-size:.65rem;font-weight:700;background:rgba(79,110,247,.15);color:#4F6EF7;border-radius:999px;padding:.1rem .45rem}
 .fu-stage-late{font-size:.65rem;font-weight:700;color:#EF4444}
+.fu-stage-empty{font-size:.75rem;color:#2A2F45;text-align:center;padding:1rem .5rem;font-style:italic}
 .fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent}
 /* FU CARD */
 .fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.8rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
@@ -1242,7 +1245,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     </div>
     <div id="view-estrategia" class="hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-        <div><div style="font-size:.95rem;font-weight:700">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Visão analítica para decisões e intensificação de follow-up</div></div>
+        <div><div style="font-size:.95rem;font-weight:700">🎯 Painel Estratégico${!isG?' — '+currentUser?.nome:''}</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">${isG?'Visão completa do escritório':'Visão dos seus leads'}</div></div>
         <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
       </div>
       <div id="estrategia-content"></div>
