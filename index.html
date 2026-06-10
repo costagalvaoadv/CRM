@@ -307,9 +307,9 @@ function fuCard(l,todayStart){
       ?`<div class="fu2-atraso">⚠️ ${daysLate===0?'Vence hoje':`${daysLate} dia${daysLate>1?'s':''} em atraso`}</div>`
       :`<div class="fu2-hoje">📅 Para hoje</div>`}
     ${l.currentNote?`<div class="fu2-note">${l.currentNote}</div>`:''}
-    <div class="fu2-actions" onclick="event.stopPropagation()">
-      ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa">WhatsApp</a>`:''}
-      <button onclick="avancarEtapa('${l.id}')" class="btn-done">✓ Feito</button>
+    <div class="fu2-actions">
+      ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa" onclick="event.stopPropagation()">WhatsApp</a>`:''}
+      <button onclick="event.stopPropagation();avancarEtapa('${l.id}')" class="btn-done">✓ Feito</button>
     </div>
   </div>`;
 }
