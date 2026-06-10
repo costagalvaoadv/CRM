@@ -34,9 +34,10 @@ let currentTab    = 'kanban';
 let filterStatus  = 'ALL';
 let searchQuery   = '';
 let chartInstances= {};
-let fuFilter      = 'MEUS';
+let fuFilter      = 'TODOS';
 let relKpiFilter  = null;
 let activeQuickNotes = new Set();
+let presenceInterval  = null;
 
 const STATUS_META = {
   'EM ANDAMENTO':    { color:'#4F6EF7', bg:'rgba(79,110,247,0.12)',  label:'Em Andamento' },
@@ -79,10 +80,10 @@ function showApp() {
   document.getElementById('header-role').textContent = currentUser.role==='gestora'?'Gestora':'Atendente';
   document.getElementById('tab-equipe').style.display    = currentUser.role==='gestora'?'inline-block':'none';
   document.getElementById('tab-relatorios').style.display= currentUser.role==='gestora'?'inline-block':'none';
-  // Follow-up filter default
-  fuFilter = currentUser.role==='gestora' ? 'TODOS' : 'MEUS';
+  fuFilter = 'TODOS';
   renderFuFilterBtns();
   startLeadsListener();
+  startPresence();
   if(currentUser.role==='gestora') startUsersListener();
 }
 
@@ -116,8 +117,36 @@ window.fazerLogin = async function() {
 
 window.fazerLogout = async function() {
   if(!confirm('Deseja sair?')) return;
+  if(currentUser) await setDoc(doc(db,"presence",currentUser.uid),{online:false,nome:currentUser.nome,lastSeen:serverTimestamp()}).catch(()=>{});
+  clearInterval(presenceInterval);
   await signOut(auth);
 };
+
+// ── PRESENÇA ONLINE ──
+async function startPresence() {
+  if(!currentUser) return;
+  const ref=doc(db,"presence",currentUser.uid);
+  const ping=()=>setDoc(ref,{online:true,nome:currentUser.nome,lastSeen:serverTimestamp()},{merge:true}).catch(()=>{});
+  await ping();
+  presenceInterval=setInterval(ping,30000);
+  // Listener de presença de todos
+  onSnapshot(collection(db,"presence"),snap=>{
+    const online=snap.docs.filter(d=>d.data().online&&d.data().lastSeen).map(d=>({id:d.id,...d.data()}));
+    renderOnlineUsers(online);
+  });
+  // Marcar offline ao fechar aba
+  window.addEventListener('beforeunload',()=>{ navigator.sendBeacon && setDoc(ref,{online:false,lastSeen:serverTimestamp()},{merge:true}).catch(()=>{}); });
+}
+
+function renderOnlineUsers(online) {
+  const el=document.getElementById('online-users'); if(!el) return;
+  if(!online.length){ el.innerHTML=''; return; }
+  el.innerHTML=online.map(u=>`
+    <div class="online-badge" title="${u.nome} está online">
+      <span class="online-dot"></span>
+      <span class="online-name">${u.nome}</span>
+    </div>`).join('');
+}
 
 // ── EQUIPE ──
 function startUsersListener() {
@@ -192,11 +221,11 @@ function startLeadsListener() {
 
 // ── FOLLOW-UP FILTER ──
 function renderFuFilterBtns() {
-  const cont = document.getElementById('fu-filter-btns'); if(!cont) return;
-  const names = ['TODOS','MEUS',...allUsers.map(u=>u.nome)];
-  const unique = [...new Set(names)];
-  cont.innerHTML = unique.map(n=>`
-    <button class="fu-filter-btn ${fuFilter===n?'active':''}" onclick="setFuFilter('${n}')">${n==='MEUS'?'Meus':n==='TODOS'?'Todos':n}</button>
+  const cont=document.getElementById('fu-filter-btns'); if(!cont) return;
+  const names=['TODOS',...allUsers.map(u=>u.nome).filter(Boolean)];
+  const unique=[...new Set(names)];
+  cont.innerHTML=unique.map(n=>`
+    <button class="fu-filter-btn ${fuFilter===n?'active':''}" onclick="setFuFilter('${n}')">${n==='TODOS'?'Todos':n}</button>
   `).join('');
 }
 
@@ -585,6 +614,58 @@ function normalizeStatus(s){
   return map[s.toUpperCase()]||'EM ANDAMENTO';
 }
 
+// Leads do período sem filtro de status (para gráficos)
+function getLeadsPorPeriodo() {
+  const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
+  const dataIni=document.getElementById('rel-data-ini')?.value;
+  const dataFim=document.getElementById('rel-data-fim')?.value;
+  const now=new Date();
+  let ini,fim;
+  if(periodo==='mes-atual'){ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
+  else if(periodo==='mes-anterior'){ini=new Date(now.getFullYear(),now.getMonth()-1,1);fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);}
+  else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
+  else if(periodo==='especifica'&&dataIni&&dataFim){ini=new Date(dataIni+'T00:00:00');fim=new Date(dataFim+'T23:59:59');}
+  else{ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
+  return allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); return d&&d>=ini&&d<=fim; });
+}
+
+// ── BACKUP COMPLETO ──
+window.fazerBackup = function() {
+  if(!allLeads.length) return showToast('Nenhum lead para exportar','warn');
+  const rows=allLeads.map(l=>{
+    const created=l.createdAt?.toDate?l.createdAt.toDate():null;
+    const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():l.nextFollowup?new Date(l.nextFollowup):null;
+    const parto=l.dataParto?.toDate?l.dataParto.toDate():l.dataParto?new Date(l.dataParto):null;
+    const hist=(l.followupHistory||[]).map(h=>`${h.label}(${h.doneBy} ${formatDatetime(new Date(h.doneAt))})`).join(' | ');
+    const logTxt=(l.log||[]).map(e=>`[${formatDatetime(new Date(e.ts))} ${e.user}] ${e.note}`).join(' || ');
+    return {
+      'ID': l.id,
+      'Data Entrada': created?formatDate(created):'—',
+      'Nome': l.name||'',
+      'Telefone': l.phone||'',
+      'Tipo': l.tipo==='SM'?'Salário Maternidade':'Geral',
+      'Campanha': l.campaign||'',
+      'Status': STATUS_META[l.status]?.label||l.status||'',
+      'Atendente': l.assignee||'',
+      'Última Nota': l.currentNote||'',
+      'Data Parto': parto?formatDate(parto):'—',
+      'Próx. Follow-up': fu?formatDate(fu):'—',
+      'Etapa Follow-up': l.etapaFollowup||0,
+      'Trilha Realizada': hist,
+      'Histórico Completo': logTxt,
+    };
+  });
+  const ws=XLSX.utils.json_to_sheet(rows);
+  // Ajustar largura das colunas
+  ws['!cols']=[{wch:22},{wch:12},{wch:25},{wch:18},{wch:20},{wch:12},{wch:18},{wch:12},{wch:40},{wch:12},{wch:14},{wch:8},{wch:50},{wch:80}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Backup Leads');
+  const date=new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
+  const time=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}).replace(':','-');
+  XLSX.writeFile(wb,`Backup_CRM_CostaGalvao_${date}_${time}.xlsx`);
+  showToast(`✅ Backup de ${allLeads.length} leads exportado!`);
+};
+
 // ── RELATÓRIOS ──
 function getFilteredLeads(statusOverride) {
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
@@ -608,13 +689,8 @@ window.renderRelatorios = function() {
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
   document.getElementById('rel-data-range').style.display=periodo==='especifica'?'flex':'none';
 
-  const total=allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); const now=new Date(); const ini=new Date(now.getFullYear(),now.getMonth(),1); return d&&d>=ini; }).length;
-  const qualif=allLeads.filter(l=>l.status==='QUALIFICADO').length;
-  const contrato=allLeads.filter(l=>l.status==='CONTRATO FECHADO').length;
-  const desq=allLeads.filter(l=>l.status==='DESQUALIFICADO').length;
-  const semResp=allLeads.filter(l=>l.status==='SEM RESPOSTA').length;
+  // KPIs — todos baseados no mesmo conjunto filtrado
   const taxa=leads.length?Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100):0;
-
   document.getElementById('rel-total').textContent   =leads.length;
   document.getElementById('rel-qualif').textContent  =leads.filter(l=>l.status==='QUALIFICADO').length;
   document.getElementById('rel-contrato').textContent=leads.filter(l=>l.status==='CONTRATO FECHADO').length;
@@ -624,27 +700,30 @@ window.renderRelatorios = function() {
   // Highlight active KPI
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
   if(relKpiFilter){
-    const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq','SEM RESPOSTA':'kpi-semresp','EM ANDAMENTO':'kpi-andamento'};
+    const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};
     const el=document.getElementById(map[relKpiFilter]||'');
     if(el) el.classList.add('kpi-active');
   }
 
+  // Usar leads SEM filtro de status para gráficos (mostrar distribuição completa)
+  const leadsGrafico=getLeadsPorPeriodo();
+
   const statusCounts={};
   Object.keys(STATUS_META).forEach(s=>statusCounts[s]=0);
-  leads.forEach(l=>{ if(statusCounts[l.status]!==undefined) statusCounts[l.status]++; });
+  leadsGrafico.forEach(l=>{ if(statusCounts[l.status]!==undefined) statusCounts[l.status]++; });
   renderChart('chart-status','doughnut',Object.values(STATUS_META).map(s=>s.label),Object.keys(STATUS_META).map(s=>statusCounts[s]),Object.values(STATUS_META).map(s=>s.color));
 
   const tipos={SM:0,Geral:0};
-  leads.forEach(l=>{ if(l.tipo==='SM') tipos.SM++; else tipos.Geral++; });
+  leadsGrafico.forEach(l=>{ if(l.tipo==='SM') tipos.SM++; else tipos.Geral++; });
   renderChart('chart-tipo','doughnut',['Salário Maternidade','Geral'],[tipos.SM,tipos.Geral],['#10B981','#4F6EF7']);
 
   const atend={};
-  leads.forEach(l=>{ atend[l.assignee||'—']=(atend[l.assignee||'—']||0)+1; });
-  renderChart('chart-atend','bar',Object.keys(atend),Object.values(atend),['#4F6EF7','#10B981','#F5A623']);
+  leadsGrafico.forEach(l=>{ atend[l.assignee||'—']=(atend[l.assignee||'—']||0)+1; });
+  renderChart('chart-atend','bar',Object.keys(atend),Object.values(atend),['#4F6EF7','#10B981','#F5A623','#8B5CF6']);
 
   const camp={};
-  leads.forEach(l=>{ camp[l.campaign||'Sem campanha']=(camp[l.campaign||'Sem campanha']||0)+1; });
-  renderChart('chart-camp','bar',Object.keys(camp),Object.values(camp),['#8B5CF6']);
+  leadsGrafico.forEach(l=>{ camp[l.campaign||'Sem campanha']=(camp[l.campaign||'Sem campanha']||0)+1; });
+  renderChart('chart-camp','bar',Object.keys(camp),Object.values(camp),['#8B5CF6','#4F6EF7','#10B981','#F5A623']);
 
   renderRelTable(leads);
 };
@@ -745,6 +824,15 @@ header{background:#0F1117;border-bottom:1px solid #252836;padding:0 1.5rem;heigh
 .btn-new:hover{background:#3B5BDB}
 .btn-import{background:#252836;border:1px solid #2E3347;color:#9CA3AF;border-radius:8px;padding:.45rem 1rem;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s}
 .btn-import:hover{border-color:#10B981;color:#10B981}
+.btn-backup{background:#252836;border:1px solid #2E3347;color:#9CA3AF;border-radius:8px;padding:.45rem 1rem;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-backup:hover{border-color:#8B5CF6;color:#8B5CF6}
+
+/* ONLINE */
+#online-users{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.online-badge{display:flex;align-items:center;gap:.3rem;background:#1A1D27;border:1px solid #252836;border-radius:999px;padding:.25rem .65rem}
+.online-dot{width:7px;height:7px;border-radius:50%;background:#10B981;flex-shrink:0;animation:onlinePulse 2s ease-in-out infinite}
+@keyframes onlinePulse{0%,100%{box-shadow:0 0 0 0 rgba(16,185,129,.5)}50%{box-shadow:0 0 0 4px rgba(16,185,129,0)}}
+.online-name{font-size:.72rem;font-weight:600;color:#10B981}
 
 /* MAIN */
 main{padding:1.5rem;max-width:1600px;margin:0 auto}
@@ -982,10 +1070,12 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
   <header>
     <div class="h-brand">COSTA GALVÃO | CRM</div>
     <div class="h-right">
+      <div id="online-users"></div>
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
       <button class="btn-logout" onclick="fazerLogout()">Sair</button>
       <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
-      <button class="btn-import" onclick="document.getElementById('import-file').click()">⬆ Importar Excel</button>
+      <button class="btn-backup" onclick="fazerBackup()" title="Exportar todos os leads como backup">💾 Backup</button>
+      <button class="btn-import" onclick="document.getElementById('import-file').click()">⬆ Importar</button>
       <button class="btn-new" onclick="openLead('new')">+ Novo Lead</button>
     </div>
   </header>
