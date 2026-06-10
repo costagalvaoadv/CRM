@@ -381,7 +381,6 @@ window.openLead = function(id) {
   document.getElementById('f-tipo').value      = l?.tipo||'SM';
   document.getElementById('f-assignee').value  = l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value      = '';
-  document.getElementById('f-nextfu').value    = l?.nextFollowup ? toDateInput(l.nextFollowup) : '';
   document.getElementById('f-parto').value     = l?.dataParto ? toDateInput(l.dataParto) : '';
   togglePartoField();
   renderLog(l?.log||[]);
@@ -428,8 +427,8 @@ window.saveLead = async function() {
 
   const dataParto = partoVal ? Timestamp.fromDate(new Date(partoVal+'T12:00:00')) : null;
 
-  // Calcular próximo follow-up automático se não preenchido manualmente
-  let nextFollowup = nextFuVal ? Timestamp.fromDate(new Date(nextFuVal+'T00:00:00')) : null;
+  // Follow-up sempre automático
+  let nextFollowup = null;
 
   if (!editingLeadId) {
     // Novo lead — iniciar trilha
@@ -449,7 +448,6 @@ window.saveLead = async function() {
 
     const upd = { name, phone, campaign, status, tipo, assignee, lastContact:serverTimestamp() };
     if (note) upd.currentNote = note;
-    if (nextFollowup) upd.nextFollowup = nextFollowup;
     if (dataParto) upd.dataParto = dataParto;
 
     // Se adicionou data do parto agora e tipo SM, recalcular trilha mensal
@@ -640,6 +638,18 @@ window.setFilter = function(s) {
   renderTable();
 };
 window.onSearch = v => { searchQuery=v; renderTable(); };
+
+// ── MÁSCARA TELEFONE ──
+window.maskPhone = function(el) {
+  let v = el.value.replace(/\D/g,'');
+  if (v.length > 11) v = v.slice(0,11);
+  if (v.length <= 10) {
+    v = v.replace(/^(\d{2})(\d{4})(\d{0,4})/,'($1) $2-$3');
+  } else {
+    v = v.replace(/^(\d{2})(\d{5})(\d{0,4})/,'($1) $2-$3');
+  }
+  el.value = v.replace(/-$/,'');
+};
 
 // ── UTILS ──
 function toDateInput(ts) {
@@ -1077,7 +1087,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
     <div class="modal-body">
       <div class="form-grid">
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
-        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="text" placeholder="(87) 99999-0000"/></div>
+        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group">
           <label class="f-label">Tipo de Serviço</label>
           <select id="f-tipo" class="f-select" onchange="togglePartoField()">
@@ -1112,10 +1122,6 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
         <div class="f-group" id="parto-row">
           <label class="f-label">📅 Data Prevista do Parto (SM)</label>
           <input id="f-parto" class="f-input" type="date"/>
-        </div>
-        <div class="f-group">
-          <label class="f-label">Próximo Follow-up (opcional)</label>
-          <input id="f-nextfu" class="f-input" type="date"/>
         </div>
         <div class="f-group full">
           <label class="f-label">Nova Nota / Atualização</label>
