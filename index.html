@@ -1085,3 +1085,267 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .modal-body{padding:1.4rem;display:flex;flex-direction:column;gap:1.1rem}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
 .f-group{display:flex;flex-direction:column;gap:.35re
+.f-group.full{grid-column:1/-1}
+.f-label{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
+.f-input,.f-select,.f-textarea{background:#1E2235;border:1px solid #2A2F45;border-radius:7px;padding:.55rem .8rem;color:#F1F3F9;font-size:.82rem;font-family:'Inter',sans-serif;outline:none;transition:border-color .2s;width:100%}
+.f-input:focus,.f-select:focus,.f-textarea:focus{border-color:#4F6EF7}
+.f-select option{background:#1E2235}
+.f-textarea{resize:vertical;min-height:65px}
+.qn-label{font-size:.68rem;color:#6B7280;margin-bottom:.35rem}
+.qn-grid{display:flex;flex-wrap:wrap;gap:.35rem}
+.qn-btn{background:#1E2235;border:1px solid #2A2F45;border-radius:5px;color:#9CA3AF;font-size:.68rem;padding:.25rem .55rem;cursor:pointer;transition:all .12s}
+.qn-btn:hover{background:#2A2F45;color:#F1F3F9;border-color:#4F6EF7}
+.qn-btn.qn-active{background:rgba(79,110,247,.2);border-color:#4F6EF7;color:#4F6EF7;font-weight:700}
+.etapas-section{display:flex;flex-direction:column;gap:.4rem}
+.etapas-title{font-size:.68rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
+#etapas-feitas{display:flex;flex-direction:column;gap:.3rem;max-height:120px;overflow-y:auto}
+.etapa-item{display:flex;align-items:center;justify-content:space-between;background:#1E2235;border-radius:5px;padding:.35rem .65rem}
+.etapa-num{font-size:.72rem;font-weight:700;color:#10B981}
+.etapa-info{font-size:.67rem;color:#6B7280}
+.log-section{display:flex;flex-direction:column;gap:.4rem}
+.log-title{font-size:.68rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
+#lead-log{max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:.4rem}
+.log-entry{background:#1E2235;border-radius:7px;padding:.55rem .8rem;display:flex;flex-direction:column;gap:.18rem}
+.log-meta{display:flex;gap:.65rem;align-items:center}
+.log-user{font-size:.68rem;font-weight:700;color:#4F6EF7}
+.log-time{font-size:.65rem;color:#6B7280}
+.log-text{font-size:.75rem;color:#D1D5DB;line-height:1.4}
+.log-status-badge{font-size:.67rem;color:#10B981;font-weight:600}
+.log-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.65rem}
+.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
+.btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
+.btn-delete:hover{background:rgba(239,68,68,.1)}
+.btn-save{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem 1.35rem;font-size:.82rem;font-weight:700;cursor:pointer}
+.btn-save:hover{background:#3B5BDB}
+.btn-cancel{background:transparent;border:1px solid #1E2235;color:#9CA3AF;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;cursor:pointer}
+.toast{position:fixed;bottom:1.25rem;right:1.25rem;background:#1E2235;color:#F1F3F9;padding:.7rem 1.1rem;border-radius:9px;font-size:.82rem;font-weight:500;border-left:3px solid #4F6EF7;opacity:0;transform:translateY(8px);transition:all .25s;z-index:9999;pointer-events:none;max-width:300px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.warn{border-left-color:#F5A623}
+.toast.error{border-left-color:#EF4444}
+.hidden{display:none!important}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#1E2235;border-radius:99px}
+@media print{header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast{display:none!important}body{background:#fff;color:#000}}
+@media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}.kanban-board{grid-template-columns:repeat(3,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
+@media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<!-- PRIMEIRO ACESSO -->
+<div id="screen-first-setup" class="auth-screen" style="display:none">
+  <div class="auth-box">
+    <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
+    <div class="auth-title">Criar conta de gestora</div>
+    <div class="auth-sub">Configure seu acesso administrador</div>
+    <div class="auth-field"><label class="auth-label">Seu nome</label><input id="setup-nome" class="auth-input" type="text" placeholder="Jucineide"/></div>
+    <div class="auth-field"><label class="auth-label">E-mail</label><input id="setup-email" class="auth-input" type="email" value="jucineidecostagalvao@gmail.com"/></div>
+    <div class="auth-field"><label class="auth-label">Senha</label><input id="setup-senha" class="auth-input" type="password" placeholder="Mínimo 6 caracteres"/></div>
+    <div class="auth-field"><label class="auth-label">Confirmar senha</label><input id="setup-conf" class="auth-input" type="password" placeholder="Repita a senha"/></div>
+    <button id="btn-setup" class="btn-primary" onclick="criarContaGestora()">Criar minha conta</button>
+  </div>
+</div>
+<!-- LOGIN -->
+<div id="screen-login" class="auth-screen" style="display:none">
+  <div class="auth-box">
+    <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
+    <div class="auth-title">Entrar no CRM</div>
+    <div class="auth-sub">Acesse com seu e-mail e senha</div>
+    <div class="auth-field"><label class="auth-label">E-mail</label><input id="login-email" class="auth-input" type="email" placeholder="seu@email.com"/></div>
+    <div class="auth-field"><label class="auth-label">Senha</label><input id="login-senha" class="auth-input" type="password" placeholder="Sua senha" onkeydown="if(event.key==='Enter')fazerLogin()"/></div>
+    <button id="btn-login" class="btn-primary" onclick="fazerLogin()">Entrar</button>
+  </div>
+</div>
+<!-- APP -->
+<div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
+  <header>
+    <div class="h-brand">COSTA GALVÃO | CRM</div>
+    <div class="h-center"><div id="online-users"></div></div>
+    <div class="h-right">
+      <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
+      <button class="btn-hdr btn-hdr-danger" onclick="fazerLogout()">Sair</button>
+      <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
+      <button class="btn-hdr" onclick="fazerBackup()" title="Backup">💾</button>
+      <button class="btn-hdr" onclick="document.getElementById('import-file').click()">⬆ Importar</button>
+      <button class="btn-hdr btn-hdr-primary" onclick="openLead('new')">+ Novo Lead</button>
+    </div>
+  </header>
+  <main>
+    <div class="metrics-grid">
+      <div class="metric-card mc-blue"><div class="metric-label">Leads no Mês</div><div class="metric-value" id="m-total">—</div></div>
+      <div class="metric-card mc-amber"><div class="metric-label">Em Andamento</div><div class="metric-value" id="m-andamento">—</div></div>
+      <div class="metric-card mc-green"><div class="metric-label">Qualificados</div><div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card mc-purple"><div class="metric-label">Contratos</div><div class="metric-value" id="m-contrato">—</div></div>
+      <div class="metric-card mc-red"><div class="metric-label">Sem Resposta</div><div class="metric-value" id="m-semresp">—</div></div>
+    </div>
+    <!-- FOLLOW-UP -->
+    <div class="fu-panel" id="fu-panel">
+      <div class="fu-panel-header">
+        <span style="font-size:1rem">🔥</span>
+        <span class="fu-panel-title">Follow-ups</span>
+        <span class="fu-badge" id="fu-badge">0</span>
+        <div class="fu-filter-btns" id="fu-filter-btns"></div>
+      </div>
+      <div class="fu-cols">
+        <div class="fu-col">
+          <div class="fu-col-header"><span class="fu-col-title" style="color:#EF4444">Em Atraso</span><span class="fu-col-count" id="fu-atraso-count" style="background:rgba(239,68,68,.15);color:#EF4444">0</span></div>
+          <div class="fu-col-body" id="col-atrasados"></div>
+        </div>
+        <div class="fu-col">
+          <div class="fu-col-header"><span class="fu-col-title" style="color:#F5A623">Para Hoje</span><span class="fu-col-count" id="fu-hoje-count" style="background:rgba(245,166,35,.15);color:#F5A623">0</span></div>
+          <div class="fu-col-body" id="col-hoje"></div>
+        </div>
+      </div>
+    </div>
+    <!-- TABS -->
+    <div class="tabs-row">
+      <div class="tabs">
+        <button id="tab-kanban" class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
+        <button id="tab-table" class="tab-btn" onclick="switchTab('table')">Tabela</button>
+        <button id="tab-relatorios" class="tab-btn" onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
+        <button id="tab-estrategia" class="tab-btn" onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
+        <button id="tab-equipe" class="tab-btn" onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
+      </div>
+    </div>
+    <!-- KANBAN -->
+    <div id="view-kanban">
+      <div class="kanban-board">
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #F5A623"><span class="k-col-title" style="color:#F5A623">Sem Resposta</span><span class="k-col-count" id="col-count-SEM RESPOSTA">0</span></div><div class="k-col-body" id="col-SEM RESPOSTA"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #10B981"><span class="k-col-title" style="color:#10B981">Qualificados</span><span class="k-col-count" id="col-count-QUALIFICADO">0</span></div><div class="k-col-body" id="col-QUALIFICADO"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #8B5CF6"><span class="k-col-title" style="color:#8B5CF6">Contrato Fechado</span><span class="k-col-count" id="col-count-CONTRATO FECHADO">0</span></div><div class="k-col-body" id="col-CONTRATO FECHADO"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #EF4444"><span class="k-col-title" style="color:#EF4444">Desqualificados</span><span class="k-col-count" id="col-count-DESQUALIFICADO">0</span></div><div class="k-col-body" id="col-DESQUALIFICADO"></div></div>
+      </div>
+    </div>
+    <!-- TABLE -->
+    <div id="view-table" class="hidden">
+      <div class="table-controls">
+        <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
+        <div class="filter-btns">
+          <button id="filter-ALL" class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
+          <button id="filter-EM ANDAMENTO" class="filter-btn" onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
+          <button id="filter-SEM RESPOSTA" class="filter-btn" onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
+          <button id="filter-QUALIFICADO" class="filter-btn" onclick="setFilter('QUALIFICADO')">Qualificados</button>
+          <button id="filter-CONTRATO FECHADO" class="filter-btn" onclick="setFilter('CONTRATO FECHADO')">Contratos</button>
+          <button id="filter-DESQUALIFICADO" class="filter-btn" onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
+        </div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
+    </div>
+    <!-- RELATÓRIOS -->
+    <div id="view-relatorios" class="hidden">
+      <div class="rel-controls">
+        <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
+        <div class="rel-group" id="rel-data-range" style="display:none;gap:.4rem;flex-direction:row;align-items:flex-end">
+          <div class="rel-group"><label class="rel-label">De</label><input id="rel-data-ini" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
+          <div class="rel-group"><label class="rel-label">Até</label><input id="rel-data-fim" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
+        </div>
+        <div class="rel-group"><label class="rel-label">Status</label><select id="rel-status" class="rel-select" onchange="relKpiFilter=null;renderRelatorios()"><option value="TODOS">Todos</option><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="rel-btns"><button class="btn-export" onclick="exportarExcel()">⬇ Excel</button><button class="btn-print" onclick="imprimirRelatorio()">🖨 PDF</button></div>
+      </div>
+      <div class="rel-kpis">
+        <div class="rel-kpi" id="kpi-total" onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-qualif" onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-desq" onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card"><div class="chart-title">Distribuição por Status</div><div class="chart-container"><canvas id="chart-status"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Leads por Tipo</div><div class="chart-container"><canvas id="chart-tipo"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
+    </div>
+    <!-- ESTRATÉGIA -->
+    <div id="view-estrategia" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <div><div style="font-size:.95rem;font-weight:700">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Visão analítica para decisões e intensificação de follow-up</div></div>
+        <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
+      </div>
+      <div id="estrategia-content"></div>
+    </div>
+    <!-- EQUIPE -->
+    <div id="view-equipe" class="hidden">
+      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
+      <div id="equipe-lista"></div>
+    </div>
+  </main>
+</div>
+<!-- MODAL LEAD -->
+<div id="modal-lead" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-head"><span class="modal-title" id="modal-lead-title">Lead</span><button class="modal-close" onclick="closeLead()">✕</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
+        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
+        <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
+        <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
+        <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
+        <div class="f-group full">
+          <label class="f-label">Nova Nota</label>
+          <textarea id="f-note" class="f-textarea" placeholder="O que aconteceu neste contato?"></textarea>
+          <div class="qn-label" style="margin-top:.4rem">Notas rápidas:</div>
+          <div class="qn-grid">
+            <button class="qn-btn" onclick="addQuickNote('Script inicial enviado',this)">Script inicial enviado</button>
+            <button class="qn-btn" onclick="addQuickNote('Áudio de qualificação enviado',this)">Áudio de qualificação</button>
+            <button class="qn-btn" onclick="addQuickNote('Aguardando retorno',this)">Aguardando retorno</button>
+            <button class="qn-btn" onclick="addQuickNote('Lead não respondeu',this)">Lead não respondeu</button>
+            <button class="qn-btn" onclick="addQuickNote('Visualizou e não respondeu',this)">Visualizou sem resposta</button>
+            <button class="qn-btn" onclick="addQuickNote('Mensagem automática enviada',this)">Msg automática</button>
+            <button class="qn-btn" onclick="addQuickNote('Cliente sumiu',this)">Cliente sumiu</button>
+            <button class="qn-btn" onclick="addQuickNote('Clicou por engano',this)">Clicou por engano</button>
+            <button class="qn-btn" onclick="addQuickNote('Encaminhado para a Dra.',this)">Encaminhado Dra.</button>
+            <button class="qn-btn" onclick="addQuickNote('Documentos solicitados',this)">Docs solicitados</button>
+            <button class="qn-btn" onclick="addQuickNote('Contrato enviado para assinatura',this)">Contrato enviado</button>
+            <button class="qn-btn" onclick="addQuickNote('Pedimos indicação',this)">Pedimos indicação</button>
+            <button class="qn-btn" onclick="addQuickNote('Desqualificado — sem CLT',this)">Desqualif. sem CLT</button>
+            <button class="qn-btn" onclick="addQuickNote('Desqualificado — filho maior de 5 anos',this)">Desqualif. +5 anos</button>
+            <button class="qn-btn" onclick="addQuickNote('Link WhatsApp enviado',this)">Link WhatsApp</button>
+            <button class="qn-btn" onclick="addQuickNote('Follow-up mensal SM realizado',this)">FU mensal SM</button>
+          </div>
+        </div>
+      </div>
+      <div class="etapas-section"><div class="etapas-title">Trilha de Follow-ups Realizados</div><div id="etapas-feitas"></div></div>
+      <div class="log-section"><div class="log-title">Histórico</div><div id="lead-log"></div></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir</button>
+      <div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="closeLead()">Cancelar</button><button class="btn-save" onclick="saveLead()">Salvar</button></div>
+    </div>
+  </div>
+</div>
+<!-- MODAL EQUIPE -->
+<div id="modal-equipe" class="modal-overlay">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-head"><span class="modal-title" id="eq-modal-title">Nova Colaboradora</span><button class="modal-close" onclick="fecharModalEquipe()">✕</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="eq-uid"/>
+      <div class="f-group"><label class="f-label">Nome</label><input id="eq-nome" class="f-input" type="text" placeholder="Nome completo"/></div>
+      <div class="f-group"><label class="f-label">E-mail</label><input id="eq-email" class="f-input" type="email" placeholder="email@exemplo.com"/></div>
+      <div class="f-group"><label class="f-label">Perfil</label><select id="eq-role" class="f-select"><option value="atendente">Atendente</option><option value="gestora">Gestora</option></select></div>
+      <div class="f-group" id="eq-senha-row"><label class="f-label">Senha inicial</label><input id="eq-senha" class="f-input" type="password" placeholder="Mínimo 6 caracteres"/></div>
+    </div>
+    <div class="modal-foot">
+      <button id="btn-eq-delete" class="btn-delete" onclick="excluirColaboradora()" style="display:none">Remover</button>
+      <div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharModalEquipe()">Cancelar</button><button id="btn-eq-save" class="btn-save" onclick="salvarColaboradora()">Salvar</button></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+function maskPhone(el){
+  let v=el.value.replace(/\D/g,'');
+  if(v.length>11)v=v.slice(0,11);
+  if(v.length<=10)v=v.replace(/^(\d{0,2})(\d{0,4})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
+  else v=v.replace(/^(\d{0,2})(\d{0,5})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
+  el.value=v;
+}
+</script>
+</body>
+</html>
