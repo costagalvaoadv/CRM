@@ -22,14 +22,14 @@ const firebaseConfig = {
   appId: "1:876223519085:web:a8fc137a9103796deb6264"
 };
 
-const app = initializeApp(firebaseConfig);
-const db  = getFirestore(app);
-const auth= getAuth(app);
+const app=initializeApp(firebaseConfig);
+const db=getFirestore(app);
+const auth=getAuth(app);
 
-let currentUser=null, allLeads=[], allUsers=[], editingLeadId=null;
-let currentTab='kanban', filterStatus='ALL', searchQuery='';
-let chartInstances={}, fuFilter='TODOS', relKpiFilter=null;
-let activeQuickNotes=new Set(), presenceInterval=null;
+let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
+let currentTab='kanban',filterStatus='ALL',searchQuery='';
+let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
+let activeQuickNotes=new Set(),presenceInterval=null;
 
 const STATUS_META={
   'EM ANDAMENTO':    {color:'#4F6EF7',bg:'rgba(79,110,247,0.12)', label:'Em Andamento'},
@@ -38,17 +38,25 @@ const STATUS_META={
   'DESQUALIFICADO':  {color:'#EF4444',bg:'rgba(239,68,68,0.12)',  label:'Desqualificado'},
   'SEM RESPOSTA':    {color:'#F5A623',bg:'rgba(245,166,35,0.12)', label:'Sem Resposta'},
 };
-const TRILHA_SM=[1,3,7,15], TRILHA_GERAL=[1,3,7,15,30];
+
+// Trilha: cada prazo é APÓS o follow-up anterior ter sido feito
+const TRILHA_SM_LABELS    = ['FUP 24h','FUP 3d','FUP 7d','FUP 15d','Mensal'];
+const TRILHA_GERAL_LABELS = ['FUP 24h','FUP 3d','FUP 7d','FUP 15d','FUP 30d'];
+const TRILHA_SM_DIAS      = [1,3,7,15]; // mensal depois
+const TRILHA_GERAL_DIAS   = [1,3,7,15,30];
+
+function getTrilha(tipo){ return tipo==='SM'?TRILHA_SM_LABELS:TRILHA_GERAL_LABELS; }
+function getTrilhaDias(tipo){ return tipo==='SM'?TRILHA_SM_DIAS:TRILHA_GERAL_DIAS; }
 
 // ─── AUTH ───
-onAuthStateChanged(auth, async user=>{
+onAuthStateChanged(auth,async user=>{
   if(user){
     const snap=await getDoc(doc(db,'usuarios',user.uid)).catch(()=>null);
     if(snap?.exists()){
       currentUser={uid:user.uid,email:user.email,...snap.data()};
       showApp();
-    } else { await signOut(auth); showScreen('login'); }
-  } else {
+    }else{await signOut(auth);showScreen('login');}
+  }else{
     currentUser=null;
     const snap=await getDoc(doc(db,'config','setup')).catch(()=>null);
     showScreen((!snap?.exists()||!snap.data()?.configured)?'first-setup':'login');
@@ -57,31 +65,28 @@ onAuthStateChanged(auth, async user=>{
 
 function showScreen(n){
   ['first-setup','login','app'].forEach(s=>{const el=document.getElementById('screen-'+s);if(el)el.style.display='none';});
-  const el=document.getElementById('screen-'+n); if(el)el.style.display='flex';
+  const el=document.getElementById('screen-'+n);if(el)el.style.display='flex';
 }
 
 function showApp(){
   showScreen('app');
   document.getElementById('header-name').textContent=currentUser.nome||currentUser.email;
   document.getElementById('header-role').textContent=currentUser.role==='gestora'?'Gestora':'Atendente';
-  const isGestora=currentUser.role==='gestora';
-  ['tab-relatorios','tab-equipe','tab-estrategia'].forEach(t=>{
-    const el=document.getElementById(t); if(el) el.style.display=isGestora?'inline-block':'none';
-  });
-  startLeadsListener();
-  startPresence();
-  if(isGestora) startUsersListener();
+  const isG=currentUser.role==='gestora';
+  ['tab-relatorios','tab-equipe','tab-estrategia'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
+  startLeadsListener();startPresence();
+  if(isG)startUsersListener();
 }
 
-// ─── FIRST SETUP ───
+// ─── SETUP / LOGIN ───
 window.criarContaGestora=async function(){
   const nome=document.getElementById('setup-nome').value.trim();
   const email=document.getElementById('setup-email').value.trim();
   const senha=document.getElementById('setup-senha').value;
   const conf=document.getElementById('setup-conf').value;
-  if(!nome||!email||!senha) return showToast('Preencha todos os campos','error');
-  if(senha!==conf) return showToast('Senhas não coincidem','error');
-  if(senha.length<6) return showToast('Mínimo 6 caracteres','error');
+  if(!nome||!email||!senha)return showToast('Preencha todos os campos','error');
+  if(senha!==conf)return showToast('Senhas não coincidem','error');
+  if(senha.length<6)return showToast('Mínimo 6 caracteres','error');
   try{
     setBtnLoading('btn-setup',true);
     const cred=await createUserWithEmailAndPassword(auth,email,senha);
@@ -91,54 +96,41 @@ window.criarContaGestora=async function(){
   }catch(e){showToast(fbErr(e.code),'error');}
   finally{setBtnLoading('btn-setup',false);}
 };
-
 window.fazerLogin=async function(){
   const email=document.getElementById('login-email').value.trim();
   const senha=document.getElementById('login-senha').value;
-  if(!email||!senha) return showToast('Preencha e-mail e senha','error');
+  if(!email||!senha)return showToast('Preencha e-mail e senha','error');
   try{setBtnLoading('btn-login',true);await signInWithEmailAndPassword(auth,email,senha);}
   catch(e){showToast(fbErr(e.code),'error');}
   finally{setBtnLoading('btn-login',false);}
 };
-
 window.fazerLogout=async function(){
-  if(!confirm('Deseja sair?')) return;
-  if(currentUser) await setDoc(doc(db,'presence',currentUser.uid),{online:false,nome:currentUser.nome,lastSeen:serverTimestamp()}).catch(()=>{});
-  clearInterval(presenceInterval);
-  await signOut(auth);
+  if(!confirm('Deseja sair?'))return;
+  if(currentUser)await setDoc(doc(db,'presence',currentUser.uid),{online:false,nome:currentUser.nome,lastSeen:serverTimestamp()}).catch(()=>{});
+  clearInterval(presenceInterval);await signOut(auth);
 };
 
 // ─── PRESENÇA ───
 async function startPresence(){
-  if(!currentUser) return;
+  if(!currentUser)return;
   const ref=doc(db,'presence',currentUser.uid);
   const ping=()=>setDoc(ref,{online:true,nome:currentUser.nome,lastSeen:serverTimestamp()},{merge:true}).catch(()=>{});
-  await ping();
-  presenceInterval=setInterval(ping,30000);
+  await ping();presenceInterval=setInterval(ping,30000);
   onSnapshot(collection(db,'presence'),snap=>{
-    const online=snap.docs.filter(d=>{
-      const ls=d.data().lastSeen?.toDate?.();
-      return d.data().online && ls && (new Date()-ls)<120000;
-    }).map(d=>({id:d.id,...d.data()}));
-    renderOnlineUsers(online);
+    const online=snap.docs.filter(d=>{const ls=d.data().lastSeen?.toDate?.();return d.data().online&&ls&&(new Date()-ls)<120000;}).map(d=>({id:d.id,...d.data()}));
+    const el=document.getElementById('online-users');if(!el)return;
+    el.innerHTML=online.map(u=>`<div class="online-badge"><span class="online-dot"></span><span class="online-name">${u.nome}</span></div>`).join('');
   });
   window.addEventListener('beforeunload',()=>setDoc(ref,{online:false,lastSeen:serverTimestamp()},{merge:true}).catch(()=>{}));
-}
-
-function renderOnlineUsers(online){
-  const el=document.getElementById('online-users'); if(!el) return;
-  el.innerHTML=online.map(u=>`<div class="online-badge" title="${u.nome} online"><span class="online-dot"></span><span class="online-name">${u.nome}</span></div>`).join('');
 }
 
 // ─── EQUIPE ───
 function startUsersListener(){
   onSnapshot(collection(db,'usuarios'),snap=>{
     allUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderFuFilterBtns();
-    if(currentTab==='equipe') renderEquipe();
+    renderFuFilterBtns();if(currentTab==='equipe')renderEquipe();
   });
 }
-
 window.abrirModalEquipe=function(uid){
   const u=uid?allUsers.find(x=>x.id===uid):null;
   document.getElementById('eq-uid').value=uid||'';
@@ -152,67 +144,57 @@ window.abrirModalEquipe=function(uid){
   document.getElementById('modal-equipe').style.display='flex';
 };
 window.fecharModalEquipe=()=>document.getElementById('modal-equipe').style.display='none';
-
 window.salvarColaboradora=async function(){
   const uid=document.getElementById('eq-uid').value;
   const nome=document.getElementById('eq-nome').value.trim();
   const email=document.getElementById('eq-email').value.trim();
   const role=document.getElementById('eq-role').value;
   const senha=document.getElementById('eq-senha').value;
-  if(!nome||!email) return showToast('Nome e e-mail obrigatórios','error');
+  if(!nome||!email)return showToast('Nome e e-mail obrigatórios','error');
   if(uid){await updateDoc(doc(db,'usuarios',uid),{nome,role});showToast('Atualizado!');fecharModalEquipe();}
   else{
-    if(!senha||senha.length<6) return showToast('Senha mínimo 6 caracteres','error');
+    if(!senha||senha.length<6)return showToast('Senha mínimo 6 caracteres','error');
     try{
       setBtnLoading('btn-eq-save',true);
       const cred=await createUserWithEmailAndPassword(auth,email,senha);
       await setDoc(doc(db,'usuarios',cred.user.uid),{nome,email,role,ativo:true,criadoEm:serverTimestamp()});
-      showToast('Colaboradora criada! Recarregando...');
-      setTimeout(()=>location.reload(),1500);
+      showToast('Criada! Recarregando...');setTimeout(()=>location.reload(),1500);
     }catch(e){showToast(fbErr(e.code),'error');}
     finally{setBtnLoading('btn-eq-save',false);}
   }
 };
 window.excluirColaboradora=async function(){
   const uid=document.getElementById('eq-uid').value;
-  if(!uid||!confirm('Remover acesso?')) return;
+  if(!uid||!confirm('Remover acesso?'))return;
   await updateDoc(doc(db,'usuarios',uid),{ativo:false});
   showToast('Acesso removido.','warn');fecharModalEquipe();
 };
-
 function renderEquipe(){
-  const el=document.getElementById('equipe-lista'); if(!el) return;
+  const el=document.getElementById('equipe-lista');if(!el)return;
   el.innerHTML=allUsers.map(u=>`
     <div class="user-card">
       <div class="user-avatar">${(u.nome||'?')[0].toUpperCase()}</div>
-      <div class="user-info">
-        <div class="user-name">${u.nome}</div>
-        <div class="user-email">${u.email}</div>
-        <span class="user-role ${u.role==='gestora'?'role-gestora':'role-atendente'}">${u.role==='gestora'?'Gestora':'Atendente'}</span>
-      </div>
+      <div class="user-info"><div class="user-name">${u.nome}</div><div class="user-email">${u.email}</div>
+      <span class="user-role ${u.role==='gestora'?'role-gestora':'role-atendente'}">${u.role==='gestora'?'Gestora':'Atendente'}</span></div>
       <button class="btn-edit-user" onclick="abrirModalEquipe('${u.id}')">Editar</button>
     </div>`).join('');
 }
 
-// ─── LEADS LISTENER ───
+// ─── LEADS ───
 function startLeadsListener(){
   const q=query(collection(db,'leads'),orderBy('createdAt','desc'));
   onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));renderAll();});
 }
-
 function renderAll(){
-  renderMetrics();
-  renderFollowups();
-  if(currentTab==='kanban') renderKanban();
-  else if(currentTab==='table') renderTable();
-  else if(currentTab==='equipe') renderEquipe();
-  else if(currentTab==='relatorios') renderRelatorios();
-  else if(currentTab==='estrategia') renderEstrategia();
+  renderMetrics();renderFollowups();
+  if(currentTab==='kanban')renderKanban();
+  else if(currentTab==='table')renderTable();
+  else if(currentTab==='equipe')renderEquipe();
+  else if(currentTab==='relatorios')renderRelatorios();
+  else if(currentTab==='estrategia')renderEstrategia();
 }
-
-// ─── MÉTRICAS ───
 function renderMetrics(){
-  const now=new Date(); const m=now.getMonth(),y=now.getFullYear();
+  const now=new Date();const m=now.getMonth(),y=now.getFullYear();
   const mo=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d.getMonth()===m&&d.getFullYear()===y;});
   document.getElementById('m-total').textContent   =mo.length;
   document.getElementById('m-andamento').textContent=mo.filter(l=>l.status==='EM ANDAMENTO').length;
@@ -221,29 +203,29 @@ function renderMetrics(){
   document.getElementById('m-semresp').textContent =mo.filter(l=>l.status==='SEM RESPOSTA').length;
 }
 
-// ─── FOLLOW-UP EM COLUNAS ───
+// ─── FOLLOW-UP em colunas por estágio ───
 function renderFuFilterBtns(){
-  const cont=document.getElementById('fu-filter-btns'); if(!cont) return;
+  const cont=document.getElementById('fu-filter-btns');if(!cont)return;
   const names=['TODOS',...allUsers.map(u=>u.nome).filter(Boolean)];
   const unique=[...new Set(names)];
   cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${fuFilter===n?'active':''}" onclick="setFuFilter('${n}')">${n==='TODOS'?'Todos':n}</button>`).join('');
 }
-
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
 
 function renderFollowups(){
-  const now=new Date(); const todayStart=new Date(now); todayStart.setHours(0,0,0,0);
-  const todayEnd=new Date(now); todayEnd.setHours(23,59,59,999);
+  const now=new Date();
+  const todayEnd=new Date(now);todayEnd.setHours(23,59,59,999);
+  const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
 
-  let pending=allLeads.filter(l=>{
-    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)) return false;
-    if(!l.nextFollowup) return false;
+  let leads=allLeads.filter(l=>{
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
+    if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<=todayEnd;
   });
-  if(fuFilter!=='TODOS') pending=pending.filter(l=>l.assignee===fuFilter);
+  if(fuFilter!=='TODOS')leads=leads.filter(l=>l.assignee===fuFilter);
 
-  const atrasados=pending.filter(l=>{
+  const atrasados=leads.filter(l=>{
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<todayStart;
   }).sort((a,b)=>{
@@ -251,25 +233,21 @@ function renderFollowups(){
     const db_=b.nextFollowup?.toDate?b.nextFollowup.toDate():new Date(b.nextFollowup);
     return da-db_;
   });
-
-  const hoje=pending.filter(l=>{
+  const hoje=leads.filter(l=>{
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d>=todayStart&&d<=todayEnd;
   });
 
-  const totalBadge=pending.length;
+  const total=leads.length;
   const badge=document.getElementById('fu-badge');
-  badge.textContent=totalBadge; badge.style.display=totalBadge?'flex':'none';
+  badge.textContent=total;badge.style.display=total?'flex':'none';
   document.getElementById('fu-atraso-count').textContent=atrasados.length;
   document.getElementById('fu-hoje-count').textContent=hoje.length;
-
-  const pulsing=pending.length>0;
-  document.getElementById('fu-panel').classList.toggle('pulsing',pulsing);
+  document.getElementById('fu-panel').classList.toggle('pulsing',total>0);
 
   document.getElementById('col-atrasados').innerHTML=atrasados.length
     ?atrasados.map(l=>fuCard(l,todayStart)).join('')
     :`<div class="fu-col-empty">✅ Nenhum em atraso</div>`;
-
   document.getElementById('col-hoje').innerHTML=hoje.length
     ?hoje.map(l=>fuCard(l,todayStart)).join('')
     :`<div class="fu-col-empty">✅ Nenhum para hoje</div>`;
@@ -281,19 +259,16 @@ function fuCard(l,todayStart){
   const isLate=fu<todayStart;
   const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
   const wa=formatPhone(l.phone);
-  const trilha=l.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
-  const totalSteps=trilha.length+(l.tipo==='SM'?1:0);
+  const trilhaLabels=getTrilha(l.tipo||'SM');
   const etapa=l.etapaFollowup||0;
-  const etapaLabel=l.tipo==='SM'&&etapa>=trilha.length?'Mensal':`Etapa ${etapa+1}`;
+  const etapaLabel=trilhaLabels[etapa]||'Mensal';
 
-  // Pip indicators
-  const pips=Array.from({length:totalSteps+1},(_,i)=>{
-    let cls=i<etapa?'done':i===etapa?'current':'';
-    return `<span class="etapa-pip ${cls}"></span>`;
-  }).join('');
-
-  const hist=l.followupHistory||[];
-  const lastDone=hist.length?hist[hist.length-1]:null;
+  // Mini trilha inline
+  const miniTrilha=trilhaLabels.map((lbl,i)=>{
+    const done=i<etapa;
+    const cur=i===etapa;
+    return `<span class="mini-step ${done?'ms-done':cur?'ms-current':'ms-pending'}" title="${lbl}">${lbl}</span>`;
+  }).join('<span class="mini-arrow">›</span>');
 
   return `
   <div class="fu-card2 ${isLate?'fu-late':''}" onclick="openLead('${l.id}')">
@@ -301,74 +276,78 @@ function fuCard(l,todayStart){
       <span class="fu2-name">${l.name||'Sem Nome'}</span>
       <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
     </div>
+    <div class="fu2-trilha">${miniTrilha}</div>
     <div class="fu2-meta">
       ${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}
-      <span class="fu2-etapa" style="color:${isLate?'#EF4444':'#4F6EF7'}">${etapaLabel}</span>
       <span class="fu2-resp">${l.assignee||'—'}</span>
     </div>
-    <div class="etapa-progress">${pips}<span style="font-size:.6rem;color:#6B7280;margin-left:.2rem">${etapa}/${totalSteps}</span></div>
-    ${isLate?`<div class="fu2-atraso">⚠️ ${daysLate===0?'Vence hoje':`${daysLate} dia${daysLate>1?'s':''} em atraso`}</div>`:`<div class="fu2-hoje">📅 Hoje</div>`}
-    ${lastDone?`<div class="fu2-lastdone">Último: ${lastDone.label} — ${lastDone.doneBy} ${formatDatetime(new Date(lastDone.doneAt))}</div>`:''}
+    ${isLate
+      ?`<div class="fu2-atraso">⚠️ ${daysLate===0?'Vence hoje':`${daysLate} dia${daysLate>1?'s':''} em atraso`}</div>`
+      :`<div class="fu2-hoje">📅 ${etapaLabel} — hoje</div>`}
     ${l.currentNote?`<div class="fu2-note">${l.currentNote}</div>`:''}
     <div class="fu2-actions" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa">WhatsApp</a>`:''}
-      <button onclick="avancarEtapaFollowup('${l.id}')" class="btn-done">✓ Feito</button>
+      <button onclick="avancarEtapa('${l.id}')" class="btn-done">✓ Feito</button>
     </div>
   </div>`;
 }
 
-// ─── TRILHA ───
-function calcularProximoFollowup(lead){
-  const trilha=lead.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
-  const etapa=lead.etapaFollowup||0;
-  const base=lead.lastContact?.toDate?lead.lastContact.toDate():new Date();
-  if(lead.tipo==='SM'&&etapa>=trilha.length){
-    if(!lead.dataParto) return null;
-    const parto=lead.dataParto?.toDate?lead.dataParto.toDate():new Date(lead.dataParto);
-    const ultimo=lead.ultimoFollowupMensal?.toDate?lead.ultimoFollowupMensal.toDate():base;
-    const prox=new Date(ultimo); prox.setMonth(prox.getMonth()+1);
-    return prox>parto?null:prox;
-  }
-  if(etapa>=trilha.length) return null;
-  const d=new Date(base); d.setDate(d.getDate()+trilha[etapa]);
-  return d;
-}
+// ─── AVANÇAR ETAPA ───
+async function avancarEtapa(id){
+  const l=allLeads.find(x=>x.id===id);if(!l)return;
+  const trilhaDias=getTrilhaDias(l.tipo||'SM');
+  const trilhaLabels=getTrilha(l.tipo||'SM');
+  const etapaAtual=l.etapaFollowup||0;
+  const etapaFeita=etapaAtual;
+  const novaEtapa=etapaAtual+1;
+  const labelFeita=trilhaLabels[etapaFeita]||'Mensal';
 
-async function avancarEtapaFollowup(id){
-  const l=allLeads.find(x=>x.id===id); if(!l) return;
-  const trilha=l.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
-  const etapa=(l.etapaFollowup||0)+1;
-  const prox=calcularProximoFollowup({...l,etapaFollowup:etapa,lastContact:{toDate:()=>new Date()}});
-  const etapaLabel=l.tipo==='SM'&&etapa-1>=trilha.length?'Mensal':`Etapa ${etapa}`;
-  const histEntry={etapa,label:etapaLabel,doneAt:new Date().toISOString(),doneBy:currentUser?.nome||'—'};
+  // Calcular próximo FU a partir de AGORA (após o feito)
+  let nextFollowup=null;
+  if(l.tipo==='SM'&&novaEtapa>=trilhaDias.length){
+    // Fase mensal
+    if(l.dataParto){
+      const parto=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
+      const prox=new Date();prox.setMonth(prox.getMonth()+1);
+      nextFollowup=prox<=parto?Timestamp.fromDate(prox):null;
+    }
+  }else if(novaEtapa<trilhaDias.length){
+    const prox=new Date();
+    prox.setDate(prox.getDate()+trilhaDias[novaEtapa]);
+    nextFollowup=Timestamp.fromDate(prox);
+  }
+
+  const histEntry={etapa:novaEtapa,label:labelFeita,doneAt:new Date().toISOString(),doneBy:currentUser?.nome||'—'};
   const upd={
-    etapaFollowup:etapa,lastContact:serverTimestamp(),
-    nextFollowup:prox?Timestamp.fromDate(prox):null,
+    etapaFollowup:novaEtapa,
+    lastContact:serverTimestamp(),
+    nextFollowup,
     followupHistory:arrayUnion(histEntry),
-    log:arrayUnion({user:currentUser?.nome||'—',note:`Follow-up ${etapaLabel} realizado${prox?' — próximo: '+formatDate(prox):''}`,ts:new Date().toISOString(),statusChange:null})
+    log:arrayUnion({user:currentUser?.nome||'—',note:`${labelFeita} realizado${nextFollowup?' — próximo em '+formatDate(nextFollowup.toDate()):''}`,ts:new Date().toISOString(),statusChange:null})
   };
-  if(l.tipo==='SM'&&etapa>=trilha.length) upd.ultimoFollowupMensal=serverTimestamp();
+  if(l.tipo==='SM'&&novaEtapa>=trilhaDias.length)upd.ultimoFollowupMensal=serverTimestamp();
   await updateDoc(doc(db,'leads',id),upd);
-  showToast(prox?`✓ Feito! Próximo: ${formatDate(prox)}`:'✓ Trilha concluída!');
+  showToast(nextFollowup?`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`:`✓ ${labelFeita} feito! Trilha concluída.`);
 }
+// expose for HTML onclick
+window.avancarEtapaFollowup=avancarEtapa;
 
 // ─── KANBAN ───
 function renderKanban(){
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
   allLeads.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
-    const el=document.getElementById('col-'+status); if(!el) return;
+    const el=document.getElementById('col-'+status);if(!el)return;
     document.getElementById('col-count-'+status).textContent=cols[status].length;
     el.innerHTML=cols[status].length===0?`<div class="col-empty">Nenhum lead</div>`:cols[status].map(l=>kanbanCard(l)).join('');
     el.ondragover=e=>{e.preventDefault();el.classList.add('drag-over');};
     el.ondragleave=()=>el.classList.remove('drag-over');
     el.ondrop=async e=>{
       e.preventDefault();el.classList.remove('drag-over');
-      const leadId=e.dataTransfer.getData('leadId');
-      if(!leadId) return;
-      const l=allLeads.find(x=>x.id===leadId);
-      if(!l||l.status===status) return;
-      await updateDoc(doc(db,'leads',leadId),{status,log:arrayUnion({user:currentUser?.nome||'—',note:`Status → ${status} (arrastado)`,ts:new Date().toISOString(),statusChange:status})});
+      const lid=e.dataTransfer.getData('leadId');if(!lid)return;
+      const l=allLeads.find(x=>x.id===lid);
+      if(!l||l.status===status)return;
+      await updateDoc(doc(db,'leads',lid),{status,log:arrayUnion({user:currentUser?.nome||'—',note:`Status → ${status}`,ts:new Date().toISOString(),statusChange:status})});
       showToast(`Movido → ${STATUS_META[status].label}`);
     };
   });
@@ -377,28 +356,32 @@ function renderKanban(){
 function kanbanCard(l){
   const wa=formatPhone(l.phone);
   const today=new Date();today.setHours(23,59,59,999);
-  const todayStart=new Date();todayStart.setHours(0,0,0,0);
-  let urgentClass='';let daysLateHtml='';
+  const todayS=new Date();todayS.setHours(0,0,0,0);
+  let urgCls='';let daysLateHtml='';
   if(l.nextFollowup){
     const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     if(fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)){
-      urgentClass='k-card-urgent';
-      const dl=Math.floor((todayStart-fu)/(1000*60*60*24));
-      if(dl>0) daysLateHtml=`<span class="k-late">${dl}d atraso</span>`;
+      urgCls='k-card-urgent';
+      const dl=Math.floor((todayS-fu)/(1000*60*60*24));
+      if(dl>0)daysLateHtml=`<span class="k-late">${dl}d atraso</span>`;
     }
   }
+  const trilhaLabels=getTrilha(l.tipo||'SM');
+  const etapa=l.etapaFollowup||0;
+  const curLabel=trilhaLabels[etapa]||'Mensal';
   return `
-  <div class="k-card ${urgentClass}" draggable="true"
+  <div class="k-card ${urgCls}" draggable="true"
     ondragstart="event.dataTransfer.setData('leadId','${l.id}');this.classList.add('dragging')"
     ondragend="this.classList.remove('dragging')"
     onclick="openLead('${l.id}')">
     <div class="k-top"><span class="k-name">${l.name||'Sem Nome'}</span>${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'} k-tipo">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}</div>
     ${l.campaign?`<span class="campaign-tag">${l.campaign}</span>`:''}
     <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}</div>
+    ${urgCls?`<span class="k-etapa-badge">${curLabel}</span>`:''}
     ${l.currentNote?`<div class="k-note">${l.currentNote}</div>`:''}
     <div class="k-footer" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>`:'<span></span>'}
-      ${l.nextFollowup?`<span class="k-fu ${urgentClass?'urgent-fu':''}">📅 ${formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup))}</span>`:''}
+      ${l.nextFollowup?`<span class="k-fu ${urgCls?'urgent-fu':''}">📅 ${formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup))}</span>`:''}
     </div>
   </div>`;
 }
@@ -406,10 +389,10 @@ function kanbanCard(l){
 // ─── TABLE ───
 function renderTable(){
   let filtered=allLeads;
-  if(filterStatus!=='ALL') filtered=filtered.filter(l=>l.status===filterStatus);
+  if(filterStatus!=='ALL')filtered=filtered.filter(l=>l.status===filterStatus);
   if(searchQuery){const q=searchQuery.toLowerCase();filtered=filtered.filter(l=>(l.name||'').toLowerCase().includes(q)||(l.phone||'').includes(q));}
   const tbody=document.getElementById('table-body');
-  if(!filtered.length){tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:#666">Nenhum lead encontrado</td></tr>`;return;}
+  if(!filtered.length){tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:#666">Nenhum lead</td></tr>`;return;}
   tbody.innerHTML=filtered.map(l=>{
     const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
     const wa=formatPhone(l.phone);
@@ -452,78 +435,67 @@ window.openLead=function(id){
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
   document.getElementById('modal-lead').style.display='flex';
 };
-
 window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
 window.togglePartoField=()=>{document.getElementById('parto-row').style.display=document.getElementById('f-tipo').value==='SM'?'flex':'none';};
 
+// ─── PROGRESS BAR ───
 function renderProgressBar(etapaAtual, tipo, history){
-  const el=document.getElementById('etapas-feitas'); if(!el) return;
-  const trilha=tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
-  // Build step labels
-  const steps=trilha.map((d,i)=>{
-    if(i===0) return {label:'24h', sub:'1º contato'};
-    return {label:`${d}d`, sub:`Etapa ${i+1}`};
-  });
-  if(tipo==='SM') steps.push({label:'Mensal', sub:'Até o parto'});
-  steps.push({label:'✓', sub:'Concluído'});
-
-  const totalSteps=steps.length;
-  const pct=Math.min(etapaAtual/(totalSteps-1)*100,100);
-
-  // Map history by etapa number for quick lookup
+  const el=document.getElementById('progress-container');if(!el)return;
+  const trilhaLabels=getTrilha(tipo);
   const histMap={};
-  history.forEach(h=>{ histMap[h.etapa]=h; });
+  history.forEach(h=>{histMap[h.etapa]=h;});
 
-  const stepsHTML=steps.map((s,i)=>{
+  const stepsHTML=trilhaLabels.map((lbl,i)=>{
     const done=i<etapaAtual;
-    const current=i===etapaAtual;
-    const h=histMap[i];
-    let cls=done?'step-done':current?'step-current':'step-pending';
-    let tooltip=h?`${h.doneBy} — ${formatDatetime(new Date(h.doneAt))}`:'';
+    const cur=i===etapaAtual;
+    const h=histMap[i+1]; // history etapa is 1-based after done
+    const hAny=history.find(x=>x.label===lbl);
+    let cls=done?'ps-done':cur?'ps-current':'ps-pending';
     return `
-    <div class="progress-step ${cls}" title="${tooltip}">
-      <div class="step-circle">${done?'✓':i+1}</div>
-      <div class="step-label">${s.label}</div>
-      <div class="step-sub">${s.sub}</div>
-      ${h?`<div class="step-done-info">${h.doneBy}<br>${formatDate(new Date(h.doneAt))}</div>`:''}
-    </div>`;
-  }).join('<div class="step-connector"></div>');
+    <div class="progress-step-h ${cls}">
+      <div class="psh-circle">${done?'✓':i+1}</div>
+      <div class="psh-label">${lbl}</div>
+      ${hAny?`<div class="psh-done-info">${hAny.doneBy}<br>${formatDate(new Date(hAny.doneAt))}</div>`:''}
+    </div>
+    ${i<trilhaLabels.length-1?'<div class="psh-connector"></div>':''}`;
+  }).join('');
 
-  // History list below
+  // History log
   const histHTML=history.length?`
-    <div class="fu-history-title">Registro de Follow-ups Realizados</div>
-    <div class="fu-history-list">
+    <div class="fuh-section-title">Registro de Follow-ups</div>
+    <div class="fuh-list">
       ${[...history].reverse().map(h=>`
-        <div class="fu-history-item">
-          <div class="fu-history-badge">${h.label||'E'+h.etapa}</div>
-          <div class="fu-history-detail">
-            <span class="fu-history-who">${h.doneBy}</span>
-            <span class="fu-history-when">${formatDatetime(new Date(h.doneAt))}</span>
+        <div class="fuh-item">
+          <div class="fuh-badge">${h.label}</div>
+          <div class="fuh-detail">
+            <span class="fuh-who">${h.doneBy}</span>
+            <span class="fuh-when">${formatDatetime(new Date(h.doneAt))}</span>
           </div>
         </div>`).join('')}
-    </div>`:'<div style="font-size:.72rem;color:#6B7280;padding:.4rem 0">Nenhum follow-up realizado ainda.</div>';
+    </div>`
+    :`<div class="fuh-empty">Nenhum follow-up realizado ainda.</div>`;
 
   el.innerHTML=`
-    <div class="progress-bar-wrap">
-      <div class="progress-steps">${stepsHTML}</div>
-      <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+    <div class="progress-bar-h">
+      <div class="psbh-track"></div>
+      <div class="psbh-steps">${stepsHTML}</div>
     </div>
     ${histHTML}`;
 }
 
-function renderEtapasFeitas(history){
-  // kept for compatibility — calls renderProgressBar with default
-  renderProgressBar(0,'SM',history);
-}
-
+// ─── LOG ───
 function renderLog(log){
   const el=document.getElementById('lead-log');
   if(!log.length){el.innerHTML=`<div class="log-empty">Nenhum histórico ainda.</div>`;return;}
   el.innerHTML=[...log].reverse().map(e=>`
     <div class="log-entry">
-      <div class="log-meta"><span class="log-user">${e.user}</span><span class="log-time">${formatDatetime(e.ts?.toDate?e.ts.toDate():new Date(e.ts))}</span></div>
-      <div class="log-text">${e.note}</div>
-      ${e.statusChange?`<span class="log-status-badge">→ ${e.statusChange}</span>`:''}
+      <div class="log-header">
+        <span class="log-dot"></span>
+        <span class="log-user">${e.user}</span>
+        <span class="log-time">${formatDatetime(e.ts?.toDate?e.ts.toDate():new Date(e.ts))}</span>
+        ${e.statusChange?`<span class="log-status-chip">${e.statusChange}</span>`:''}
+      </div>
+      <div class="log-body">${e.note}</div>
     </div>`).join('');
 }
 
@@ -532,7 +504,7 @@ window.addQuickNote=function(note,btn){
   if(activeQuickNotes.has(note)){
     activeQuickNotes.delete(note);btn.classList.remove('qn-active');
     el.value=el.value.replace(' — '+note,'').replace(note+' — ','').replace(note,'').trim();
-  } else {
+  }else{
     activeQuickNotes.add(note);btn.classList.add('qn-active');
     el.value=el.value?el.value+' — '+note:note;
   }
@@ -549,36 +521,42 @@ window.saveLead=async function(){
   const partoVal=document.getElementById('f-parto').value;
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
   if(!editingLeadId){
-    const d=new Date();d.setDate(d.getDate()+(tipo==='SM'?TRILHA_SM[0]:TRILHA_GERAL[0]));
-    await addDoc(collection(db,'leads'),{name,phone,campaign,status,tipo,assignee,currentNote:note,nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]});
-    showToast('Lead criado! Trilha iniciada automaticamente.');
-  } else {
+    const trilhaDias=getTrilhaDias(tipo);
+    const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
+    await addDoc(collection(db,'leads'),{
+      name,phone,campaign,status,tipo,assignee,currentNote:note,
+      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
+      followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+    });
+    showToast('Lead criado! FUP 24h agendado.');
+  }else{
     const existing=allLeads.find(l=>l.id===editingLeadId);
     const statusChanged=existing?.status&&existing.status!==status;
     const partoChanged=partoVal&&!existing?.dataParto;
     const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
-    if(note) upd.currentNote=note;
-    if(dataParto) upd.dataParto=dataParto;
+    if(note)upd.currentNote=note;
+    if(dataParto)upd.dataParto=dataParto;
     if(partoChanged&&tipo==='SM'){
       const etapa=existing?.etapaFollowup||0;
-      if(etapa>=TRILHA_SM.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
+      const trilhaDias=getTrilhaDias('SM');
+      if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
     }
     upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
     await updateDoc(doc(db,'leads',editingLeadId),upd);
-    showToast(partoChanged?'Trilha mensal ativada!':'Lead atualizado!');
+    showToast('Lead atualizado!');
   }
   closeLead();
 };
-
 window.deleteLead=async function(){
-  if(!editingLeadId||!confirm('Excluir este lead permanentemente?')) return;
+  if(!editingLeadId||!confirm('Excluir este lead?'))return;
   await deleteDoc(doc(db,'leads',editingLeadId));
   showToast('Lead removido.','warn');closeLead();
 };
 
 // ─── IMPORTAÇÃO ───
 window.importarExcel=async function(input){
-  const file=input.files[0]; if(!file) return; input.value='';
+  const file=input.files[0];if(!file)return;input.value='';
   const reader=new FileReader();
   reader.onload=async function(e){
     try{
@@ -589,22 +567,26 @@ window.importarExcel=async function(input){
       let imp=0,err=0;
       showToast(`Importando ${dataRows.length} leads...`,'warn');
       for(const row of dataRows){
-        const dataSerial=parseFloat(row[0]);
+        const ds=parseFloat(row[0]);
         const nome=String(row[1]||'').trim()||'Sem Nome';
-        const telefone=String(row[2]||'').trim();
+        const tel=String(row[2]||'').trim();
         const status=normalizeStatus(String(row[3]||'').trim());
-        let campanha='';
-        for(let c=4;c<=9;c++){if(row[c]&&String(row[c]).trim()){campanha=String(row[c]).trim();break;}}
+        let camp='';for(let c=4;c<=9;c++){if(row[c]&&String(row[c]).trim()){camp=String(row[c]).trim();break;}}
         const obs=String(row[11]||'').trim();
         const obsL=obs.toLowerCase();
-        const atendente=obsL.startsWith('joelma')?'Joelma':'Isabel';
-        const tipo=(campanha.toUpperCase().includes('SM')||obsL.includes('salário maternidade')||obsL.includes('salario maternidade'))?'SM':'GERAL';
-        let createdAt=new Date();
-        if(dataSerial>0){const ep=new Date(1899,11,30);createdAt=new Date(ep.getTime()+dataSerial*86400000);}
-        const nextFu=new Date(createdAt);nextFu.setDate(nextFu.getDate()+1);
+        const atend=obsL.startsWith('joelma')?'Joelma':'Isabel';
+        const tipo=(camp.toUpperCase().includes('SM')||obsL.includes('salário maternidade'))?'SM':'GERAL';
+        let cAt=new Date();
+        if(ds>0){const ep=new Date(1899,11,30);cAt=new Date(ep.getTime()+ds*86400000);}
+        const nf=new Date(cAt);nf.setDate(nf.getDate()+1);
         try{
-          await addDoc(collection(db,'leads'),{name:nome,phone:telefone,campaign:campanha,status,tipo,assignee:atendente,currentNote:obs,nextFollowup:Timestamp.fromDate(nextFu),dataParto:null,etapaFollowup:0,followupHistory:[],createdAt:Timestamp.fromDate(createdAt),lastContact:Timestamp.fromDate(createdAt),log:obs?[{user:atendente,note:obs,ts:createdAt.toISOString(),statusChange:null}]:[],importado:true});
-          imp++;
+          await addDoc(collection(db,'leads'),{
+            name:nome,phone:tel,campaign:camp,status,tipo,assignee:atend,
+            currentNote:obs,nextFollowup:Timestamp.fromDate(nf),dataParto:null,
+            etapaFollowup:0,followupHistory:[],
+            createdAt:Timestamp.fromDate(cAt),lastContact:Timestamp.fromDate(cAt),
+            log:obs?[{user:atend,note:obs,ts:cAt.toISOString(),statusChange:null}]:[],importado:true
+          });imp++;
         }catch(er){err++;}
       }
       showToast(`✅ ${imp} leads importados!${err?` (${err} erros)`:''}`);
@@ -612,7 +594,6 @@ window.importarExcel=async function(input){
   };
   reader.readAsArrayBuffer(file);
 };
-
 function normalizeStatus(s){
   const map={'EM ANDAMENTO':'EM ANDAMENTO','QUALIFICADO':'QUALIFICADO','DESQUALIFICADO':'DESQUALIFICADO','SEM RESPOSTA':'SEM RESPOSTA','CONTRATO FECHADO':'CONTRATO FECHADO'};
   return map[s.toUpperCase()]||'EM ANDAMENTO';
@@ -620,44 +601,40 @@ function normalizeStatus(s){
 
 // ─── BACKUP ───
 window.fazerBackup=function(){
-  if(!allLeads.length) return showToast('Nenhum lead','warn');
+  if(!allLeads.length)return showToast('Nenhum lead','warn');
   const rows=allLeads.map(l=>{
     const created=l.createdAt?.toDate?l.createdAt.toDate():null;
     const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():l.nextFollowup?new Date(l.nextFollowup):null;
     const parto=l.dataParto?.toDate?l.dataParto.toDate():l.dataParto?new Date(l.dataParto):null;
     const hist=(l.followupHistory||[]).map(h=>`${h.label}(${h.doneBy} ${formatDatetime(new Date(h.doneAt))})`).join(' | ');
     const logTxt=(l.log||[]).map(e=>`[${formatDatetime(new Date(e.ts))} ${e.user}] ${e.note}`).join(' || ');
-    return{'ID':l.id,'Data Entrada':created?formatDate(created):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'Salário Maternidade':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status||'','Atendente':l.assignee||'','Última Nota':l.currentNote||'','Data Parto':parto?formatDate(parto):'—','Próx. Follow-up':fu?formatDate(fu):'—','Etapa':l.etapaFollowup||0,'Trilha':hist,'Histórico':logTxt};
+    return{'ID':l.id,'Data':created?formatDate(created):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'','Nota':l.currentNote||'','Parto':parto?formatDate(parto):'—','Próx.FU':fu?formatDate(fu):'—','Etapa':l.etapaFollowup||0,'Trilha':hist,'Histórico':logTxt};
   });
   const ws=XLSX.utils.json_to_sheet(rows);
-  ws['!cols']=[{wch:22},{wch:12},{wch:25},{wch:18},{wch:20},{wch:12},{wch:18},{wch:12},{wch:40},{wch:12},{wch:14},{wch:6},{wch:50},{wch:80}];
-  const wb=XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb,ws,'Backup');
-  const dt=new Date().toLocaleDateString('pt-BR').replace(/\//g,'-');
-  XLSX.writeFile(wb,`Backup_CRM_${dt}.xlsx`);
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Backup');
+  XLSX.writeFile(wb,`Backup_CRM_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.xlsx`);
   showToast(`✅ Backup de ${allLeads.length} leads exportado!`);
 };
 
 // ─── RELATÓRIOS ───
-function getLeadsPorPeriodo(semFiltroStatus){
+function getLeadsFiltrados(semStatus){
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
-  const statusF=semFiltroStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
-  const dataIni=document.getElementById('rel-data-ini')?.value;
-  const dataFim=document.getElementById('rel-data-fim')?.value;
-  const now=new Date(); let ini,fim;
+  const statusF=semStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
+  const ini_=document.getElementById('rel-data-ini')?.value;
+  const fim_=document.getElementById('rel-data-fim')?.value;
+  const now=new Date();let ini,fim;
   if(periodo==='mes-atual'){ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
   else if(periodo==='mes-anterior'){ini=new Date(now.getFullYear(),now.getMonth()-1,1);fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);}
   else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
-  else if(periodo==='especifica'&&dataIni&&dataFim){ini=new Date(dataIni+'T00:00:00');fim=new Date(dataFim+'T23:59:59');}
+  else if(periodo==='especifica'&&ini_&&fim_){ini=new Date(ini_+'T00:00:00');fim=new Date(fim_+'T23:59:59');}
   else{ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
   let leads=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
-  if(statusF!=='TODOS') leads=leads.filter(l=>l.status===statusF);
+  if(statusF!=='TODOS')leads=leads.filter(l=>l.status===statusF);
   return leads;
 }
 
 window.renderRelatorios=function(){
-  const leads=getLeadsPorPeriodo(false);
-  const leadsAll=getLeadsPorPeriodo(true);
+  const leads=getLeadsFiltrados(false);const leadsAll=getLeadsFiltrados(true);
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
   document.getElementById('rel-data-range').style.display=periodo==='especifica'?'flex':'none';
   const taxa=leads.length?Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100):0;
@@ -676,24 +653,21 @@ window.renderRelatorios=function(){
   renderChart('chart-atend','bar',Object.keys(atend),Object.values(atend),['#4F6EF7','#10B981','#F5A623','#8B5CF6']);
   const camp={};leadsAll.forEach(l=>{camp[l.campaign||'Sem campanha']=(camp[l.campaign||'Sem campanha']||0)+1;});
   renderChart('chart-camp','bar',Object.keys(camp),Object.values(camp),['#8B5CF6','#4F6EF7','#10B981','#F5A623']);
-  const tbody=document.getElementById('rel-tbody');
-  tbody.innerHTML=leads.map(l=>{
+  document.getElementById('rel-tbody').innerHTML=leads.map(l=>{
     const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
     const d=l.createdAt?.toDate?l.createdAt.toDate():null;
     return `<tr><td>${d?formatDate(d):'—'}</td><td>${l.name||'Sem Nome'}</td><td>${l.phone||'—'}</td><td>${l.tipo==='SM'?'SM':'Geral'}</td><td>${l.campaign||'—'}</td><td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td><td>${l.assignee||'—'}</td></tr>`;
   }).join('');
 };
-
-window.clickKpi=function(status){relKpiFilter=relKpiFilter===status?null:status;renderRelatorios();};
+window.clickKpi=function(s){relKpiFilter=relKpiFilter===s?null:s;renderRelatorios();};
 
 function renderChart(id,type,labels,data,colors){
-  const canvas=document.getElementById(id); if(!canvas) return;
-  if(chartInstances[id]) chartInstances[id].destroy();
+  const canvas=document.getElementById(id);if(!canvas)return;
+  if(chartInstances[id])chartInstances[id].destroy();
   chartInstances[id]=new Chart(canvas,{type,data:{labels,datasets:[{data,backgroundColor:type==='doughnut'?colors:colors,borderColor:'transparent',borderRadius:type==='bar'?6:0,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:type==='bar'?{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}}}:{}}});
 }
-
 window.exportarExcel=function(){
-  const leads=getLeadsPorPeriodo(false);
+  const leads=getLeadsFiltrados(false);
   const rows=leads.map(l=>({'Data':l.createdAt?.toDate?formatDate(l.createdAt.toDate()):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'','Nota':l.currentNote||'','Próx.FU':l.nextFollowup?formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup)):'—'}));
   const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Leads');
   XLSX.writeFile(wb,`CRM_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.xlsx`);
@@ -707,11 +681,9 @@ window.renderEstrategia=function(){
   const ini=new Date(now.getFullYear(),now.getMonth(),1);
   const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
   const mesLeads=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
-
-  // BLOCO 1 — Alertas críticos
   const partoProximo=allLeads.filter(l=>{
-    if(l.status==='CONTRATO FECHADO'||l.status==='DESQUALIFICADO') return false;
-    if(!l.dataParto) return false;
+    if(['CONTRATO FECHADO','DESQUALIFICADO'].includes(l.status))return false;
+    if(!l.dataParto)return false;
     const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
     const dias=Math.floor((p-now)/(1000*60*60*24));
     return dias>=0&&dias<=60;
@@ -720,172 +692,86 @@ window.renderEstrategia=function(){
     const pb=b.dataParto?.toDate?b.dataParto.toDate():new Date(b.dataParto);
     return pa-pb;
   });
-
   const qualifParados=allLeads.filter(l=>{
-    if(l.status!=='QUALIFICADO') return false;
+    if(l.status!=='QUALIFICADO')return false;
     const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
-    if(!lc) return true;
-    return Math.floor((now-lc)/(1000*60*60*24))>=7;
+    return !lc||Math.floor((now-lc)/(1000*60*60*24))>=7;
   });
-
   const esfriando=allLeads.filter(l=>{
-    if(!['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status)) return false;
+    if(!['EM ANDAMENTO','SEM RESPOSTA'].includes(l.status))return false;
     const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
-    if(!lc) return false;
-    return Math.floor((now-lc)/(1000*60*60*24))>=15;
+    return lc&&Math.floor((now-lc)/(1000*60*60*24))>=15;
   });
-
   const fuAtrasados=allLeads.filter(l=>{
-    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)) return false;
-    if(!l.nextFollowup) return false;
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
+    if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<todayStart;
   });
-
-  // BLOCO 2 — Pipeline
   const qualif=mesLeads.filter(l=>l.status==='QUALIFICADO').length;
   const contratos=mesLeads.filter(l=>l.status==='CONTRATO FECHADO').length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
   const taxaConv=qualif?Math.round(contratos/qualif*100):0;
-  const potencial=qualif+andamento;
-
-  // BLOCO 3 — Campanha
   const campStats={};
-  mesLeads.forEach(l=>{
-    const c=l.campaign||'Sem campanha';
-    if(!campStats[c]) campStats[c]={total:0,qualif:0,contrato:0};
-    campStats[c].total++;
-    if(l.status==='QUALIFICADO') campStats[c].qualif++;
-    if(l.status==='CONTRATO FECHADO') campStats[c].contrato++;
-  });
-
-  // BLOCO 4 — Equipe
+  mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
   const equipeStats={};
-  mesLeads.forEach(l=>{
-    const a=l.assignee||'—';
-    if(!equipeStats[a]) equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0};
-    equipeStats[a].total++;
-    if(l.status==='QUALIFICADO') equipeStats[a].qualif++;
-    if(l.status==='CONTRATO FECHADO') equipeStats[a].contrato++;
-    if(fuAtrasados.find(x=>x.id===l.id)) equipeStats[a].fuAtrasados++;
-    equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;
-  });
-
-  const el=document.getElementById('estrategia-content'); if(!el) return;
+  mesLeads.forEach(l=>{const a=l.assignee||'—';if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0};equipeStats[a].total++;if(l.status==='QUALIFICADO')equipeStats[a].qualif++;if(l.status==='CONTRATO FECHADO')equipeStats[a].contrato++;if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;});
+  const el=document.getElementById('estrategia-content');if(!el)return;
   el.innerHTML=`
-  <!-- ALERTAS -->
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     <div class="est-alerts-grid">
-      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'}">
-        <div class="est-alert-num">${partoProximo.length}</div>
-        <div class="est-alert-label">SM com parto<br>em até 60 dias</div>
-      </div>
-      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'}">
-        <div class="est-alert-num">${qualifParados.length}</div>
-        <div class="est-alert-label">Qualificados<br>parados +7 dias</div>
-      </div>
-      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'}">
-        <div class="est-alert-num">${esfriando.length}</div>
-        <div class="est-alert-label">Esfriando<br>+15 dias sem contato</div>
-      </div>
-      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'}">
-        <div class="est-alert-num">${fuAtrasados.length}</div>
-        <div class="est-alert-label">Follow-ups<br>em atraso</div>
-      </div>
+      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
+      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
+      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
+      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
     </div>
   </div>
-
-  <!-- PIPELINE -->
   <div class="est-section">
     <div class="est-section-title">📊 Pipeline do Mês</div>
     <div class="est-pipeline-grid">
-      <div class="est-pipe-card">
-        <div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div>
-        <div class="est-pipe-label">Leads entrados</div>
-      </div>
+      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card">
-        <div class="est-pipe-num" style="color:#10B981">${qualif}</div>
-        <div class="est-pipe-label">Qualificados</div>
-      </div>
+      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#10B981">${qualif}</div><div class="est-pipe-label">Qualificados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card">
-        <div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div>
-        <div class="est-pipe-label">Contratos</div>
-      </div>
+      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card">
-        <div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div>
-        <div class="est-pipe-label">Taxa qualif.→contrato</div>
-      </div>
+      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
-    <div class="est-insight">
-      💡 <strong>${potencial} leads</strong> ainda podem virar contrato este mês (em andamento + qualificados).
-      ${contratos===0&&qualif>0?` <span style="color:#F5A623">Atenção: ${qualif} leads qualificados sem contrato fechado.</span>`:''}
-    </div>
+    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
-
-  <!-- CAMPANHAS -->
   <div class="est-section">
     <div class="est-section-title">📢 Eficiência por Campanha</div>
-    <div class="est-table-wrap">
-      <table class="est-table">
-        <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa Qualif.</th><th>Diagnóstico</th></tr></thead>
-        <tbody>
-          ${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
-            const taxa=s.total?Math.round(s.qualif/s.total*100):0;
-            let diag='',diagClass='';
-            if(taxa>=30){diag='✅ Alta conversão';diagClass='diag-green';}
-            else if(taxa>=15){diag='⚡ Conversão média';diagClass='diag-amber';}
-            else if(s.total>=5){diag='⚠️ Baixa conversão — revisar';diagClass='diag-red';}
-            else{diag='— Poucos dados';diagClass='';}
-            return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${diagClass}">${diag}</span></td></tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>
+    <div class="est-table-wrap"><table class="est-table">
+      <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa</th><th>Diagnóstico</th></tr></thead>
+      <tbody>${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
+        const taxa=s.total?Math.round(s.qualif/s.total*100):0;
+        let diag='',dc='';
+        if(taxa>=30){diag='✅ Alta conversão';dc='diag-green';}
+        else if(taxa>=15){diag='⚡ Média';dc='diag-amber';}
+        else if(s.total>=5){diag='⚠️ Baixa — revisar';dc='diag-red';}
+        else{diag='— Poucos dados';dc='';}
+        return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${dc}">${diag}</span></td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
   </div>
-
-  <!-- EQUIPE -->
   <div class="est-section">
     <div class="est-section-title">👥 Desempenho da Equipe</div>
-    <div class="est-table-wrap">
-      <table class="est-table">
-        <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU em Atraso</th><th>Eficiência</th></tr></thead>
-        <tbody>
-          ${Object.entries(equipeStats).map(([nome,s])=>{
-            const ef=s.total?Math.round((s.qualif+s.contrato)/s.total*100):0;
-            return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
-          }).join('')}
-        </tbody>
-      </table>
-    </div>
+    <div class="est-table-wrap"><table class="est-table">
+      <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
+      <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
+        const ef=s.total?Math.round((s.qualif+s.contrato)/s.total*100):0;
+        return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
+      }).join('')}</tbody>
+    </table></div>
   </div>
-
-  <!-- LEADS PARA RESGATAR -->
   ${(partoProximo.length||qualifParados.length||esfriando.length)?`
   <div class="est-section">
     <div class="est-section-title">🔁 Leads para Ação Imediata</div>
     <div class="est-resgate-grid">
-      ${partoProximo.map(l=>{
-        const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
-        const dias=Math.floor((p-now)/(1000*60*60*24));
-        const wa=formatPhone(l.phone);
-        return `<div class="est-resgate-card urgente"><div class="est-r-tag">🍼 Parto em ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;
-      }).join('')}
-      ${qualifParados.map(l=>{
-        const wa=formatPhone(l.phone);
-        const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
-        const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;
-        return `<div class="est-resgate-card qualif"><div class="est-r-tag">⭐ Qualif. parado ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;
-      }).join('')}
-      ${esfriando.slice(0,6).map(l=>{
-        const wa=formatPhone(l.phone);
-        const lc=l.lastContact?.toDate?l.lastContact.toDate():null;
-        const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;
-        return `<div class="est-resgate-card esfriando"><div class="est-r-tag">❄️ Esfriando ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;
-      }).join('')}
+      ${partoProximo.map(l=>{const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);const dias=Math.floor((p-now)/(1000*60*60*24));const wa=formatPhone(l.phone);return `<div class="est-resgate-card urgente"><div class="est-r-tag">🍼 Parto em ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
+      ${qualifParados.map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card qualif"><div class="est-r-tag">⭐ Qualif. parado ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
+      ${esfriando.slice(0,6).map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card esfriando"><div class="est-r-tag">❄️ Esfriando ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
     </div>
   </div>`:''}`;
 };
@@ -897,29 +783,25 @@ window.switchTab=function(tab){
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
-  if(tab==='relatorios') setTimeout(renderRelatorios,100);
-  else if(tab==='estrategia') setTimeout(renderEstrategia,100);
+  if(tab==='relatorios')setTimeout(renderRelatorios,100);
+  else if(tab==='estrategia')setTimeout(renderEstrategia,100);
   else renderAll();
 };
-
 window.setFilter=function(s){filterStatus=s;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));document.getElementById('filter-'+s)?.classList.add('active');renderTable();};
 window.onSearch=v=>{searchQuery=v;renderTable();};
 
 // ─── UTILS ───
 function toDateInput(ts){const d=ts?.toDate?ts.toDate():new Date(ts);return d.toISOString().slice(0,10);}
-function formatPhone(p){if(!p) return '';return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
+function formatPhone(p){if(!p)return '';return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function formatDate(d){return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';}
 function formatDatetime(d){return d?new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
 function showToast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.className='toast',3500);}
 function setBtnLoading(id,l){const b=document.getElementById(id);if(!b)return;b.disabled=l;if(l)b.dataset.label=b.textContent;b.textContent=l?'Aguarde...':(b.dataset.label||b.textContent);}
 function fbErr(code){return({'auth/email-already-in-use':'E-mail já em uso.','auth/invalid-email':'E-mail inválido.','auth/wrong-password':'Senha incorreta.','auth/user-not-found':'Usuário não encontrado.','auth/weak-password':'Senha fraca.','auth/invalid-credential':'E-mail ou senha incorretos.'}[code]||'Erro: '+code);}
 </script>
-
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',sans-serif;background:#0B0D14;color:#F1F3F9;min-height:100vh}
-
-/* AUTH */
 .auth-screen{position:fixed;inset:0;background:#0B0D14;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2rem;z-index:9999}
 .auth-box{background:#13161F;border:1px solid #1E2235;border-radius:16px;padding:2.5rem;width:100%;max-width:400px;display:flex;flex-direction:column;gap:1.25rem}
 .auth-logo{font-size:.85rem;font-weight:800;color:#4F6EF7;letter-spacing:.08em;text-align:center}
@@ -930,18 +812,15 @@ body{font-family:'Inter',sans-serif;background:#0B0D14;color:#F1F3F9;min-height:
 .auth-input{background:#1E2235;border:1px solid #2A2F45;border-radius:8px;padding:.7rem .9rem;color:#F1F3F9;font-size:.88rem;font-family:'Inter',sans-serif;outline:none;width:100%;transition:border-color .2s}
 .auth-input:focus{border-color:#4F6EF7}
 .btn-primary{background:#4F6EF7;color:#fff;border:none;border-radius:10px;padding:.8rem;font-size:.9rem;font-weight:700;cursor:pointer;width:100%;transition:all .2s}
-.btn-primary:hover{background:#3B5BDB;transform:translateY(-1px)}
-.btn-primary:disabled{opacity:.6;cursor:not-allowed;transform:none}
-
-/* HEADER */
+.btn-primary:hover{background:#3B5BDB}
+.btn-primary:disabled{opacity:.6;cursor:not-allowed}
 header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1.75rem;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:1rem}
 .h-brand{font-size:.88rem;font-weight:800;color:#4F6EF7;letter-spacing:.05em;white-space:nowrap}
 .h-center{flex:1;display:flex;justify-content:center}
 #online-users{display:flex;align-items:center;gap:.4rem}
 .online-badge{display:flex;align-items:center;gap:.3rem;background:#13161F;border:1px solid #1E2235;border-radius:999px;padding:.2rem .6rem}
-.online-dot{width:6px;height:6px;border-radius:50%;background:#10B981;flex-shrink:0}
-@keyframes onlinePulse{0%,100%{opacity:1}50%{opacity:.4}}
-.online-dot{animation:onlinePulse 2s ease-in-out infinite}
+.online-dot{width:6px;height:6px;border-radius:50%;background:#10B981;animation:onP 2s ease-in-out infinite}
+@keyframes onP{0%,100%{opacity:1}50%{opacity:.4}}
 .online-name{font-size:.7rem;font-weight:600;color:#10B981}
 .h-right{display:flex;align-items:center;gap:.6rem;flex-shrink:0}
 .h-user{display:flex;flex-direction:column;align-items:flex-end}
@@ -952,11 +831,7 @@ header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1.75rem;heig
 .btn-hdr-danger:hover{border-color:#EF4444;color:#EF4444}
 .btn-hdr-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .btn-hdr-primary:hover{background:#3B5BDB;border-color:#3B5BDB;color:#fff}
-
-/* MAIN */
 main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
-
-/* METRICS */
 .metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1.25rem}
 .metric-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1.1rem}
 .metric-label{font-size:.65rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem}
@@ -966,10 +841,9 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .mc-green{border-top:2px solid #10B981}.mc-green .metric-value{color:#10B981}
 .mc-purple{border-top:2px solid #8B5CF6}.mc-purple .metric-value{color:#8B5CF6}
 .mc-red{border-top:2px solid #EF4444}.mc-red .metric-value{color:#EF4444}
-
-/* FOLLOW-UP COLUNAS */
+/* FOLLOW-UP */
 .fu-panel{background:#13161F;border:1px solid #1E2235;border-radius:12px;margin-bottom:1.25rem;overflow:hidden}
-@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,0.25)}}
+@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
 .pulsing{animation:pulseGlow 2s ease-in-out infinite}
 .fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
 .fu-panel-title{font-size:.88rem;font-weight:700}
@@ -983,31 +857,68 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .fu-col-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.75rem}
 .fu-col-title{font-size:.75rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .fu-col-count{font-size:.65rem;font-weight:700;border-radius:999px;padding:.1rem .4rem}
-.fu-col-body{display:flex;flex-direction:column;gap:.5rem;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#1E2235 transparent}
+.fu-col-body{display:flex;flex-direction:column;gap:.5rem;max-height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#1E2235 transparent}
 .fu-col-empty{font-size:.8rem;color:#374151;padding:.5rem 0}
-.fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:8px;padding:.75rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.35rem}
+/* FU CARD */
+.fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.8rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
 .fu-card2:hover{border-color:#4F6EF7;transform:translateY(-1px)}
 .fu-card2.fu-late{border-left:3px solid #EF4444}
 .fu2-header{display:flex;align-items:center;justify-content:space-between;gap:.4rem}
-.fu2-name{font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fu2-meta{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
-.fu2-etapa{font-size:.65rem;background:#0B0D14;border-radius:4px;padding:.1rem .35rem;color:#9CA3AF;font-weight:600}
+.fu2-name{font-size:.85rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fu2-meta{display:flex;align-items:center;gap:.4rem}
 .fu2-resp{font-size:.68rem;color:#6B7280}
-.fu2-atraso{font-size:.72rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.1);border-radius:4px;padding:.15rem .4rem}
+.fu2-atraso{font-size:.72rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.1);border-radius:4px;padding:.18rem .45rem;display:inline-flex;align-items:center;gap:.2rem}
 .fu2-hoje{font-size:.72rem;color:#F5A623;font-weight:600}
-.fu2-trail{display:flex;gap:.2rem;align-items:center}
-.trail-dot{font-size:.6rem;background:rgba(16,185,129,.15);color:#10B981;border-radius:3px;padding:.05rem .3rem;font-weight:700}
-.trail-more{font-size:.6rem;color:#6B7280}
 .fu2-note{font-size:.72rem;color:#9CA3AF;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
-.fu2-lastdone{font-size:.65rem;color:#6B7280;background:#13161F;border-radius:4px;padding:.2rem .45rem;border-left:2px solid #10B981}
 .fu2-actions{display:flex;gap:.35rem}
-
+/* MINI TRILHA */
+.fu2-trilha{display:flex;align-items:center;gap:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding:.1rem 0}
+.fu2-trilha::-webkit-scrollbar{display:none}
+.mini-step{font-size:.62rem;font-weight:600;padding:.2rem .45rem;border-radius:4px;white-space:nowrap;transition:all .15s}
+.ms-done{background:rgba(16,185,129,.15);color:#10B981}
+.ms-current{background:#4F6EF7;color:#fff;box-shadow:0 0 0 2px rgba(79,110,247,.3)}
+.ms-pending{background:transparent;color:#374151}
+.mini-arrow{font-size:.65rem;color:#2A2F45;padding:0 .1rem;flex-shrink:0}
+/* PROGRESS BAR HORIZONTAL */
+.progress-bar-h{position:relative;padding:0 .5rem;margin-bottom:1rem}
+.psbh-steps{display:flex;align-items:flex-start;justify-content:space-between;position:relative;z-index:1}
+.psbh-track{position:absolute;top:13px;left:calc(.5rem + 13px);right:calc(.5rem + 13px);height:2px;background:#2A2F45;z-index:0;border-radius:99px}
+.progress-step-h{display:flex;flex-direction:column;align-items:center;gap:.2rem;flex:1;z-index:1;cursor:default}
+.psh-circle{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;border:2px solid #2A2F45;background:#13161F;flex-shrink:0;transition:all .2s}
+.psh-label{font-size:.62rem;font-weight:700;text-align:center;white-space:nowrap}
+.psh-done-info{font-size:.55rem;color:#10B981;text-align:center;line-height:1.3;margin-top:.05rem}
+.ps-done .psh-circle{background:#10B981;border-color:#10B981;color:#fff}
+.ps-done .psh-label{color:#10B981}
+.ps-current .psh-circle{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 4px rgba(79,110,247,.2)}
+.ps-current .psh-label{color:#4F6EF7;font-weight:800}
+.ps-pending .psh-circle{color:#374151;border-color:#2A2F45}
+.ps-pending .psh-label{color:#374151}
+/* FU HISTORY */
+.fuh-section-title{font-size:.65rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.4rem}
+.fuh-list{display:flex;flex-direction:column;gap:.3rem;max-height:130px;overflow-y:auto}
+.fuh-item{display:flex;align-items:center;gap:.55rem;background:#1A1D2E;border-radius:6px;padding:.4rem .65rem;border-left:2px solid #10B981}
+.fuh-badge{background:rgba(16,185,129,.15);color:#10B981;font-size:.65rem;font-weight:700;padding:.12rem .4rem;border-radius:4px;white-space:nowrap;min-width:65px;text-align:center}
+.fuh-detail{display:flex;flex-direction:column;gap:.03rem}
+.fuh-who{font-size:.72rem;font-weight:600;color:#F1F3F9}
+.fuh-when{font-size:.62rem;color:#6B7280}
+.fuh-empty{font-size:.72rem;color:#6B7280;padding:.3rem 0}
+/* LOG */
+.log-section{display:flex;flex-direction:column;gap:.5rem}
+.log-title-lbl{font-size:.68rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
+#lead-log{display:flex;flex-direction:column;gap:.4rem;max-height:180px;overflow-y:auto}
+.log-entry{background:#1A1D2E;border-radius:8px;padding:.6rem .85rem;display:flex;flex-direction:column;gap:.3rem;border-left:2px solid #2A2F45}
+.log-header{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.log-dot{width:6px;height:6px;border-radius:50%;background:#4F6EF7;flex-shrink:0}
+.log-user{font-size:.72rem;font-weight:700;color:#4F6EF7}
+.log-time{font-size:.65rem;color:#6B7280}
+.log-status-chip{font-size:.62rem;font-weight:700;background:rgba(16,185,129,.15);color:#10B981;border-radius:4px;padding:.1rem .35rem}
+.log-body{font-size:.78rem;color:#D1D5DB;line-height:1.5;padding-left:.85rem;border-left:1px solid #2A2F45;margin-left:.15rem}
+.log-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.65rem}
 /* TABS */
 .tabs-row{display:flex;align-items:center;margin-bottom:1rem}
 .tabs{display:flex;gap:.2rem;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:3px}
 .tab-btn{padding:.38rem 1rem;border-radius:5px;border:none;background:transparent;color:#6B7280;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s}
 .tab-btn.tab-active{background:#1E2235;color:#F1F3F9}
-
 /* KANBAN */
 .kanban-board{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem}
 .k-col{background:#13161F;border:1px solid #1E2235;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:260px}
@@ -1028,10 +939,10 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .k-phone{font-size:.68rem;color:#6B7280}
 .k-resp{font-size:.65rem;color:#4F6EF7;font-weight:600}
 .k-late{font-size:.62rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.1);border-radius:3px;padding:.04rem .28rem}
+.k-etapa-badge{display:inline-flex;background:rgba(245,166,35,.12);color:#F5A623;border-radius:4px;font-size:.62rem;font-weight:700;padding:.1rem .38rem;align-self:flex-start}
 .k-note{font-size:.68rem;color:#9CA3AF;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .k-footer{display:flex;align-items:center;justify-content:space-between}
 .k-fu{font-size:.65rem;color:#9CA3AF}
-
 /* TABLE */
 .table-controls{display:flex;gap:.6rem;align-items:center;margin-bottom:.85rem;flex-wrap:wrap}
 .search-input{background:#13161F;border:1px solid #1E2235;border-radius:7px;padding:.45rem .85rem;color:#F1F3F9;font-size:.82rem;outline:none;width:200px;transition:border-color .2s}
@@ -1047,8 +958,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .t-row:last-child td{border-bottom:none}
 .t-name{font-weight:600;color:#F1F3F9}
 .t-note{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9CA3AF}
-
-/* RELATÓRIOS */
+/* REL */
 .rel-controls{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;display:flex;gap:.85rem;flex-wrap:wrap;align-items:flex-end}
 .rel-group{display:flex;flex-direction:column;gap:.35rem}
 .rel-label{font-size:.65rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
@@ -1070,20 +980,17 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .chart-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1.1rem}
 .chart-title{font-size:.72rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.85rem}
 .chart-container{height:200px;position:relative}
-
 /* ESTRATÉGIA */
 #estrategia-content{display:flex;flex-direction:column;gap:1.25rem}
 .est-section{background:#13161F;border:1px solid #1E2235;border-radius:12px;padding:1.25rem}
-.est-section-title{font-size:.82rem;font-weight:700;color:#F1F3F9;margin-bottom:1rem;letter-spacing:.01em}
+.est-section-title{font-size:.82rem;font-weight:700;color:#F1F3F9;margin-bottom:1rem}
 .est-alerts-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}
 .est-alert{background:#0B0D14;border-radius:9px;padding:1rem;text-align:center;border:1px solid transparent}
 .est-alert.alert-red{border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.05)}
 .est-alert.alert-orange{border-color:rgba(245,166,35,.3);background:rgba(245,166,35,.05)}
 .est-alert.alert-ok{border-color:#1E2235}
 .est-alert-num{font-size:2rem;font-weight:800;line-height:1;margin-bottom:.25rem}
-.alert-red .est-alert-num{color:#EF4444}
-.alert-orange .est-alert-num{color:#F5A623}
-.alert-ok .est-alert-num{color:#10B981}
+.alert-red .est-alert-num{color:#EF4444}.alert-orange .est-alert-num{color:#F5A623}.alert-ok .est-alert-num{color:#10B981}
 .est-alert-label{font-size:.7rem;color:#9CA3AF;line-height:1.4}
 .est-pipeline-grid{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem}
 .est-pipe-card{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.85rem 1.25rem;text-align:center;flex:1;min-width:100px}
@@ -1113,7 +1020,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .est-r-tag{font-size:.65rem;font-weight:700;color:#9CA3AF}
 .est-r-name{font-size:.82rem;font-weight:600;color:#F1F3F9}
 .est-r-info{font-size:.7rem;color:#6B7280}
-
 /* EQUIPE */
 .equipe-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
 .equipe-title{font-size:.95rem;font-weight:700}
@@ -1128,7 +1034,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .role-atendente{background:rgba(16,185,129,.12);color:#10B981}
 .btn-edit-user{background:#1E2235;border:1px solid #2A2F45;border-radius:6px;color:#9CA3AF;font-size:.7rem;padding:.3rem .65rem;cursor:pointer;transition:all .15s}
 .btn-edit-user:hover{border-color:#4F6EF7;color:#4F6EF7}
-
 /* SHARED */
 .status-pill{display:inline-flex;padding:.18rem .55rem;border-radius:999px;font-size:.65rem;font-weight:700;white-space:nowrap}
 .campaign-tag{display:inline-flex;background:rgba(79,110,247,.12);color:#4F6EF7;border-radius:4px;font-size:.65rem;font-weight:600;padding:.12rem .4rem}
@@ -1140,17 +1045,16 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .btn-done:hover{background:rgba(16,185,129,.12)}
 .btn-wa-xs{display:inline-flex;background:#1DAA61;color:#fff;border:none;border-radius:5px;padding:.22rem .55rem;font-size:.68rem;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap}
 .urgent-fu{color:#F5A623;font-weight:600}
-
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;display:none;align-items:center;justify-content:center;padding:1rem}
-.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:700px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column}
+.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:720px;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column}
 .modal-head{padding:1.1rem 1.4rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#13161F;z-index:2}
 .modal-title{font-size:.95rem;font-weight:700}
 .modal-close{background:none;border:none;color:#6B7280;font-size:1.2rem;cursor:pointer;transition:color .2s}
 .modal-close:hover{color:#F1F3F9}
 .modal-body{padding:1.4rem;display:flex;flex-direction:column;gap:1.1rem}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
-.f-group{display:flex;flex-direction:column;gap:.35re
+.f-group{display:flex;flex-direction:column;gap:.35rem}
 .f-group.full{grid-column:1/-1}
 .f-label{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 .f-input,.f-select,.f-textarea{background:#1E2235;border:1px solid #2A2F45;border-radius:7px;padding:.55rem .8rem;color:#F1F3F9;font-size:.82rem;font-family:'Inter',sans-serif;outline:none;transition:border-color .2s;width:100%}
@@ -1162,52 +1066,10 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .qn-btn{background:#1E2235;border:1px solid #2A2F45;border-radius:5px;color:#9CA3AF;font-size:.68rem;padding:.25rem .55rem;cursor:pointer;transition:all .12s}
 .qn-btn:hover{background:#2A2F45;color:#F1F3F9;border-color:#4F6EF7}
 .qn-btn.qn-active{background:rgba(79,110,247,.2);border-color:#4F6EF7;color:#4F6EF7;font-weight:700}
-.etapas-section{display:flex;flex-direction:column;gap:.4rem}
-.etapas-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
-#etapas-feitas{display:flex;flex-direction:column;gap:.5rem}
-
-/* PROGRESS BAR */
-.progress-bar-wrap{position:relative;padding-bottom:.5rem}
-.progress-steps{display:flex;align-items:flex-start;justify-content:space-between;position:relative;z-index:1;gap:0}
-.progress-track{position:absolute;top:14px;left:14px;right:14px;height:3px;background:#2A2F45;border-radius:99px;z-index:0}
-.progress-fill{height:100%;background:linear-gradient(90deg,#4F6EF7,#10B981);border-radius:99px;transition:width .4s ease}
-.progress-step{display:flex;flex-direction:column;align-items:center;gap:.25rem;flex:1;cursor:default;position:relative;z-index:1}
-.step-circle{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;border:2px solid #2A2F45;background:#13161F;transition:all .2s;flex-shrink:0}
-.step-label{font-size:.65rem;font-weight:700;white-space:nowrap}
-.step-sub{font-size:.58rem;color:#6B7280;white-space:nowrap}
-.step-done-info{font-size:.55rem;color:#10B981;text-align:center;line-height:1.3;margin-top:.1rem}
-.step-done .step-circle{background:#10B981;border-color:#10B981;color:#fff}
-.step-done .step-label{color:#10B981}
-.step-current .step-circle{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 4px rgba(79,110,247,.25)}
-.step-current .step-label{color:#4F6EF7;font-weight:800}
-.step-pending .step-circle{color:#6B7280}
-.step-pending .step-label{color:#6B7280}
-.step-connector{flex:1;height:0}
-
-/* FU HISTORY */
-.fu-history-title{font-size:.65rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-top:.85rem;margin-bottom:.4rem}
-.fu-history-list{display:flex;flex-direction:column;gap:.3rem;max-height:140px;overflow-y:auto}
-.fu-history-item{display:flex;align-items:center;gap:.6rem;background:#1A1D2E;border-radius:6px;padding:.4rem .65rem;border-left:2px solid #10B981}
-.fu-history-badge{background:rgba(16,185,129,.15);color:#10B981;font-size:.65rem;font-weight:700;padding:.15rem .45rem;border-radius:4px;white-space:nowrap}
-.fu-history-detail{display:flex;flex-direction:column;gap:.05rem}
-.fu-history-who{font-size:.7rem;font-weight:600;color:#F1F3F9}
-.fu-history-when{font-size:.62rem;color:#6B7280}
-
-/* ETAPA BADGE on fu-card */
-.etapa-progress{display:flex;align-items:center;gap:.3rem;margin:.1rem 0}
-.etapa-pip{width:8px;height:8px;border-radius:50%;background:#2A2F45;flex-shrink:0;transition:background .2s}
-.etapa-pip.done{background:#10B981}
-.etapa-pip.current{background:#4F6EF7;box-shadow:0 0 0 2px rgba(79,110,247,.3)}
-.log-section{display:flex;flex-direction:column;gap:.4rem}
-.log-title{font-size:.68rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
-#lead-log{max-height:150px;overflow-y:auto;display:flex;flex-direction:column;gap:.4rem}
-.log-entry{background:#1E2235;border-radius:7px;padding:.55rem .8rem;display:flex;flex-direction:column;gap:.18rem}
-.log-meta{display:flex;gap:.65rem;align-items:center}
-.log-user{font-size:.68rem;font-weight:700;color:#4F6EF7}
-.log-time{font-size:.65rem;color:#6B7280}
-.log-text{font-size:.75rem;color:#D1D5DB;line-height:1.4}
-.log-status-badge{font-size:.67rem;color:#10B981;font-weight:600}
-.log-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.65rem}
+/* PROGRESS SECTION */
+.progress-section{display:flex;flex-direction:column;gap:.6rem}
+.progress-section-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
+#progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem}
 .modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
 .btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
 .btn-delete:hover{background:rgba(239,68,68,.1)}
@@ -1229,7 +1091,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 </style>
 </head>
 <body>
-<!-- PRIMEIRO ACESSO -->
 <div id="screen-first-setup" class="auth-screen" style="display:none">
   <div class="auth-box">
     <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
@@ -1242,7 +1103,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     <button id="btn-setup" class="btn-primary" onclick="criarContaGestora()">Criar minha conta</button>
   </div>
 </div>
-<!-- LOGIN -->
 <div id="screen-login" class="auth-screen" style="display:none">
   <div class="auth-box">
     <div class="auth-logo">COSTA GALVÃO ADVOCACIA</div>
@@ -1253,7 +1113,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     <button id="btn-login" class="btn-primary" onclick="fazerLogin()">Entrar</button>
   </div>
 </div>
-<!-- APP -->
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
     <div class="h-brand">COSTA GALVÃO | CRM</div>
@@ -1262,20 +1121,19 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
       <button class="btn-hdr btn-hdr-danger" onclick="fazerLogout()">Sair</button>
       <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
-      <button class="btn-hdr" onclick="fazerBackup()" title="Backup">💾</button>
+      <button class="btn-hdr" onclick="fazerBackup()" title="Backup completo">💾</button>
       <button class="btn-hdr" onclick="document.getElementById('import-file').click()">⬆ Importar</button>
       <button class="btn-hdr btn-hdr-primary" onclick="openLead('new')">+ Novo Lead</button>
     </div>
   </header>
   <main>
     <div class="metrics-grid">
-      <div class="metric-card mc-blue"><div class="metric-label">Leads no Mês</div><div class="metric-value" id="m-total">—</div></div>
-      <div class="metric-card mc-amber"><div class="metric-label">Em Andamento</div><div class="metric-value" id="m-andamento">—</div></div>
-      <div class="metric-card mc-green"><div class="metric-label">Qualificados</div><div class="metric-value" id="m-qualif">—</div></div>
-      <div class="metric-card mc-purple"><div class="metric-label">Contratos</div><div class="metric-value" id="m-contrato">—</div></div>
-      <div class="metric-card mc-red"><div class="metric-label">Sem Resposta</div><div class="metric-value" id="m-semresp">—</div></div>
+      <div class="metric-card mc-blue">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
+      <div class="metric-card mc-amber"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
+      <div class="metric-card mc-green"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card mc-purple"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
+      <div class="metric-card mc-red">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
     </div>
-    <!-- FOLLOW-UP -->
     <div class="fu-panel" id="fu-panel">
       <div class="fu-panel-header">
         <span style="font-size:1rem">🔥</span>
@@ -1294,17 +1152,15 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         </div>
       </div>
     </div>
-    <!-- TABS -->
     <div class="tabs-row">
       <div class="tabs">
-        <button id="tab-kanban" class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
-        <button id="tab-table" class="tab-btn" onclick="switchTab('table')">Tabela</button>
-        <button id="tab-relatorios" class="tab-btn" onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
-        <button id="tab-estrategia" class="tab-btn" onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
-        <button id="tab-equipe" class="tab-btn" onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
+        <button id="tab-kanban"     class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
+        <button id="tab-table"      class="tab-btn"            onclick="switchTab('table')">Tabela</button>
+        <button id="tab-relatorios" class="tab-btn"            onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
+        <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
+        <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
       </div>
     </div>
-    <!-- KANBAN -->
     <div id="view-kanban">
       <div class="kanban-board">
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
@@ -1314,22 +1170,20 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #EF4444"><span class="k-col-title" style="color:#EF4444">Desqualificados</span><span class="k-col-count" id="col-count-DESQUALIFICADO">0</span></div><div class="k-col-body" id="col-DESQUALIFICADO"></div></div>
       </div>
     </div>
-    <!-- TABLE -->
     <div id="view-table" class="hidden">
       <div class="table-controls">
         <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
         <div class="filter-btns">
-          <button id="filter-ALL" class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
-          <button id="filter-EM ANDAMENTO" class="filter-btn" onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
-          <button id="filter-SEM RESPOSTA" class="filter-btn" onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
-          <button id="filter-QUALIFICADO" class="filter-btn" onclick="setFilter('QUALIFICADO')">Qualificados</button>
-          <button id="filter-CONTRATO FECHADO" class="filter-btn" onclick="setFilter('CONTRATO FECHADO')">Contratos</button>
-          <button id="filter-DESQUALIFICADO" class="filter-btn" onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
+          <button id="filter-ALL"              class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
+          <button id="filter-EM ANDAMENTO"     class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
+          <button id="filter-SEM RESPOSTA"     class="filter-btn"        onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
+          <button id="filter-QUALIFICADO"      class="filter-btn"        onclick="setFilter('QUALIFICADO')">Qualificados</button>
+          <button id="filter-CONTRATO FECHADO" class="filter-btn"        onclick="setFilter('CONTRATO FECHADO')">Contratos</button>
+          <button id="filter-DESQUALIFICADO"   class="filter-btn"        onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
         </div>
       </div>
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
     </div>
-    <!-- RELATÓRIOS -->
     <div id="view-relatorios" class="hidden">
       <div class="rel-controls">
         <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
@@ -1341,10 +1195,10 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <div class="rel-btns"><button class="btn-export" onclick="exportarExcel()">⬇ Excel</button><button class="btn-print" onclick="imprimirRelatorio()">🖨 PDF</button></div>
       </div>
       <div class="rel-kpis">
-        <div class="rel-kpi" id="kpi-total" onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><div class="kpi-clear">✕ limpar</div></div>
-        <div class="rel-kpi" id="kpi-qualif" onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="kpi-clear">✕ limpar</div></div>
         <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="kpi-clear">✕ limpar</div></div>
-        <div class="rel-kpi" id="kpi-desq" onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="kpi-clear">✕ limpar</div></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
       </div>
       <div class="charts-grid">
@@ -1355,7 +1209,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       </div>
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
     </div>
-    <!-- ESTRATÉGIA -->
     <div id="view-estrategia" class="hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
         <div><div style="font-size:.95rem;font-weight:700">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Visão analítica para decisões e intensificação de follow-up</div></div>
@@ -1363,7 +1216,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       </div>
       <div id="estrategia-content"></div>
     </div>
-    <!-- EQUIPE -->
     <div id="view-equipe" class="hidden">
       <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
       <div id="equipe-lista"></div>
@@ -1407,8 +1259,16 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
           </div>
         </div>
       </div>
-      <div class="etapas-section"><div class="etapas-title">📍 Progresso do Follow-up</div><div id="etapas-feitas"></div></div>
-      <div class="log-section"><div class="log-title">Histórico</div><div id="lead-log"></div></div>
+      <!-- PROGRESSO FOLLOW-UP -->
+      <div class="progress-section">
+        <div class="progress-section-title">📍 Progresso do Follow-up</div>
+        <div id="progress-container"></div>
+      </div>
+      <!-- LOG -->
+      <div class="log-section">
+        <div class="log-title-lbl">📋 Histórico de Atualizações</div>
+        <div id="lead-log"></div>
+      </div>
     </div>
     <div class="modal-foot">
       <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir</button>
