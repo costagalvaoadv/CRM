@@ -479,6 +479,110 @@ window.deleteLead = async function() {
   showToast('Lead removido.','warn'); closeLead();
 };
 
+// ── IMPORTAÇÃO EXCEL ──
+window.importarExcel = async function(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const reader = new FileReader();
+  reader.onload = async function(e) {
+    try {
+      const wb   = XLSX.read(e.target.result, { type:'array' });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
+
+      // Pular cabeçalho (linha 0)
+      const dataRows = rows.slice(1).filter(r => r[1] && String(r[1]).trim());
+
+      let importados = 0;
+      let ignorados  = 0;
+
+      showToast(`Importando ${dataRows.length} leads...`, 'warn');
+
+      for (const row of dataRows) {
+        const dataSerial = parseFloat(row[0]);
+        const nome       = String(row[1]||'').trim() || 'Sem Nome';
+        const telefone   = String(row[2]||'').trim();
+        const status     = normalizeStatus(String(row[3]||'').trim());
+        // Campanha: pegar o primeiro campo de campanha não vazio (colunas 4-9)
+        let campanha = '';
+        for (let c = 4; c <= 9; c++) {
+          if (row[c] && String(row[c]).trim()) { campanha = String(row[c]).trim(); break; }
+        }
+        const observacao = String(row[11]||'').trim();
+
+        // Detectar atendente pelo início da observação
+        let atendente = 'Isabel';
+        const obsLower = observacao.toLowerCase();
+        if (obsLower.startsWith('joelma')) atendente = 'Joelma';
+        else if (obsLower.startsWith('isabel')) atendente = 'Isabel';
+
+        // Detectar tipo — todas as campanhas SM são Salário Maternidade
+        const tipo = (campanha.toUpperCase().includes('SM') || obsLower.includes('salário maternidade') || obsLower.includes('salario maternidade')) ? 'SM' : 'GERAL';
+
+        // Converter data serial do Excel para JS Date
+        let createdAt = new Date();
+        if (dataSerial > 0) {
+          // Data serial Excel: dias desde 1/1/1900 (com bug do ano 1900)
+          const excelEpoch = new Date(1899, 11, 30);
+          createdAt = new Date(excelEpoch.getTime() + dataSerial * 86400000);
+        }
+
+        // Calcular próximo follow-up (1 dia após entrada)
+        const nextFu = new Date(createdAt);
+        nextFu.setDate(nextFu.getDate() + 1);
+
+        // Log inicial com a observação da planilha
+        const logEntry = observacao ? [{
+          user: atendente,
+          note: observacao,
+          ts: createdAt.toISOString(),
+          statusChange: null
+        }] : [];
+
+        try {
+          await addDoc(collection(db, "leads"), {
+            name:         nome,
+            phone:        telefone,
+            campaign:     campanha,
+            status:       status,
+            tipo:         tipo,
+            assignee:     atendente,
+            currentNote:  observacao,
+            nextFollowup: Timestamp.fromDate(nextFu),
+            dataParto:    null,
+            etapaFollowup: 0,
+            createdAt:    Timestamp.fromDate(createdAt),
+            lastContact:  Timestamp.fromDate(createdAt),
+            log:          logEntry,
+            importado:    true
+          });
+          importados++;
+        } catch(err) {
+          ignorados++;
+        }
+      }
+
+      showToast(`✅ ${importados} leads importados com sucesso!${ignorados ? ` (${ignorados} erros)` : ''}`);
+    } catch(err) {
+      showToast('Erro ao ler o arquivo: ' + err.message, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+};
+
+function normalizeStatus(s) {
+  const map = {
+    'EM ANDAMENTO': 'EM ANDAMENTO',
+    'QUALIFICADO':  'QUALIFICADO',
+    'DESQUALIFICADO': 'DESQUALIFICADO',
+    'SEM RESPOSTA': 'SEM RESPOSTA',
+    'CONTRATO FECHADO': 'CONTRATO FECHADO',
+  };
+  return map[s.toUpperCase()] || 'EM ANDAMENTO';
+}
+
 // ── RELATÓRIOS ──
 function getFilteredLeads() {
   const periodo  = document.getElementById('rel-periodo')?.value||'mes-atual';
@@ -691,6 +795,8 @@ header{background:#0F1117;border-bottom:1px solid #252836;padding:0 1.5rem;heigh
 .btn-logout:hover{border-color:#EF4444;color:#EF4444}
 .btn-new{background:#4F6EF7;color:#fff;border:none;border-radius:8px;padding:.45rem 1.1rem;font-size:.85rem;font-weight:600;cursor:pointer;transition:background .2s}
 .btn-new:hover{background:#3B5BDB}
+.btn-import{background:#252836;border:1px solid #2E3347;color:#9CA3AF;border-radius:8px;padding:.45rem 1rem;font-size:.82rem;font-weight:600;cursor:pointer;transition:all .2s}
+.btn-import:hover{border-color:#10B981;color:#10B981}
 
 /* MAIN */
 main{padding:1.5rem;max-width:1600px;margin:0 auto}
@@ -913,6 +1019,8 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
       <button class="btn-logout" onclick="fazerLogout()">Sair</button>
+      <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
+      <button class="btn-import" onclick="document.getElementById('import-file').click()">⬆ Importar Excel</button>
       <button class="btn-new" onclick="openLead('new')">+ Novo Lead</button>
     </div>
   </header>
