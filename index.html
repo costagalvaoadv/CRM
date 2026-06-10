@@ -247,48 +247,66 @@ function renderFollowups(){
   const todayEnd=new Date(now);todayEnd.setHours(23,59,59,999);
   const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
 
-  // All leads with active follow-up (pending or overdue)
-  let leads=allLeads.filter(l=>{
+  // Pendentes/atrasados (aparecem no painel hoje)
+  let pendentes=allLeads.filter(l=>{
     if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
     if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<=todayEnd;
   });
-  if(fuFilter!=='TODOS')leads=leads.filter(l=>l.assignee===fuFilter);
 
-  const total=leads.length;
+  // Agendados (follow-up feito, próximo ainda não chegou)
+  let agendados=allLeads.filter(l=>{
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
+    if(!l.nextFollowup)return false;
+    const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+    return d>todayEnd;
+  });
+
+  if(fuFilter!=='TODOS'){
+    pendentes=pendentes.filter(l=>l.assignee===fuFilter);
+    agendados=agendados.filter(l=>l.assignee===fuFilter);
+  }
+
+  const total=pendentes.length;
   const badge=document.getElementById('fu-badge');
   badge.textContent=total;badge.style.display=total?'flex':'none';
   document.getElementById('fu-panel').classList.toggle('pulsing',total>0);
 
-  // Group by current etapa label
-  const SM_LABELS   =TRILHA_SM_LABELS;
-  const GERAL_LABELS=TRILHA_GERAL_LABELS;
-  // All possible stage labels across both trilhas
   const ALL_STAGES=['FUP 24h','FUP 3d','FUP 7d','FUP 15d','FUP 30d','Mensal'];
-
   const stageMap={};
   ALL_STAGES.forEach(s=>stageMap[s]=[]);
 
-  leads.forEach(l=>{
+  pendentes.forEach(l=>{
     const trilhaLabels=getTrilha(l.tipo||'SM');
     const etapa=l.etapaFollowup||0;
     const curLabel=trilhaLabels[etapa]||(l.tipo==='SM'?'Mensal':'FUP 30d');
     if(stageMap[curLabel])stageMap[curLabel].push(l);
-    else stageMap[ALL_STAGES[ALL_STAGES.length-1]].push(l);
+    else stageMap['Mensal'].push(l);
   });
 
-  // Render stage columns
+  // Agrupar agendados por próxima etapa
+  const agendadosMap={};
+  ALL_STAGES.forEach(s=>agendadosMap[s]=[]);
+  agendados.forEach(l=>{
+    const trilhaLabels=getTrilha(l.tipo||'SM');
+    const etapa=l.etapaFollowup||0;
+    const nextLabel=trilhaLabels[etapa]||(l.tipo==='SM'?'Mensal':'FUP 30d');
+    if(agendadosMap[nextLabel])agendadosMap[nextLabel].push(l);
+    else agendadosMap['Mensal'].push(l);
+  });
+
   const stagesContainer=document.getElementById('fu-stages');
   if(!stagesContainer)return;
 
-  // Always show ALL stages — empty ones show placeholder
   stagesContainer.innerHTML=ALL_STAGES.map(stage=>{
     const stageleads=stageMap[stage]||[];
+    const stageAgendados=agendadosMap[stage]||[];
     const overdueCount=stageleads.filter(l=>{
       const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
       return d<todayStart;
     }).length;
+
     return `
     <div class="fu-stage-col">
       <div class="fu-stage-header">
@@ -298,11 +316,34 @@ function renderFollowups(){
       </div>
       <div class="fu-stage-body">
         ${stageleads.length
-          ? stageleads.map(l=>fuCard(l,todayStart)).join('')
-          : `<div class="fu-stage-empty">Nenhum lead aqui</div>`}
+          ?stageleads.map(l=>fuCard(l,todayStart)).join('')
+          :`<div class="fu-stage-empty">Nenhum pendente</div>`}
+        ${stageAgendados.length?`
+          <div class="fu-agendados-sep">
+            <span>📅 Agendados (${stageAgendados.length})</span>
+          </div>
+          ${stageAgendados.map(l=>{
+            const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+            const diasRestantes=Math.ceil((fu-todayStart)/(1000*60*60*24));
+            const wa=formatPhone(l.phone);
+            return `
+            <div class="fu-card-agendado" onclick="openLead('${l.id}')">
+              <div class="fu2-header">
+                <span class="fu2-name">${l.name||'Sem Nome'}</span>
+                <span class="fua-dias">em ${diasRestantes}d</span>
+              </div>
+              <div class="fu2-meta">
+                ${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}
+                <span class="fu2-resp">${l.assignee||'—'}</span>
+              </div>
+              <div class="fua-data">📅 ${formatDate(fu)}</div>
+              ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" onclick="event.stopPropagation()" style="margin-top:.3rem">WhatsApp</a>`:''}
+            </div>`;
+          }).join('')}`:''}
       </div>
     </div>`;
   }).join('');
+}
 }
 
 function fuCard(l,todayStart){
@@ -954,9 +995,16 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
 .fu-panel-title{font-size:.88rem;font-weight:700}
 .fu-badge{background:#F5A623;color:#0B0D14;font-size:.65rem;font-weight:800;border-radius:999px;padding:.15rem .5rem;display:none}
-.fu-filter-btns{display:flex;gap:.3rem;margin-left:auto}
-.fu-filter-btn{padding:.25rem .7rem;border-radius:5px;border:1px solid #1E2235;background:#0B0D14;color:#6B7280;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s}
+.fu-filter-btns{display:flex;gap:.3rem;margin-left:auto;overflow-x:auto;scrollbar-width:none;flex-shrink:0;max-width:50%;padding-bottom:2px}
+.fu-filter-btns::-webkit-scrollbar{display:none}
+.fu-filter-btn{padding:.25rem .7rem;border-radius:5px;border:1px solid #1E2235;background:#0B0D14;color:#6B7280;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
 .fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
+/* FU AGENDADOS */
+.fu-agendados-sep{font-size:.65rem;font-weight:700;color:#6B7280;padding:.4rem .2rem .2rem;border-top:1px solid #2A2F45;margin-top:.3rem;display:flex;align-items:center;gap:.3rem}
+.fu-card-agendado{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.65rem .75rem;cursor:pointer;transition:border-color .15s;display:flex;flex-direction:column;gap:.3rem;opacity:.75}
+.fu-card-agendado:hover{border-color:#4F6EF7;opacity:1}
+.fua-dias{font-size:.65rem;font-weight:700;color:#4F6EF7;background:rgba(79,110,247,.12);border-radius:4px;padding:.1rem .35rem;white-space:nowrap}
+.fua-data{font-size:.68rem;color:#6B7280}
 /* FU STAGE KANBAN */
 .fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
