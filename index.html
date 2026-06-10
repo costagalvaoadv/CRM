@@ -8,7 +8,6 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
@@ -27,152 +26,153 @@ const app  = initializeApp(firebaseConfig);
 const db   = getFirestore(app);
 const auth = getAuth(app);
 
-let currentUser = null;
-let allLeads = [];
-let allUsers = [];
+let currentUser   = null;
+let allLeads      = [];
+let allUsers      = [];
 let editingLeadId = null;
-let currentTab = 'kanban';
-let filterStatus = 'ALL';
-let searchQuery = '';
-let chartInstances = {};
+let currentTab    = 'kanban';
+let filterStatus  = 'ALL';
+let searchQuery   = '';
+let chartInstances= {};
+let fuFilter      = 'MEUS';
+let relKpiFilter  = null;
+let activeQuickNotes = new Set();
 
-// ── STATUS ──
 const STATUS_META = {
-  'EM ANDAMENTO':    { color:'#4F6EF7', bg:'rgba(79,110,247,0.12)',   label:'Em Andamento' },
-  'QUALIFICADO':     { color:'#10B981', bg:'rgba(16,185,129,0.12)',   label:'Qualificado' },
-  'CONTRATO FECHADO':{ color:'#8B5CF6', bg:'rgba(139,92,246,0.12)',   label:'Contrato Fechado' },
-  'DESQUALIFICADO':  { color:'#EF4444', bg:'rgba(239,68,68,0.12)',    label:'Desqualificado' },
-  'SEM RESPOSTA':    { color:'#F5A623', bg:'rgba(245,166,35,0.12)',   label:'Sem Resposta' },
+  'EM ANDAMENTO':    { color:'#4F6EF7', bg:'rgba(79,110,247,0.12)',  label:'Em Andamento' },
+  'QUALIFICADO':     { color:'#10B981', bg:'rgba(16,185,129,0.12)',  label:'Qualificado' },
+  'CONTRATO FECHADO':{ color:'#8B5CF6', bg:'rgba(139,92,246,0.12)', label:'Contrato Fechado' },
+  'DESQUALIFICADO':  { color:'#EF4444', bg:'rgba(239,68,68,0.12)',   label:'Desqualificado' },
+  'SEM RESPOSTA':    { color:'#F5A623', bg:'rgba(245,166,35,0.12)',  label:'Sem Resposta' },
 };
 
-const TRILHA_SM    = [1, 3, 7, 15]; // dias, depois mensal até parto
-const TRILHA_GERAL = [1, 3, 7, 15, 30];
+const TRILHA_SM    = [1,3,7,15];
+const TRILHA_GERAL = [1,3,7,15,30];
 
 // ── AUTH ──
 onAuthStateChanged(auth, async user => {
   if (user) {
-    const snap = await getDoc(doc(db, "usuarios", user.uid));
-    if (snap.exists()) {
-      currentUser = { uid: user.uid, email: user.email, ...snap.data() };
+    const snap = await getDoc(doc(db,"usuarios",user.uid)).catch(()=>null);
+    if (snap?.exists()) {
+      currentUser = { uid:user.uid, email:user.email, ...snap.data() };
       showApp();
     } else { await signOut(auth); showScreen('login'); }
   } else {
     currentUser = null;
-    const snap = await getDoc(doc(db, "config", "setup")).catch(()=>null);
-    showScreen((!snap || !snap.exists() || !snap.data()?.configured) ? 'first-setup' : 'login');
+    const snap = await getDoc(doc(db,"config","setup")).catch(()=>null);
+    showScreen((!snap?.exists()||!snap.data()?.configured) ? 'first-setup':'login');
   }
 });
 
-function showScreen(name) {
-  ['first-setup','login','app'].forEach(s => {
-    const el = document.getElementById('screen-'+s);
-    if (el) el.style.display = 'none';
+function showScreen(n) {
+  ['first-setup','login','app'].forEach(s=>{
+    const el=document.getElementById('screen-'+s);
+    if(el) el.style.display='none';
   });
-  const el = document.getElementById('screen-'+name);
-  if (el) el.style.display = name === 'app' ? 'flex' : 'flex';
+  const el=document.getElementById('screen-'+n);
+  if(el) el.style.display='flex';
 }
 
 function showApp() {
   showScreen('app');
-  document.getElementById('header-name').textContent = currentUser.nome || currentUser.email;
-  document.getElementById('header-role').textContent = currentUser.role === 'gestora' ? 'Gestora' : 'Atendente';
-  document.getElementById('tab-equipe').style.display    = currentUser.role === 'gestora' ? 'inline-block' : 'none';
-  document.getElementById('tab-relatorios').style.display = currentUser.role === 'gestora' ? 'inline-block' : 'none';
+  document.getElementById('header-name').textContent = currentUser.nome||currentUser.email;
+  document.getElementById('header-role').textContent = currentUser.role==='gestora'?'Gestora':'Atendente';
+  document.getElementById('tab-equipe').style.display    = currentUser.role==='gestora'?'inline-block':'none';
+  document.getElementById('tab-relatorios').style.display= currentUser.role==='gestora'?'inline-block':'none';
+  // Follow-up filter default
+  fuFilter = currentUser.role==='gestora' ? 'TODOS' : 'MEUS';
+  renderFuFilterBtns();
   startLeadsListener();
-  if (currentUser.role === 'gestora') startUsersListener();
+  if(currentUser.role==='gestora') startUsersListener();
 }
 
-// ── PRIMEIRO ACESSO ──
+// ── FIRST SETUP ──
 window.criarContaGestora = async function() {
-  const nome  = document.getElementById('setup-nome').value.trim();
-  const email = document.getElementById('setup-email').value.trim();
-  const senha = document.getElementById('setup-senha').value;
-  const conf  = document.getElementById('setup-conf').value;
-  if (!nome||!email||!senha) return showToast('Preencha todos os campos','error');
-  if (senha !== conf) return showToast('Senhas não coincidem','error');
-  if (senha.length < 6) return showToast('Mínimo 6 caracteres','error');
+  const nome=document.getElementById('setup-nome').value.trim();
+  const email=document.getElementById('setup-email').value.trim();
+  const senha=document.getElementById('setup-senha').value;
+  const conf=document.getElementById('setup-conf').value;
+  if(!nome||!email||!senha) return showToast('Preencha todos os campos','error');
+  if(senha!==conf) return showToast('Senhas não coincidem','error');
+  if(senha.length<6) return showToast('Mínimo 6 caracteres','error');
   try {
-    setBtnLoading('btn-setup', true);
-    const cred = await createUserWithEmailAndPassword(auth, email, senha);
-    await setDoc(doc(db,"usuarios",cred.user.uid), { nome, email, role:'gestora', ativo:true, criadoEm:serverTimestamp() });
-    await setDoc(doc(db,"config","setup"), { configured:true });
+    setBtnLoading('btn-setup',true);
+    const cred=await createUserWithEmailAndPassword(auth,email,senha);
+    await setDoc(doc(db,"usuarios",cred.user.uid),{nome,email,role:'gestora',ativo:true,criadoEm:serverTimestamp()});
+    await setDoc(doc(db,"config","setup"),{configured:true});
     showToast('Conta criada!');
-  } catch(e) { showToast(fbErr(e.code),'error'); }
-  finally { setBtnLoading('btn-setup', false); }
+  } catch(e){showToast(fbErr(e.code),'error');}
+  finally{setBtnLoading('btn-setup',false);}
 };
 
 window.fazerLogin = async function() {
-  const email = document.getElementById('login-email').value.trim();
-  const senha = document.getElementById('login-senha').value;
-  if (!email||!senha) return showToast('Preencha e-mail e senha','error');
-  try {
-    setBtnLoading('btn-login', true);
-    await signInWithEmailAndPassword(auth, email, senha);
-  } catch(e) { showToast(fbErr(e.code),'error'); }
-  finally { setBtnLoading('btn-login', false); }
+  const email=document.getElementById('login-email').value.trim();
+  const senha=document.getElementById('login-senha').value;
+  if(!email||!senha) return showToast('Preencha e-mail e senha','error');
+  try{setBtnLoading('btn-login',true); await signInWithEmailAndPassword(auth,email,senha);}
+  catch(e){showToast(fbErr(e.code),'error');}
+  finally{setBtnLoading('btn-login',false);}
 };
 
 window.fazerLogout = async function() {
-  if (!confirm('Deseja sair?')) return;
+  if(!confirm('Deseja sair?')) return;
   await signOut(auth);
 };
 
 // ── EQUIPE ──
 function startUsersListener() {
-  onSnapshot(collection(db,"usuarios"), snap => {
-    allUsers = snap.docs.map(d=>({id:d.id,...d.data()}));
-    if (currentTab === 'equipe') renderEquipe();
+  onSnapshot(collection(db,"usuarios"),snap=>{
+    allUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
+    if(currentTab==='equipe') renderEquipe();
+    renderFuFilterBtns();
   });
 }
 
 window.abrirModalEquipe = function(uid) {
-  const u = uid ? allUsers.find(x=>x.id===uid) : null;
-  document.getElementById('eq-uid').value   = uid||'';
-  document.getElementById('eq-nome').value  = u?.nome||'';
-  document.getElementById('eq-email').value = u?.email||'';
-  document.getElementById('eq-role').value  = u?.role||'atendente';
-  document.getElementById('eq-senha').value = '';
-  document.getElementById('eq-modal-title').textContent = u ? 'Editar Colaboradora' : 'Nova Colaboradora';
-  document.getElementById('eq-senha-row').style.display = u ? 'none' : 'flex';
-  document.getElementById('btn-eq-delete').style.display = u ? 'block' : 'none';
-  document.getElementById('modal-equipe').style.display = 'flex';
+  const u=uid?allUsers.find(x=>x.id===uid):null;
+  document.getElementById('eq-uid').value=uid||'';
+  document.getElementById('eq-nome').value=u?.nome||'';
+  document.getElementById('eq-email').value=u?.email||'';
+  document.getElementById('eq-role').value=u?.role||'atendente';
+  document.getElementById('eq-senha').value='';
+  document.getElementById('eq-modal-title').textContent=u?'Editar Colaboradora':'Nova Colaboradora';
+  document.getElementById('eq-senha-row').style.display=u?'none':'flex';
+  document.getElementById('btn-eq-delete').style.display=u?'block':'none';
+  document.getElementById('modal-equipe').style.display='flex';
 };
-window.fecharModalEquipe = () => document.getElementById('modal-equipe').style.display='none';
+window.fecharModalEquipe=()=>document.getElementById('modal-equipe').style.display='none';
 
 window.salvarColaboradora = async function() {
-  const uid   = document.getElementById('eq-uid').value;
-  const nome  = document.getElementById('eq-nome').value.trim();
-  const email = document.getElementById('eq-email').value.trim();
-  const role  = document.getElementById('eq-role').value;
-  const senha = document.getElementById('eq-senha').value;
-  if (!nome||!email) return showToast('Nome e e-mail obrigatórios','error');
-  if (uid) {
-    await updateDoc(doc(db,"usuarios",uid),{nome,role});
-    showToast('Atualizado!'); fecharModalEquipe();
-  } else {
-    if (!senha||senha.length<6) return showToast('Senha mínimo 6 caracteres','error');
-    try {
+  const uid=document.getElementById('eq-uid').value;
+  const nome=document.getElementById('eq-nome').value.trim();
+  const email=document.getElementById('eq-email').value.trim();
+  const role=document.getElementById('eq-role').value;
+  const senha=document.getElementById('eq-senha').value;
+  if(!nome||!email) return showToast('Nome e e-mail obrigatórios','error');
+  if(uid){ await updateDoc(doc(db,"usuarios",uid),{nome,role}); showToast('Atualizado!'); fecharModalEquipe(); }
+  else {
+    if(!senha||senha.length<6) return showToast('Senha mínimo 6 caracteres','error');
+    try{
       setBtnLoading('btn-eq-save',true);
-      const cred = await createUserWithEmailAndPassword(auth,email,senha);
+      const cred=await createUserWithEmailAndPassword(auth,email,senha);
       await setDoc(doc(db,"usuarios",cred.user.uid),{nome,email,role,ativo:true,criadoEm:serverTimestamp()});
       showToast('Colaboradora criada! Recarregando...');
       setTimeout(()=>location.reload(),1500);
-    } catch(e) { showToast(fbErr(e.code),'error'); }
-    finally { setBtnLoading('btn-eq-save',false); }
+    }catch(e){showToast(fbErr(e.code),'error');}
+    finally{setBtnLoading('btn-eq-save',false);}
   }
 };
 
 window.excluirColaboradora = async function() {
-  const uid = document.getElementById('eq-uid').value;
-  if (!uid||!confirm('Remover acesso?')) return;
+  const uid=document.getElementById('eq-uid').value;
+  if(!uid||!confirm('Remover acesso?')) return;
   await updateDoc(doc(db,"usuarios",uid),{ativo:false});
   showToast('Acesso removido.','warn'); fecharModalEquipe();
 };
 
 function renderEquipe() {
-  const el = document.getElementById('equipe-lista');
-  if (!el) return;
-  el.innerHTML = allUsers.map(u=>`
+  const el=document.getElementById('equipe-lista'); if(!el) return;
+  el.innerHTML=allUsers.map(u=>`
     <div class="user-card">
       <div class="user-avatar">${(u.nome||'?')[0].toUpperCase()}</div>
       <div class="user-info">
@@ -186,98 +186,86 @@ function renderEquipe() {
 
 // ── LEADS ──
 function startLeadsListener() {
-  const q = query(collection(db,"leads"), orderBy("createdAt","desc"));
-  onSnapshot(q, snap => {
-    allLeads = snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderAll();
-  });
+  const q=query(collection(db,"leads"),orderBy("createdAt","desc"));
+  onSnapshot(q,snap=>{ allLeads=snap.docs.map(d=>({id:d.id,...d.data()})); renderAll(); });
 }
 
-// ── TRILHA DE FOLLOW-UP ──
-function calcularProximoFollowup(lead) {
-  const trilha = lead.tipo === 'SM' ? TRILHA_SM : TRILHA_GERAL;
-  const etapa  = lead.etapaFollowup || 0;
-  const base   = lead.lastContact?.toDate ? lead.lastContact.toDate() : new Date();
-
-  if (lead.tipo === 'SM' && etapa >= trilha.length) {
-    // Fase mensal até data do parto
-    if (!lead.dataParto) return null;
-    const parto  = lead.dataParto?.toDate ? lead.dataParto.toDate() : new Date(lead.dataParto);
-    const ultimo = lead.ultimoFollowupMensal?.toDate ? lead.ultimoFollowupMensal.toDate() : base;
-    const proximo = new Date(ultimo);
-    proximo.setMonth(proximo.getMonth() + 1);
-    return proximo > parto ? null : proximo;
-  }
-  if (etapa >= trilha.length) return null;
-  const d = new Date(base);
-  d.setDate(d.getDate() + trilha[etapa]);
-  return d;
+// ── FOLLOW-UP FILTER ──
+function renderFuFilterBtns() {
+  const cont = document.getElementById('fu-filter-btns'); if(!cont) return;
+  const names = ['TODOS','MEUS',...allUsers.map(u=>u.nome)];
+  const unique = [...new Set(names)];
+  cont.innerHTML = unique.map(n=>`
+    <button class="fu-filter-btn ${fuFilter===n?'active':''}" onclick="setFuFilter('${n}')">${n==='MEUS'?'Meus':n==='TODOS'?'Todos':n}</button>
+  `).join('');
 }
 
-async function avancarEtapaFollowup(id) {
-  const l = allLeads.find(x=>x.id===id);
-  if (!l) return;
-  const trilha = l.tipo === 'SM' ? TRILHA_SM : TRILHA_GERAL;
-  const etapa  = (l.etapaFollowup||0) + 1;
-  const proximo = calcularProximoFollowup({...l, etapaFollowup: etapa, lastContact: {toDate:()=>new Date()}});
-  const upd = {
-    etapaFollowup: etapa,
-    lastContact: serverTimestamp(),
-    nextFollowup: proximo ? Timestamp.fromDate(proximo) : null,
-    log: arrayUnion({ user: currentUser?.nome||'—', note:'Follow-up realizado — próxima etapa agendada', ts: new Date().toISOString(), statusChange: null })
-  };
-  if (l.tipo === 'SM' && etapa >= trilha.length) upd.ultimoFollowupMensal = serverTimestamp();
-  await updateDoc(doc(db,"leads",id), upd);
-  showToast('Follow-up concluído! Próximo agendado.');
-}
+window.setFuFilter = function(f) {
+  fuFilter=f;
+  renderFuFilterBtns();
+  renderFollowups();
+};
 
 // ── RENDER ALL ──
 function renderAll() {
   renderMetrics();
   renderFollowups();
-  if (currentTab==='kanban') renderKanban();
-  else if (currentTab==='table') renderTable();
-  else if (currentTab==='equipe') renderEquipe();
-  else if (currentTab==='relatorios') renderRelatorios();
+  if(currentTab==='kanban') renderKanban();
+  else if(currentTab==='table') renderTable();
+  else if(currentTab==='equipe') renderEquipe();
+  else if(currentTab==='relatorios') renderRelatorios();
 }
 
 function renderMetrics() {
-  const now = new Date();
-  const m = now.getMonth(), y = now.getFullYear();
-  const monthly = allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); return d&&d.getMonth()===m&&d.getFullYear()===y; });
-  document.getElementById('m-total').textContent    = monthly.length;
-  document.getElementById('m-andamento').textContent = monthly.filter(l=>l.status==='EM ANDAMENTO').length;
-  document.getElementById('m-qualif').textContent   = monthly.filter(l=>l.status==='QUALIFICADO').length;
-  document.getElementById('m-contrato').textContent = monthly.filter(l=>l.status==='CONTRATO FECHADO').length;
-  document.getElementById('m-semresp').textContent  = monthly.filter(l=>l.status==='SEM RESPOSTA').length;
+  const now=new Date(); const m=now.getMonth(),y=now.getFullYear();
+  const mo=allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); return d&&d.getMonth()===m&&d.getFullYear()===y; });
+  document.getElementById('m-total').textContent    = mo.length;
+  document.getElementById('m-andamento').textContent= mo.filter(l=>l.status==='EM ANDAMENTO').length;
+  document.getElementById('m-qualif').textContent   = mo.filter(l=>l.status==='QUALIFICADO').length;
+  document.getElementById('m-contrato').textContent = mo.filter(l=>l.status==='CONTRATO FECHADO').length;
+  document.getElementById('m-semresp').textContent  = mo.filter(l=>l.status==='SEM RESPOSTA').length;
 }
 
 function renderFollowups() {
-  const today = new Date(); today.setHours(23,59,59,999);
-  const urgent = allLeads.filter(l=>{
-    if (!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)) return false;
-    if (!l.nextFollowup) return false;
-    const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
-    return d <= today;
+  const today=new Date(); today.setHours(23,59,59,999);
+  const todayStart=new Date(); todayStart.setHours(0,0,0,0);
+
+  let urgent=allLeads.filter(l=>{
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)) return false;
+    if(!l.nextFollowup) return false;
+    const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+    return d<=today;
   });
-  const badge = document.getElementById('fu-badge');
-  badge.textContent = urgent.length;
-  badge.style.display = urgent.length ? 'flex' : 'none';
-  const container = document.getElementById('followup-cards');
-  if (!urgent.length) {
-    container.innerHTML = `<div class="empty-fu">✅ Nenhum follow-up pendente hoje</div>`;
+
+  // Apply filter
+  if(fuFilter==='MEUS') urgent=urgent.filter(l=>l.assignee===currentUser?.nome);
+  else if(fuFilter!=='TODOS') urgent=urgent.filter(l=>l.assignee===fuFilter);
+
+  const badge=document.getElementById('fu-badge');
+  badge.textContent=urgent.length;
+  badge.style.display=urgent.length?'flex':'none';
+
+  const container=document.getElementById('followup-cards');
+  if(!urgent.length){
+    container.innerHTML=`<div class="empty-fu">✅ Nenhum follow-up pendente</div>`;
     document.getElementById('fu-panel').classList.remove('pulsing');
     return;
   }
   document.getElementById('fu-panel').classList.add('pulsing');
-  container.innerHTML = urgent.map(l=>{
-    const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
-    const isOverdue = fu < new Date(new Date().setHours(0,0,0,0));
-    const sm = STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
-    const wa = formatPhone(l.phone);
-    const trilha = l.tipo==='SM' ? TRILHA_SM : TRILHA_GERAL;
-    const etapa  = l.etapaFollowup||0;
-    const etapaLabel = l.tipo==='SM' && etapa>=trilha.length ? 'Mensal' : `Etapa ${etapa+1}`;
+
+  container.innerHTML=urgent.map(l=>{
+    const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+    const daysLate=Math.floor((todayStart-fu)/(1000*60*60*24));
+    const isOverdue=fu<todayStart;
+    const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
+    const wa=formatPhone(l.phone);
+    const trilha=l.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
+    const etapa=l.etapaFollowup||0;
+    const etapaLabel=l.tipo==='SM'&&etapa>=trilha.length?'Mensal':`Etapa ${etapa+1}`;
+
+    // Etapas anteriores já feitas
+    const etapasFeitas=l.followupHistory||[];
+
     return `
     <div class="fu-card ${isOverdue?'overdue':''}" onclick="openLead('${l.id}')">
       <div class="fu-top">
@@ -285,11 +273,16 @@ function renderFollowups() {
         <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
       </div>
       <div class="fu-meta">
-        ${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'Sal. Maternidade':'Geral'}</span>`:''}
-        <span class="fu-etapa">${etapaLabel}</span>
+        ${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}
+        <span class="fu-etapa-badge">${etapaLabel}</span>
         <span class="fu-resp">${l.assignee||'—'}</span>
-        <span class="fu-date ${isOverdue?'text-red':''}">${isOverdue?'⚠️ ':'📅 '}${formatDate(fu)}</span>
       </div>
+      ${isOverdue?`<div class="fu-atraso">⚠️ ${daysLate===0?'Vence hoje':`${daysLate} dia${daysLate>1?'s':''} em atraso`}</div>`:`<div class="fu-date-ok">📅 ${formatDate(fu)}</div>`}
+      ${etapasFeitas.length?`
+        <div class="fu-trail">
+          ${etapasFeitas.slice(-3).map(e=>`<span class="fu-trail-dot" title="${e.label} — ${formatDatetime(new Date(e.doneAt))}">✓${e.etapa}</span>`).join('')}
+          ${etapasFeitas.length>3?`<span class="fu-trail-more">+${etapasFeitas.length-3}</span>`:''}
+        </div>`:''}
       ${l.currentNote?`<div class="fu-note">${l.currentNote}</div>`:''}
       <div class="fu-actions" onclick="event.stopPropagation()">
         ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa">WhatsApp</a>`:''}
@@ -299,28 +292,93 @@ function renderFollowups() {
   }).join('');
 }
 
+// ── TRILHA ──
+function calcularProximoFollowup(lead) {
+  const trilha=lead.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
+  const etapa=lead.etapaFollowup||0;
+  const base=lead.lastContact?.toDate?lead.lastContact.toDate():new Date();
+  if(lead.tipo==='SM'&&etapa>=trilha.length){
+    if(!lead.dataParto) return null;
+    const parto=lead.dataParto?.toDate?lead.dataParto.toDate():new Date(lead.dataParto);
+    const ultimo=lead.ultimoFollowupMensal?.toDate?lead.ultimoFollowupMensal.toDate():base;
+    const prox=new Date(ultimo); prox.setMonth(prox.getMonth()+1);
+    return prox>parto?null:prox;
+  }
+  if(etapa>=trilha.length) return null;
+  const d=new Date(base); d.setDate(d.getDate()+trilha[etapa]);
+  return d;
+}
+
+async function avancarEtapaFollowup(id) {
+  const l=allLeads.find(x=>x.id===id); if(!l) return;
+  const trilha=l.tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
+  const etapa=(l.etapaFollowup||0)+1;
+  const prox=calcularProximoFollowup({...l,etapaFollowup:etapa,lastContact:{toDate:()=>new Date()}});
+  const etapaLabel=l.tipo==='SM'&&etapa-1>=trilha.length?'Mensal':`Etapa ${etapa}`;
+  const histEntry={
+    etapa:etapa,
+    label:etapaLabel,
+    doneAt:new Date().toISOString(),
+    doneBy:currentUser?.nome||'—'
+  };
+  const upd={
+    etapaFollowup:etapa,
+    lastContact:serverTimestamp(),
+    nextFollowup:prox?Timestamp.fromDate(prox):null,
+    followupHistory:arrayUnion(histEntry),
+    log:arrayUnion({user:currentUser?.nome||'—',note:`Follow-up ${etapaLabel} realizado${prox?' — próximo: '+formatDate(prox):''}`,ts:new Date().toISOString(),statusChange:null})
+  };
+  if(l.tipo==='SM'&&etapa>=trilha.length) upd.ultimoFollowupMensal=serverTimestamp();
+  await updateDoc(doc(db,"leads",id),upd);
+  showToast(prox?`✓ Feito! Próximo: ${formatDate(prox)}`:'✓ Trilha de follow-up concluída!');
+}
+
+// ── KANBAN WITH DRAG & DROP ──
 function renderKanban() {
-  const cols = {'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
+  const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
   allLeads.forEach(l=>{ if(cols[l.status]) cols[l.status].push(l); });
   Object.keys(cols).forEach(status=>{
-    const el = document.getElementById('col-'+status);
-    if (!el) return;
-    document.getElementById('col-count-'+status).textContent = cols[status].length;
-    el.innerHTML = cols[status].length===0
-      ? `<div class="col-empty">Nenhum lead</div>`
-      : cols[status].map(l=>kanbanCard(l)).join('');
+    const el=document.getElementById('col-'+status); if(!el) return;
+    document.getElementById('col-count-'+status).textContent=cols[status].length;
+    el.innerHTML=cols[status].length===0
+      ?`<div class="col-empty">Nenhum lead</div>`
+      :cols[status].map(l=>kanbanCard(l)).join('');
+    // Setup drag events on col body
+    el.ondragover=e=>{ e.preventDefault(); el.classList.add('drag-over'); };
+    el.ondragleave=()=>el.classList.remove('drag-over');
+    el.ondrop=async e=>{
+      e.preventDefault(); el.classList.remove('drag-over');
+      const leadId=e.dataTransfer.getData('leadId');
+      if(!leadId) return;
+      const l=allLeads.find(x=>x.id===leadId);
+      if(!l||l.status===status) return;
+      await updateDoc(doc(db,"leads",leadId),{
+        status,
+        log:arrayUnion({user:currentUser?.nome||'—',note:`Status alterado para ${status} (arrastado)`,ts:new Date().toISOString(),statusChange:status})
+      });
+      showToast(`Lead movido → ${STATUS_META[status].label}`);
+    };
   });
 }
 
 function kanbanCard(l) {
-  const wa = formatPhone(l.phone);
-  const today = new Date(); today.setHours(23,59,59,999);
-  const hasUrgent = l.nextFollowup && (()=>{
-    const d = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : new Date(l.nextFollowup);
-    return d<=today && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status);
-  })();
+  const wa=formatPhone(l.phone);
+  const today=new Date(); today.setHours(23,59,59,999);
+  const todayStart=new Date(); todayStart.setHours(0,0,0,0);
+  let urgentClass=''; let daysLateHtml='';
+  if(l.nextFollowup){
+    const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+    if(fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)){
+      urgentClass='k-card-urgent';
+      const dl=Math.floor((todayStart-fu)/(1000*60*60*24));
+      if(dl>0) daysLateHtml=`<span class="k-late">${dl}d atraso</span>`;
+    }
+  }
   return `
-  <div class="k-card ${hasUrgent?'k-card-urgent':''}" onclick="openLead('${l.id}')">
+  <div class="k-card ${urgentClass}" draggable="true"
+    ondragstart="event.dataTransfer.setData('leadId','${l.id}'); this.classList.add('dragging')"
+    ondragend="this.classList.remove('dragging')"
+    onclick="openLead('${l.id}')">
     <div class="k-top">
       <span class="k-name">${l.name||'Sem Nome'}</span>
       ${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'} k-tipo">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}
@@ -329,31 +387,30 @@ function kanbanCard(l) {
     <div class="k-meta">
       ${l.phone?`<span class="k-phone">${l.phone}</span>`:''}
       <span class="k-resp">${l.assignee||'—'}</span>
+      ${daysLateHtml}
     </div>
     ${l.currentNote?`<div class="k-note">${l.currentNote}</div>`:''}
     <div class="k-footer" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>`:'<span></span>'}
-      ${l.nextFollowup?`<span class="k-fu ${hasUrgent?'urgent-fu':''}">📅 ${formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup))}</span>`:''}
+      ${l.nextFollowup?`<span class="k-fu ${urgentClass?'urgent-fu':''}">📅 ${formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup))}</span>`:''}
     </div>
   </div>`;
 }
 
+// ── TABLE ──
 function renderTable() {
-  let filtered = allLeads;
-  if (filterStatus!=='ALL') filtered = filtered.filter(l=>l.status===filterStatus);
-  if (searchQuery) {
-    const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(l=>(l.name||'').toLowerCase().includes(q)||(l.phone||'').includes(q));
-  }
-  const tbody = document.getElementById('table-body');
-  if (!filtered.length) { tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:#666">Nenhum lead encontrado</td></tr>`; return; }
-  tbody.innerHTML = filtered.map(l=>{
-    const sm = STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
-    const wa = formatPhone(l.phone);
-    const created = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-    const fu = l.nextFollowup?.toDate ? l.nextFollowup.toDate() : l.nextFollowup ? new Date(l.nextFollowup) : null;
-    const today = new Date(); today.setHours(23,59,59,999);
-    const isUrgent = fu&&fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status);
+  let filtered=allLeads;
+  if(filterStatus!=='ALL') filtered=filtered.filter(l=>l.status===filterStatus);
+  if(searchQuery){ const q=searchQuery.toLowerCase(); filtered=filtered.filter(l=>(l.name||'').toLowerCase().includes(q)||(l.phone||'').includes(q)); }
+  const tbody=document.getElementById('table-body');
+  if(!filtered.length){ tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:#666">Nenhum lead encontrado</td></tr>`; return; }
+  tbody.innerHTML=filtered.map(l=>{
+    const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
+    const wa=formatPhone(l.phone);
+    const created=l.createdAt?.toDate?l.createdAt.toDate():null;
+    const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():l.nextFollowup?new Date(l.nextFollowup):null;
+    const today=new Date(); today.setHours(23,59,59,999);
+    const isUrgent=fu&&fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status);
     return `
     <tr class="t-row" onclick="openLead('${l.id}')">
       <td>${created?formatDate(created):'—'}</td>
@@ -371,37 +428,48 @@ function renderTable() {
 
 // ── LEAD MODAL ──
 window.openLead = function(id) {
-  const l = id==='new' ? null : allLeads.find(x=>x.id===id);
-  editingLeadId = id==='new' ? null : id;
-  document.getElementById('modal-lead-title').textContent = l ? `Editar — ${l.name||'Sem Nome'}` : 'Novo Lead';
-  document.getElementById('f-name').value      = l?.name||'';
-  document.getElementById('f-phone').value     = l?.phone||'';
-  document.getElementById('f-campaign').value  = l?.campaign||'';
-  document.getElementById('f-status').value    = l?.status||'EM ANDAMENTO';
-  document.getElementById('f-tipo').value      = l?.tipo||'SM';
-  document.getElementById('f-assignee').value  = l?.assignee||currentUser?.nome||'';
-  document.getElementById('f-note').value      = '';
-  document.getElementById('f-parto').value     = l?.dataParto ? toDateInput(l.dataParto) : '';
+  const l=id==='new'?null:allLeads.find(x=>x.id===id);
+  editingLeadId=id==='new'?null:id;
+  activeQuickNotes.clear();
+  document.querySelectorAll('.qn-btn').forEach(b=>b.classList.remove('qn-active'));
+  document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
+  document.getElementById('f-name').value    =l?.name||'';
+  document.getElementById('f-phone').value   =l?.phone||'';
+  document.getElementById('f-campaign').value=l?.campaign||'';
+  document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
+  document.getElementById('f-tipo').value    =l?.tipo||'SM';
+  document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
+  document.getElementById('f-note').value    ='';
+  document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
   togglePartoField();
+
+  // Trilha de etapas feitas
+  renderEtapasFeitas(l?.followupHistory||[], l?.tipo||'SM');
   renderLog(l?.log||[]);
-  document.getElementById('btn-delete-lead').style.display = (editingLeadId && currentUser?.role==='gestora') ? 'block' : 'none';
-  document.getElementById('modal-lead').style.display = 'flex';
+  document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
+  document.getElementById('modal-lead').style.display='flex';
 };
 
-window.closeLead = function() {
-  document.getElementById('modal-lead').style.display='none';
-  editingLeadId=null;
-};
+window.closeLead=function(){ document.getElementById('modal-lead').style.display='none'; editingLeadId=null; };
+window.togglePartoField=function(){ document.getElementById('parto-row').style.display=document.getElementById('f-tipo').value==='SM'?'flex':'none'; };
 
-window.togglePartoField = function() {
-  const tipo = document.getElementById('f-tipo').value;
-  document.getElementById('parto-row').style.display = tipo==='SM' ? 'flex' : 'none';
-};
+function renderEtapasFeitas(history, tipo) {
+  const el=document.getElementById('etapas-feitas'); if(!el) return;
+  if(!history.length){ el.innerHTML='<span style="color:#6B7280;font-size:.75rem">Nenhuma etapa realizada ainda.</span>'; return; }
+  const trilha=tipo==='SM'?TRILHA_SM:TRILHA_GERAL;
+  const labels=trilha.map((_,i)=>`E${i+1}`);
+  if(tipo==='SM') labels.push('Mensal');
+  el.innerHTML=history.map(e=>`
+    <div class="etapa-item">
+      <span class="etapa-num">✓ ${e.label||'E'+e.etapa}</span>
+      <span class="etapa-info">${e.doneBy} — ${formatDatetime(new Date(e.doneAt))}</span>
+    </div>`).join('');
+}
 
 function renderLog(log) {
-  const el = document.getElementById('lead-log');
-  if (!log.length) { el.innerHTML=`<div class="log-empty">Nenhum histórico ainda.</div>`; return; }
-  el.innerHTML = [...log].reverse().map(e=>`
+  const el=document.getElementById('lead-log');
+  if(!log.length){ el.innerHTML=`<div class="log-empty">Nenhum histórico ainda.</div>`; return; }
+  el.innerHTML=[...log].reverse().map(e=>`
     <div class="log-entry">
       <div class="log-meta"><span class="log-user">${e.user}</span><span class="log-time">${formatDatetime(e.ts?.toDate?e.ts.toDate():new Date(e.ts))}</span></div>
       <div class="log-text">${e.note}</div>
@@ -409,257 +477,188 @@ function renderLog(log) {
     </div>`).join('');
 }
 
-window.addQuickNote = n => {
-  const el = document.getElementById('f-note');
-  el.value = el.value ? el.value+' — '+n : n;
+window.addQuickNote = function(note, btn) {
+  const el=document.getElementById('f-note');
+  if(activeQuickNotes.has(note)){
+    // Deselect
+    activeQuickNotes.delete(note);
+    btn.classList.remove('qn-active');
+    el.value=el.value.replace(' — '+note,'').replace(note+' — ','').replace(note,'').trim();
+  } else {
+    activeQuickNotes.add(note);
+    btn.classList.add('qn-active');
+    el.value=el.value?el.value+' — '+note:note;
+  }
 };
 
 window.saveLead = async function() {
-  const name     = document.getElementById('f-name').value.trim()||'Sem Nome';
-  const phone    = document.getElementById('f-phone').value.trim();
-  const campaign = document.getElementById('f-campaign').value;
-  const status   = document.getElementById('f-status').value;
-  const tipo     = document.getElementById('f-tipo').value;
-  const assignee = document.getElementById('f-assignee').value;
-  const note     = document.getElementById('f-note').value.trim();
-  const partoVal = document.getElementById('f-parto').value;
+  const name    =document.getElementById('f-name').value.trim()||'Sem Nome';
+  const phone   =document.getElementById('f-phone').value.trim();
+  const campaign=document.getElementById('f-campaign').value;
+  const status  =document.getElementById('f-status').value;
+  const tipo    =document.getElementById('f-tipo').value;
+  const assignee=document.getElementById('f-assignee').value;
+  const note    =document.getElementById('f-note').value.trim();
+  const partoVal=document.getElementById('f-parto').value;
+  const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
 
-  const dataParto = partoVal ? Timestamp.fromDate(new Date(partoVal+'T12:00:00')) : null;
-
-  // Follow-up sempre automático
-  let nextFollowup = null;
-
-  if (!editingLeadId) {
-    // Novo lead — iniciar trilha
-    const d = new Date(); d.setDate(d.getDate() + (tipo==='SM' ? TRILHA_SM[0] : TRILHA_GERAL[0]));
-    if (!nextFollowup) nextFollowup = Timestamp.fromDate(d);
+  if(!editingLeadId){
+    const d=new Date(); d.setDate(d.getDate()+(tipo==='SM'?TRILHA_SM[0]:TRILHA_GERAL[0]));
     await addDoc(collection(db,"leads"),{
-      name, phone, campaign, status, tipo, assignee, currentNote:note,
-      nextFollowup, dataParto, etapaFollowup:0,
-      createdAt:serverTimestamp(), lastContact:serverTimestamp(),
-      log: note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+      name,phone,campaign,status,tipo,assignee,currentNote:note,
+      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
+      followupHistory:[],
+      createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
     });
-    showToast('Lead criado! Trilha de follow-up iniciada.');
+    showToast('Lead criado! Trilha iniciada automaticamente.');
   } else {
-    const existing = allLeads.find(l=>l.id===editingLeadId);
-    const statusChanged = existing?.status && existing.status!==status;
-    const partoChanged  = partoVal && (!existing?.dataParto);
-
-    const upd = { name, phone, campaign, status, tipo, assignee, lastContact:serverTimestamp() };
-    if (note) upd.currentNote = note;
-    if (dataParto) upd.dataParto = dataParto;
-
-    // Se adicionou data do parto agora e tipo SM, recalcular trilha mensal
-    if (partoChanged && tipo==='SM') {
-      const trilha = TRILHA_SM;
-      const etapa  = existing?.etapaFollowup||0;
-      if (etapa >= trilha.length) {
-        const base = new Date();
-        base.setMonth(base.getMonth()+1);
-        upd.nextFollowup = Timestamp.fromDate(base);
-        upd.ultimoFollowupMensal = serverTimestamp();
-      }
+    const existing=allLeads.find(l=>l.id===editingLeadId);
+    const statusChanged=existing?.status&&existing.status!==status;
+    const partoChanged=partoVal&&!existing?.dataParto;
+    const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
+    if(note) upd.currentNote=note;
+    if(dataParto) upd.dataParto=dataParto;
+    if(partoChanged&&tipo==='SM'){
+      const etapa=existing?.etapaFollowup||0;
+      if(etapa>=TRILHA_SM.length){ const b=new Date(); b.setMonth(b.getMonth()+1); upd.nextFollowup=Timestamp.fromDate(b); upd.ultimoFollowupMensal=serverTimestamp(); }
     }
-
-    upd.log = arrayUnion({
-      user:assignee,
-      note: note||(statusChanged?`Status → ${status}`:'Atualizado'),
-      ts:new Date().toISOString(),
-      statusChange: statusChanged?status:null
-    });
-    await updateDoc(doc(db,"leads",editingLeadId), upd);
-    showToast(partoChanged?'Lead atualizado! Trilha mensal ativada.':'Lead atualizado!');
+    upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+    await updateDoc(doc(db,"leads",editingLeadId),upd);
+    showToast(partoChanged?'Trilha mensal ativada!':'Lead atualizado!');
   }
   closeLead();
 };
 
-window.deleteLead = async function() {
-  if (!editingLeadId||!confirm('Excluir este lead permanentemente?')) return;
+window.deleteLead=async function(){
+  if(!editingLeadId||!confirm('Excluir este lead permanentemente?')) return;
   await deleteDoc(doc(db,"leads",editingLeadId));
   showToast('Lead removido.','warn'); closeLead();
 };
 
 // ── IMPORTAÇÃO EXCEL ──
 window.importarExcel = async function(input) {
-  const file = input.files[0];
-  if (!file) return;
-  input.value = '';
-
-  const reader = new FileReader();
-  reader.onload = async function(e) {
-    try {
-      const wb   = XLSX.read(e.target.result, { type:'array' });
-      const ws   = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'' });
-
-      // Pular cabeçalho (linha 0)
-      const dataRows = rows.slice(1).filter(r => r[1] && String(r[1]).trim());
-
-      let importados = 0;
-      let ignorados  = 0;
-
-      showToast(`Importando ${dataRows.length} leads...`, 'warn');
-
-      for (const row of dataRows) {
-        const dataSerial = parseFloat(row[0]);
-        const nome       = String(row[1]||'').trim() || 'Sem Nome';
-        const telefone   = String(row[2]||'').trim();
-        const status     = normalizeStatus(String(row[3]||'').trim());
-        // Campanha: pegar o primeiro campo de campanha não vazio (colunas 4-9)
-        let campanha = '';
-        for (let c = 4; c <= 9; c++) {
-          if (row[c] && String(row[c]).trim()) { campanha = String(row[c]).trim(); break; }
-        }
-        const observacao = String(row[11]||'').trim();
-
-        // Detectar atendente pelo início da observação
-        let atendente = 'Isabel';
-        const obsLower = observacao.toLowerCase();
-        if (obsLower.startsWith('joelma')) atendente = 'Joelma';
-        else if (obsLower.startsWith('isabel')) atendente = 'Isabel';
-
-        // Detectar tipo — todas as campanhas SM são Salário Maternidade
-        const tipo = (campanha.toUpperCase().includes('SM') || obsLower.includes('salário maternidade') || obsLower.includes('salario maternidade')) ? 'SM' : 'GERAL';
-
-        // Converter data serial do Excel para JS Date
-        let createdAt = new Date();
-        if (dataSerial > 0) {
-          // Data serial Excel: dias desde 1/1/1900 (com bug do ano 1900)
-          const excelEpoch = new Date(1899, 11, 30);
-          createdAt = new Date(excelEpoch.getTime() + dataSerial * 86400000);
-        }
-
-        // Calcular próximo follow-up (1 dia após entrada)
-        const nextFu = new Date(createdAt);
-        nextFu.setDate(nextFu.getDate() + 1);
-
-        // Log inicial com a observação da planilha
-        const logEntry = observacao ? [{
-          user: atendente,
-          note: observacao,
-          ts: createdAt.toISOString(),
-          statusChange: null
-        }] : [];
-
-        try {
-          await addDoc(collection(db, "leads"), {
-            name:         nome,
-            phone:        telefone,
-            campaign:     campanha,
-            status:       status,
-            tipo:         tipo,
-            assignee:     atendente,
-            currentNote:  observacao,
-            nextFollowup: Timestamp.fromDate(nextFu),
-            dataParto:    null,
-            etapaFollowup: 0,
-            createdAt:    Timestamp.fromDate(createdAt),
-            lastContact:  Timestamp.fromDate(createdAt),
-            log:          logEntry,
-            importado:    true
+  const file=input.files[0]; if(!file) return; input.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
+      const dataRows=rows.slice(1).filter(r=>r[1]&&String(r[1]).trim());
+      let imp=0,err=0;
+      showToast(`Importando ${dataRows.length} leads...`,'warn');
+      for(const row of dataRows){
+        const dataSerial=parseFloat(row[0]);
+        const nome=String(row[1]||'').trim()||'Sem Nome';
+        const telefone=String(row[2]||'').trim();
+        const status=normalizeStatus(String(row[3]||'').trim());
+        let campanha='';
+        for(let c=4;c<=9;c++){ if(row[c]&&String(row[c]).trim()){campanha=String(row[c]).trim();break;} }
+        const obs=String(row[11]||'').trim();
+        const obsL=obs.toLowerCase();
+        let atendente=obsL.startsWith('joelma')?'Joelma':'Isabel';
+        const tipo=(campanha.toUpperCase().includes('SM')||obsL.includes('salário maternidade')||obsL.includes('salario maternidade'))?'SM':'GERAL';
+        let createdAt=new Date();
+        if(dataSerial>0){ const ep=new Date(1899,11,30); createdAt=new Date(ep.getTime()+dataSerial*86400000); }
+        const nextFu=new Date(createdAt); nextFu.setDate(nextFu.getDate()+1);
+        try{
+          await addDoc(collection(db,"leads"),{
+            name:nome,phone:telefone,campaign:campanha,status,tipo,assignee:atendente,
+            currentNote:obs,nextFollowup:Timestamp.fromDate(nextFu),dataParto:null,
+            etapaFollowup:0,followupHistory:[],
+            createdAt:Timestamp.fromDate(createdAt),lastContact:Timestamp.fromDate(createdAt),
+            log:obs?[{user:atendente,note:obs,ts:createdAt.toISOString(),statusChange:null}]:[],
+            importado:true
           });
-          importados++;
-        } catch(err) {
-          ignorados++;
-        }
+          imp++;
+        }catch(er){err++;}
       }
-
-      showToast(`✅ ${importados} leads importados com sucesso!${ignorados ? ` (${ignorados} erros)` : ''}`);
-    } catch(err) {
-      showToast('Erro ao ler o arquivo: ' + err.message, 'error');
-    }
+      showToast(`✅ ${imp} leads importados!${err?` (${err} erros)`:''}`);
+    }catch(er){showToast('Erro: '+er.message,'error');}
   };
   reader.readAsArrayBuffer(file);
 };
 
-function normalizeStatus(s) {
-  const map = {
-    'EM ANDAMENTO': 'EM ANDAMENTO',
-    'QUALIFICADO':  'QUALIFICADO',
-    'DESQUALIFICADO': 'DESQUALIFICADO',
-    'SEM RESPOSTA': 'SEM RESPOSTA',
-    'CONTRATO FECHADO': 'CONTRATO FECHADO',
-  };
-  return map[s.toUpperCase()] || 'EM ANDAMENTO';
+function normalizeStatus(s){
+  const map={'EM ANDAMENTO':'EM ANDAMENTO','QUALIFICADO':'QUALIFICADO','DESQUALIFICADO':'DESQUALIFICADO','SEM RESPOSTA':'SEM RESPOSTA','CONTRATO FECHADO':'CONTRATO FECHADO'};
+  return map[s.toUpperCase()]||'EM ANDAMENTO';
 }
 
 // ── RELATÓRIOS ──
-function getFilteredLeads() {
-  const periodo  = document.getElementById('rel-periodo')?.value||'mes-atual';
-  const statusF  = document.getElementById('rel-status')?.value||'TODOS';
-  const dataIni  = document.getElementById('rel-data-ini')?.value;
-  const dataFim  = document.getElementById('rel-data-fim')?.value;
-  const now      = new Date();
-
-  let ini, fim;
-  if (periodo==='mes-atual') {
-    ini = new Date(now.getFullYear(), now.getMonth(), 1);
-    fim = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59);
-  } else if (periodo==='mes-anterior') {
-    ini = new Date(now.getFullYear(), now.getMonth()-1, 1);
-    fim = new Date(now.getFullYear(), now.getMonth(), 0, 23,59,59);
-  } else if (periodo==='6-meses') {
-    ini = new Date(now); ini.setMonth(ini.getMonth()-6); ini.setDate(1);
-    fim = new Date(now); fim.setHours(23,59,59,999);
-  } else if (periodo==='especifica' && dataIni && dataFim) {
-    ini = new Date(dataIni+'T00:00:00');
-    fim = new Date(dataFim+'T23:59:59');
-  } else {
-    ini = new Date(now.getFullYear(), now.getMonth(), 1);
-    fim = new Date(now.getFullYear(), now.getMonth()+1, 0, 23,59,59);
-  }
-
-  let leads = allLeads.filter(l=>{
-    const d = l.createdAt?.toDate?.();
-    return d && d >= ini && d <= fim;
-  });
-  if (statusF !== 'TODOS') leads = leads.filter(l=>l.status===statusF);
+function getFilteredLeads(statusOverride) {
+  const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
+  const statusF=statusOverride||(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
+  const dataIni=document.getElementById('rel-data-ini')?.value;
+  const dataFim=document.getElementById('rel-data-fim')?.value;
+  const now=new Date();
+  let ini,fim;
+  if(periodo==='mes-atual'){ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
+  else if(periodo==='mes-anterior'){ini=new Date(now.getFullYear(),now.getMonth()-1,1);fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);}
+  else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
+  else if(periodo==='especifica'&&dataIni&&dataFim){ini=new Date(dataIni+'T00:00:00');fim=new Date(dataFim+'T23:59:59');}
+  else{ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
+  let leads=allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); return d&&d>=ini&&d<=fim; });
+  if(statusF!=='TODOS') leads=leads.filter(l=>l.status===statusF);
   return leads;
 }
 
 window.renderRelatorios = function() {
-  const leads = getFilteredLeads();
-  const periodo = document.getElementById('rel-periodo')?.value||'mes-atual';
-  document.getElementById('rel-data-range').style.display = periodo==='especifica' ? 'flex' : 'none';
+  const leads=getFilteredLeads();
+  const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
+  document.getElementById('rel-data-range').style.display=periodo==='especifica'?'flex':'none';
 
-  // KPIs
-  document.getElementById('rel-total').textContent    = leads.length;
-  document.getElementById('rel-qualif').textContent   = leads.filter(l=>l.status==='QUALIFICADO').length;
-  document.getElementById('rel-contrato').textContent = leads.filter(l=>l.status==='CONTRATO FECHADO').length;
-  document.getElementById('rel-desq').textContent     = leads.filter(l=>l.status==='DESQUALIFICADO').length;
-  const taxa = leads.length ? Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100) : 0;
-  document.getElementById('rel-taxa').textContent     = taxa+'%';
+  const total=allLeads.filter(l=>{ const d=l.createdAt?.toDate?.(); const now=new Date(); const ini=new Date(now.getFullYear(),now.getMonth(),1); return d&&d>=ini; }).length;
+  const qualif=allLeads.filter(l=>l.status==='QUALIFICADO').length;
+  const contrato=allLeads.filter(l=>l.status==='CONTRATO FECHADO').length;
+  const desq=allLeads.filter(l=>l.status==='DESQUALIFICADO').length;
+  const semResp=allLeads.filter(l=>l.status==='SEM RESPOSTA').length;
+  const taxa=leads.length?Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100):0;
 
-  // Gráfico 1 — Status
-  const statusCounts = {};
+  document.getElementById('rel-total').textContent   =leads.length;
+  document.getElementById('rel-qualif').textContent  =leads.filter(l=>l.status==='QUALIFICADO').length;
+  document.getElementById('rel-contrato').textContent=leads.filter(l=>l.status==='CONTRATO FECHADO').length;
+  document.getElementById('rel-desq').textContent    =leads.filter(l=>l.status==='DESQUALIFICADO').length;
+  document.getElementById('rel-taxa').textContent    =taxa+'%';
+
+  // Highlight active KPI
+  document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
+  if(relKpiFilter){
+    const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq','SEM RESPOSTA':'kpi-semresp','EM ANDAMENTO':'kpi-andamento'};
+    const el=document.getElementById(map[relKpiFilter]||'');
+    if(el) el.classList.add('kpi-active');
+  }
+
+  const statusCounts={};
   Object.keys(STATUS_META).forEach(s=>statusCounts[s]=0);
   leads.forEach(l=>{ if(statusCounts[l.status]!==undefined) statusCounts[l.status]++; });
-  renderChart('chart-status','doughnut',
-    Object.values(STATUS_META).map(s=>s.label),
-    Object.keys(STATUS_META).map(s=>statusCounts[s]),
-    Object.values(STATUS_META).map(s=>s.color)
-  );
+  renderChart('chart-status','doughnut',Object.values(STATUS_META).map(s=>s.label),Object.keys(STATUS_META).map(s=>statusCounts[s]),Object.values(STATUS_META).map(s=>s.color));
 
-  // Gráfico 2 — Por Atendente
-  const atend = {};
-  leads.forEach(l=>{ atend[l.assignee||'—']=(atend[l.assignee||'—']||0)+1; });
-  renderChart('chart-atend','bar',Object.keys(atend),Object.values(atend),['#4F6EF7','#10B981','#F5A623']);
-
-  // Gráfico 3 — Por Campanha
-  const camp = {};
-  leads.forEach(l=>{ camp[l.campaign||'Sem campanha']=(camp[l.campaign||'Sem campanha']||0)+1; });
-  renderChart('chart-camp','bar',Object.keys(camp),Object.values(camp),['#8B5CF6']);
-
-  // Gráfico 4 — Por Tipo
-  const tipos = { SM:0, Geral:0 };
+  const tipos={SM:0,Geral:0};
   leads.forEach(l=>{ if(l.tipo==='SM') tipos.SM++; else tipos.Geral++; });
   renderChart('chart-tipo','doughnut',['Salário Maternidade','Geral'],[tipos.SM,tipos.Geral],['#10B981','#4F6EF7']);
 
-  // Tabela relatório
-  const tbody = document.getElementById('rel-tbody');
-  tbody.innerHTML = leads.map(l=>{
-    const sm = STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
-    const d  = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+  const atend={};
+  leads.forEach(l=>{ atend[l.assignee||'—']=(atend[l.assignee||'—']||0)+1; });
+  renderChart('chart-atend','bar',Object.keys(atend),Object.values(atend),['#4F6EF7','#10B981','#F5A623']);
+
+  const camp={};
+  leads.forEach(l=>{ camp[l.campaign||'Sem campanha']=(camp[l.campaign||'Sem campanha']||0)+1; });
+  renderChart('chart-camp','bar',Object.keys(camp),Object.values(camp),['#8B5CF6']);
+
+  renderRelTable(leads);
+};
+
+window.clickKpi = function(status) {
+  relKpiFilter=relKpiFilter===status?null:status;
+  renderRelatorios();
+};
+
+function renderRelTable(leads) {
+  const tbody=document.getElementById('rel-tbody');
+  tbody.innerHTML=leads.map(l=>{
+    const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
+    const d=l.createdAt?.toDate?l.createdAt.toDate():null;
     return `<tr>
       <td>${d?formatDate(d):'—'}</td>
       <td>${l.name||'Sem Nome'}</td>
@@ -670,100 +669,49 @@ window.renderRelatorios = function() {
       <td>${l.assignee||'—'}</td>
     </tr>`;
   }).join('');
-};
+}
 
-function renderChart(canvasId, type, labels, data, colors) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  if (chartInstances[canvasId]) { chartInstances[canvasId].destroy(); }
-  chartInstances[canvasId] = new Chart(canvas, {
+function renderChart(id,type,labels,data,colors){
+  const canvas=document.getElementById(id); if(!canvas) return;
+  if(chartInstances[id]) chartInstances[id].destroy();
+  chartInstances[id]=new Chart(canvas,{
     type,
-    data: {
-      labels,
-      datasets:[{
-        data,
-        backgroundColor: type==='doughnut' ? colors : colors[0]||'#4F6EF7',
-        borderColor: type==='bar' ? colors[0]||'#4F6EF7' : 'transparent',
-        borderWidth: type==='bar' ? 0 : 0,
-        borderRadius: type==='bar' ? 6 : 0,
-      }]
-    },
-    options: {
-      responsive:true, maintainAspectRatio:false,
-      plugins:{
-        legend:{ labels:{ color:'#9CA3AF', font:{family:'Inter',size:12} } }
-      },
-      scales: type==='bar' ? {
-        x:{ ticks:{color:'#9CA3AF'}, grid:{color:'#1E2130'} },
-        y:{ ticks:{color:'#9CA3AF'}, grid:{color:'#1E2130'} }
-      } : {}
-    }
+    data:{labels,datasets:[{data,backgroundColor:type==='doughnut'?colors:colors[0]||'#4F6EF7',borderColor:'transparent',borderRadius:type==='bar'?6:0,borderWidth:0}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:12}}}},scales:type==='bar'?{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}}}:{}}
   });
 }
 
 window.exportarExcel = function() {
-  const leads = getFilteredLeads();
-  const rows  = leads.map(l=>({
-    'Data Entrada': l.createdAt?.toDate ? formatDate(l.createdAt.toDate()) : '—',
-    'Nome': l.name||'',
-    'Telefone': l.phone||'',
-    'Tipo': l.tipo==='SM'?'Salário Maternidade':'Geral',
-    'Campanha': l.campaign||'',
-    'Status': STATUS_META[l.status]?.label||l.status,
-    'Atendente': l.assignee||'',
-    'Última Nota': l.currentNote||'',
-    'Próx. Follow-up': l.nextFollowup ? formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup)) : '—',
-    'Data Parto': l.dataParto ? formatDate(l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto)) : '—',
-  }));
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Leads');
-  XLSX.writeFile(wb, `CRM_CostaGalvao_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.xlsx`);
+  const leads=getFilteredLeads();
+  const rows=leads.map(l=>({'Data Entrada':l.createdAt?.toDate?formatDate(l.createdAt.toDate()):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'Salário Maternidade':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'','Última Nota':l.currentNote||'','Próx. Follow-up':l.nextFollowup?formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup)):'—','Data Parto':l.dataParto?formatDate(l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto)):'—'}));
+  const ws=XLSX.utils.json_to_sheet(rows);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'Leads');
+  XLSX.writeFile(wb,`CRM_CostaGalvao_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.xlsx`);
 };
-
-window.imprimirRelatorio = function() { window.print(); };
+window.imprimirRelatorio=()=>window.print();
 
 // ── TABS ──
-window.switchTab = function(tab) {
-  currentTab = tab;
+window.switchTab=function(tab){
+  currentTab=tab;
   ['kanban','table','equipe','relatorios'].forEach(t=>{
-    document.getElementById('tab-'+t)?.classList.toggle('tab-active', t===tab);
-    document.getElementById('view-'+t)?.classList.toggle('hidden', t!==tab);
+    document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
+    document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
-  if (tab==='relatorios') setTimeout(renderRelatorios, 100);
+  if(tab==='relatorios') setTimeout(renderRelatorios,100);
   else renderAll();
 };
-
-window.setFilter = function(s) {
-  filterStatus=s;
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('filter-'+s)?.classList.add('active');
-  renderTable();
-};
-window.onSearch = v => { searchQuery=v; renderTable(); };
+window.setFilter=function(s){ filterStatus=s; document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active')); document.getElementById('filter-'+s)?.classList.add('active'); renderTable(); };
+window.onSearch=v=>{ searchQuery=v; renderTable(); };
 
 // ── UTILS ──
-function toDateInput(ts) {
-  const d = ts?.toDate ? ts.toDate() : new Date(ts);
-  return d.toISOString().slice(0,10);
-}
-function formatPhone(p) { if(!p) return ''; return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,''); }
-function formatDate(d) { return d ? new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}) : '—'; }
-function formatDatetime(d) { return d ? new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—'; }
-
-function showToast(msg, type='success') {
-  const t=document.getElementById('toast');
-  t.textContent=msg; t.className='toast show '+type;
-  setTimeout(()=>t.className='toast',3500);
-}
-function setBtnLoading(id,loading) {
-  const b=document.getElementById(id); if(!b) return;
-  b.disabled=loading; if(loading) b.dataset.label=b.textContent;
-  b.textContent=loading?'Aguarde...':(b.dataset.label||b.textContent);
-}
-function fbErr(code) {
-  return({'auth/email-already-in-use':'E-mail já em uso.','auth/invalid-email':'E-mail inválido.','auth/wrong-password':'Senha incorreta.','auth/user-not-found':'Usuário não encontrado.','auth/weak-password':'Senha fraca.','auth/invalid-credential':'E-mail ou senha incorretos.'}[code]||'Erro: '+code);
-}
+function toDateInput(ts){ const d=ts?.toDate?ts.toDate():new Date(ts); return d.toISOString().slice(0,10); }
+function formatPhone(p){ if(!p) return ''; return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,''); }
+function formatDate(d){ return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—'; }
+function formatDatetime(d){ return d?new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'; }
+function showToast(msg,type='success'){ const t=document.getElementById('toast'); t.textContent=msg; t.className='toast show '+type; setTimeout(()=>t.className='toast',3500); }
+function setBtnLoading(id,l){ const b=document.getElementById(id); if(!b) return; b.disabled=l; if(l) b.dataset.label=b.textContent; b.textContent=l?'Aguarde...':(b.dataset.label||b.textContent); }
+function fbErr(code){ return({'auth/email-already-in-use':'E-mail já em uso.','auth/invalid-email':'E-mail inválido.','auth/wrong-password':'Senha incorreta.','auth/user-not-found':'Usuário não encontrado.','auth/weak-password':'Senha fraca.','auth/invalid-credential':'E-mail ou senha incorretos.'}[code]||'Erro: '+code); }
 </script>
 
 <style>
@@ -773,7 +721,7 @@ body{font-family:'Inter',sans-serif;background:#0F1117;color:#F8F9FC;min-height:
 /* AUTH */
 .auth-screen{position:fixed;inset:0;background:#0F1117;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:2rem;z-index:9999}
 .auth-box{background:#1A1D27;border:1px solid #252836;border-radius:16px;padding:2.5rem;width:100%;max-width:420px;display:flex;flex-direction:column;gap:1.25rem}
-.auth-logo{font-size:0.88rem;font-weight:700;color:#4F6EF7;letter-spacing:.06em;text-align:center}
+.auth-logo{font-size:.88rem;font-weight:700;color:#4F6EF7;letter-spacing:.06em;text-align:center}
 .auth-title{font-size:1.4rem;font-weight:700;text-align:center}
 .auth-sub{font-size:.85rem;color:#6B7280;text-align:center;margin-top:-.75rem}
 .auth-field{display:flex;flex-direction:column;gap:.4rem}
@@ -787,7 +735,7 @@ body{font-family:'Inter',sans-serif;background:#0F1117;color:#F8F9FC;min-height:
 /* HEADER */
 header{background:#0F1117;border-bottom:1px solid #252836;padding:0 1.5rem;height:56px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
 .h-brand{font-size:.9rem;font-weight:700;color:#4F6EF7;letter-spacing:.04em}
-.h-right{display:flex;align-items:center;gap:1rem}
+.h-right{display:flex;align-items:center;gap:.75rem}
 .h-user{display:flex;flex-direction:column;align-items:flex-end}
 .h-user-name{font-size:.82rem;font-weight:600}
 .h-user-role{font-size:.7rem;color:#6B7280}
@@ -803,7 +751,7 @@ main{padding:1.5rem;max-width:1600px;margin:0 auto}
 
 /* METRICS */
 .metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.85rem;margin-bottom:1.5rem}
-.metric-card{background:#1A1D27;border:1px solid #252836;border-radius:12px;padding:1rem 1.25rem}
+.metric-card{background:#1A1D27;border:1px solid #252836;border-radius:12px;padding:1rem 1.25rem;cursor:default}
 .metric-label{font-size:.7rem;color:#6B7280;font-weight:500;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem}
 .metric-value{font-size:1.8rem;font-weight:700;line-height:1}
 .mc-blue{border-top:2px solid #4F6EF7}.mc-blue .metric-value{color:#4F6EF7}
@@ -814,11 +762,14 @@ main{padding:1.5rem;max-width:1600px;margin:0 auto}
 
 /* FOLLOW-UP */
 .fu-panel{background:#1A1D27;border:1px solid #252836;border-radius:14px;margin-bottom:1.5rem;overflow:hidden}
-.fu-header{padding:1rem 1.5rem;border-bottom:1px solid #252836;display:flex;align-items:center;gap:.75rem}
+.fu-header{padding:.85rem 1.5rem;border-bottom:1px solid #252836;display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
 .fu-title{font-size:.95rem;font-weight:700}
 .fu-badge{background:#F5A623;color:#0F1117;font-size:.7rem;font-weight:700;border-radius:999px;padding:.15rem .5rem;display:none}
-@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 8px rgba(245,166,35,.15)}}
-.pulsing{animation:pulseGlow 2.5s ease-in-out infinite}
+.fu-filter-btns{display:flex;gap:.35rem;flex-wrap:wrap;margin-left:auto}
+.fu-filter-btn{padding:.28rem .75rem;border-radius:6px;border:1px solid #252836;background:#0F1117;color:#6B7280;font-size:.72rem;font-weight:600;cursor:pointer;transition:all .2s}
+.fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
+@keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 10px rgba(245,166,35,0.35)}}
+.pulsing{animation:pulseGlow 2s ease-in-out infinite}
 #followup-cards{display:flex;gap:1rem;padding:1rem 1.5rem;overflow-x:auto;scrollbar-width:thin;scrollbar-color:#252836 transparent}
 .fu-card{background:#252836;border:1px solid #2E3347;border-radius:10px;padding:.9rem 1rem;min-width:240px;max-width:270px;cursor:pointer;transition:border-color .2s,transform .15s;display:flex;flex-direction:column;gap:.45rem}
 .fu-card:hover{border-color:#4F6EF7;transform:translateY(-1px)}
@@ -826,10 +777,13 @@ main{padding:1.5rem;max-width:1600px;margin:0 auto}
 .fu-top{display:flex;align-items:center;justify-content:space-between;gap:.4rem}
 .fu-name{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fu-meta{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
-.fu-etapa{font-size:.68rem;background:#1A1D27;border-radius:4px;padding:.1rem .4rem;color:#9CA3AF}
+.fu-etapa-badge{font-size:.68rem;background:#1A1D27;border-radius:4px;padding:.1rem .4rem;color:#9CA3AF;font-weight:600}
 .fu-resp{font-size:.7rem;color:#6B7280}
-.fu-date{font-size:.72rem;color:#9CA3AF}
-.fu-date.text-red{color:#EF4444}
+.fu-atraso{font-size:.75rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.1);border-radius:5px;padding:.2rem .5rem}
+.fu-date-ok{font-size:.72rem;color:#9CA3AF}
+.fu-trail{display:flex;gap:.3rem;align-items:center;flex-wrap:wrap}
+.fu-trail-dot{font-size:.65rem;background:rgba(16,185,129,.15);color:#10B981;border-radius:4px;padding:.1rem .35rem;font-weight:700}
+.fu-trail-more{font-size:.65rem;color:#6B7280}
 .fu-note{font-size:.75rem;color:#9CA3AF;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .fu-actions{display:flex;gap:.4rem}
 .empty-fu{padding:1rem 1.5rem;color:#6B7280;font-size:.85rem}
@@ -843,20 +797,24 @@ main{padding:1.5rem;max-width:1600px;margin:0 auto}
 /* KANBAN */
 .kanban-board{display:grid;grid-template-columns:repeat(5,1fr);gap:.85rem}
 .k-col{background:#1A1D27;border:1px solid #252836;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;min-height:280px}
+.k-col.drag-over{border-color:#4F6EF7;background:#1E2235}
 .k-col-header{padding:.75rem 1rem;border-bottom:1px solid #252836;display:flex;align-items:center;justify-content:space-between}
 .k-col-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em}
 .k-col-count{font-size:.7rem;font-weight:700;background:#252836;border-radius:999px;padding:.1rem .5rem;color:#9CA3AF}
-.k-col-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;overflow-y:auto;max-height:500px}
+.k-col-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;overflow-y:auto;max-height:520px;min-height:60px}
 .col-empty{padding:1.5rem;text-align:center;color:#374151;font-size:.78rem}
-.k-card{background:#252836;border:1px solid #2E3347;border-radius:9px;padding:.75rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
+.k-card{background:#252836;border:1px solid #2E3347;border-radius:9px;padding:.75rem;cursor:grab;transition:border-color .15s,transform .15s,opacity .15s;display:flex;flex-direction:column;gap:.4rem}
+.k-card:active{cursor:grabbing}
 .k-card:hover{border-color:#4F6EF7;transform:translateY(-1px)}
+.k-card.dragging{opacity:.45;transform:scale(.97)}
 .k-card-urgent{border-left:3px solid #F5A623}
 .k-top{display:flex;align-items:flex-start;justify-content:space-between;gap:.3rem}
 .k-name{font-size:.8rem;font-weight:600}
 .k-tipo{font-size:.6rem!important;padding:.1rem .3rem!important}
-.k-meta{display:flex;align-items:center;gap:.4rem}
+.k-meta{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
 .k-phone{font-size:.7rem;color:#6B7280}
 .k-resp{font-size:.68rem;color:#4F6EF7;font-weight:500}
+.k-late{font-size:.65rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.1);border-radius:3px;padding:.05rem .3rem}
 .k-note{font-size:.72rem;color:#9CA3AF;line-height:1.4;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .k-footer{display:flex;align-items:center;justify-content:space-between}
 .k-fu{font-size:.68rem;color:#9CA3AF}
@@ -888,9 +846,13 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
 .btn-print{background:#252836;border:1px solid #2E3347;color:#9CA3AF;border-radius:8px;padding:.5rem 1rem;font-size:.8rem;font-weight:600;cursor:pointer}
 .btn-print:hover{border-color:#4F6EF7;color:#4F6EF7}
 .rel-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:.85rem;margin-bottom:1.25rem}
-.rel-kpi{background:#1A1D27;border:1px solid #252836;border-radius:10px;padding:1rem 1.25rem;text-align:center}
+.rel-kpi{background:#1A1D27;border:1px solid #252836;border-radius:10px;padding:1rem 1.25rem;text-align:center;cursor:pointer;transition:all .2s}
+.rel-kpi:hover{border-color:#4F6EF7;transform:translateY(-1px)}
+.rel-kpi.kpi-active{border-color:#4F6EF7;background:#1E2235;box-shadow:0 0 0 2px rgba(79,110,247,.3)}
 .rel-kpi-label{font-size:.7rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.25rem}
 .rel-kpi-val{font-size:1.6rem;font-weight:700;color:#F8F9FC}
+.kpi-clear{font-size:.7rem;color:#4F6EF7;margin-top:.3rem;display:none}
+.rel-kpi.kpi-active .kpi-clear{display:block}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.25rem}
 .chart-card{background:#1A1D27;border:1px solid #252836;border-radius:12px;padding:1.25rem}
 .chart-title{font-size:.8rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em;margin-bottom:1rem}
@@ -911,7 +873,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
 .btn-edit-user{background:#252836;border:1px solid #2E3347;border-radius:7px;color:#9CA3AF;font-size:.75rem;padding:.35rem .75rem;cursor:pointer;transition:all .2s}
 .btn-edit-user:hover{border-color:#4F6EF7;color:#4F6EF7}
 
-/* SHARED PILLS */
+/* SHARED */
 .status-pill{display:inline-flex;padding:.2rem .6rem;border-radius:999px;font-size:.7rem;font-weight:700;white-space:nowrap}
 .campaign-tag{display:inline-flex;background:rgba(79,110,247,.12);color:#4F6EF7;border-radius:4px;font-size:.68rem;font-weight:600;padding:.15rem .45rem}
 .tipo-tag{display:inline-flex;border-radius:4px;font-size:.7rem;font-weight:700;padding:.15rem .45rem}
@@ -925,7 +887,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
 
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:none;align-items:center;justify-content:center;padding:1rem}
-.modal-box{background:#1A1D27;border:1px solid #252836;border-radius:16px;width:100%;max-width:720px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column}
+.modal-box{background:#1A1D27;border:1px solid #252836;border-radius:16px;width:100%;max-width:740px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column}
 .modal-head{padding:1.25rem 1.5rem;border-bottom:1px solid #252836;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#1A1D27;z-index:2}
 .modal-title{font-size:1rem;font-weight:700}
 .modal-close{background:none;border:none;color:#6B7280;font-size:1.3rem;cursor:pointer;transition:color .2s}
@@ -939,13 +901,23 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
 .f-input:focus,.f-select:focus,.f-textarea:focus{border-color:#4F6EF7}
 .f-select option{background:#252836}
 .f-textarea{resize:vertical;min-height:70px}
+/* Quick notes */
 .qn-label{font-size:.72rem;color:#6B7280;margin-bottom:.4rem}
 .qn-grid{display:flex;flex-wrap:wrap;gap:.4rem}
 .qn-btn{background:#252836;border:1px solid #2E3347;border-radius:6px;color:#9CA3AF;font-size:.7rem;padding:.28rem .6rem;cursor:pointer;transition:all .15s}
 .qn-btn:hover{background:#2E3347;color:#F8F9FC;border-color:#4F6EF7}
+.qn-btn.qn-active{background:rgba(79,110,247,.2);border-color:#4F6EF7;color:#4F6EF7;font-weight:700}
+/* Etapas feitas */
+.etapas-section{display:flex;flex-direction:column;gap:.5rem}
+.etapas-title{font-size:.72rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
+#etapas-feitas{display:flex;flex-direction:column;gap:.35rem;max-height:130px;overflow-y:auto}
+.etapa-item{display:flex;align-items:center;justify-content:space-between;background:#252836;border-radius:6px;padding:.4rem .7rem}
+.etapa-num{font-size:.75rem;font-weight:700;color:#10B981}
+.etapa-info{font-size:.7rem;color:#6B7280}
+/* Log */
 .log-section{display:flex;flex-direction:column;gap:.5rem}
 .log-title{font-size:.72rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em}
-#lead-log{max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem}
+#lead-log{max-height:160px;overflow-y:auto;display:flex;flex-direction:column;gap:.5rem}
 .log-entry{background:#252836;border-radius:8px;padding:.6rem .85rem;display:flex;flex-direction:column;gap:.2rem}
 .log-meta{display:flex;gap:.75rem;align-items:center}
 .log-user{font-size:.7rem;font-weight:700;color:#4F6EF7}
@@ -971,14 +943,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-thumb{background:#252836;border-radius:99px}
 
-/* PRINT */
-@media print{
-  header,.fu-panel,.tabs-row,.rel-controls .rel-btns,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast{display:none!important}
-  body{background:#fff;color:#000}
-  .charts-grid{break-inside:avoid}
-  .rel-kpis{break-inside:avoid}
-  .chart-card{border:1px solid #ccc}
-}
+@media print{header,.fu-panel,.tabs-row,.rel-controls .rel-btns,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast{display:none!important} body{background:#fff;color:#000} .chart-card{border:1px solid #ccc}}
 @media(max-width:1100px){.metrics-grid{grid-template-columns:repeat(3,1fr)}.kanban-board{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
@@ -1041,6 +1006,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
         <span style="font-size:1.1rem">🔥</span>
         <span class="fu-title">Follow-ups para Hoje</span>
         <span class="fu-badge" id="fu-badge">0</span>
+        <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
       <div id="followup-cards"><div class="empty-fu">Carregando...</div></div>
     </div>
@@ -1120,7 +1086,7 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
         </div>
         <div class="rel-group">
           <label class="rel-label">Status</label>
-          <select id="rel-status" class="rel-select" onchange="renderRelatorios()">
+          <select id="rel-status" class="rel-select" onchange="relKpiFilter=null;renderRelatorios()">
             <option value="TODOS">Todos</option>
             <option value="EM ANDAMENTO">Em Andamento</option>
             <option value="QUALIFICADO">Qualificado</option>
@@ -1130,187 +1096,17 @@ thead th{padding:.7rem 1rem;text-align:left;font-size:.7rem;font-weight:700;text
           </select>
         </div>
         <div class="rel-btns">
-          <button class="btn-export" onclick="exportarExcel()">⬇ Exportar Excel</button>
-          <button class="btn-print"  onclick="imprimirRelatorio()">🖨 Imprimir / PDF</button>
+          <button class="btn-export" onclick="exportarExcel()">⬇ Excel</button>
+          <button class="btn-print"  onclick="imprimirRelatorio()">🖨 PDF</button>
         </div>
       </div>
-
-      <!-- KPIs -->
+      <!-- KPIs clicáveis -->
       <div class="rel-kpis">
-        <div class="rel-kpi"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div></div>
-        <div class="rel-kpi"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div></div>
-        <div class="rel-kpi"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div></div>
-        <div class="rel-kpi"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div></div>
-        <div class="rel-kpi"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
+        <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()">         <div class="rel-kpi-label">Total Leads</div>    <div class="rel-kpi-val" id="rel-total">—</div>   <div class="kpi-clear">✕ limpar filtro</div></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')">                     <div class="rel-kpi-label">Qualificados</div>   <div class="rel-kpi-val" id="rel-qualif"   style="color:#10B981">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')">                <div class="rel-kpi-label">Contratos</div>      <div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')">                  <div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq"     style="color:#EF4444">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-taxa"     onclick="relKpiFilter=null;renderRelatorios()">         <div class="rel-kpi-label">Taxa Qualif.</div>   <div class="rel-kpi-val" id="rel-taxa"     style="color:#4F6EF7">—</div></div>
       </div>
-
-      <!-- GRÁFICOS -->
       <div class="charts-grid">
-        <div class="chart-card"><div class="chart-title">Distribuição por Status</div><div class="chart-container"><canvas id="chart-status"></canvas></div></div>
-        <div class="chart-card"><div class="chart-title">Leads por Tipo</div><div class="chart-container"><canvas id="chart-tipo"></canvas></div></div>
-        <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
-        <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
-      </div>
-
-      <!-- TABELA RELATÓRIO -->
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead>
-          <tbody id="rel-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- EQUIPE -->
-    <div id="view-equipe" class="hidden">
-      <div class="equipe-header">
-        <span class="equipe-title">Gestão de Equipe</span>
-        <button class="btn-new" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button>
-      </div>
-      <div id="equipe-lista"></div>
-    </div>
-  </main>
-</div>
-
-<!-- MODAL LEAD -->
-<div id="modal-lead" class="modal-overlay">
-  <div class="modal-box">
-    <div class="modal-head">
-      <span class="modal-title" id="modal-lead-title">Lead</span>
-      <button class="modal-close" onclick="closeLead()">✕</button>
-    </div>
-    <div class="modal-body">
-      <div class="form-grid">
-        <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
-        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
-        <div class="f-group">
-          <label class="f-label">Tipo de Serviço</label>
-          <select id="f-tipo" class="f-select" onchange="togglePartoField()">
-            <option value="SM">Salário Maternidade</option>
-            <option value="GERAL">Previdenciário Geral</option>
-          </select>
-        </div>
-        <div class="f-group">
-          <label class="f-label">Campanha / Origem</label>
-          <select id="f-campaign" class="f-select">
-            <option value="">Selecione...</option>
-            <option>SM - 01</option><option>SM - 02</option><option>SM - 03</option>
-            <option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option>
-          </select>
-        </div>
-        <div class="f-group">
-          <label class="f-label">Status</label>
-          <select id="f-status" class="f-select">
-            <option value="EM ANDAMENTO">Em Andamento</option>
-            <option value="QUALIFICADO">Qualificado</option>
-            <option value="CONTRATO FECHADO">Contrato Fechado</option>
-            <option value="DESQUALIFICADO">Desqualificado</option>
-            <option value="SEM RESPOSTA">Sem Resposta</option>
-          </select>
-        </div>
-        <div class="f-group">
-          <label class="f-label">Atendente</label>
-          <select id="f-assignee" class="f-select">
-            <option>Isabel</option><option>Joelma</option><option>Jucineide</option>
-          </select>
-        </div>
-        <div class="f-group" id="parto-row">
-          <label class="f-label">📅 Data Prevista do Parto (SM)</label>
-          <input id="f-parto" class="f-input" type="date"/>
-        </div>
-        <div class="f-group full">
-          <label class="f-label">Nova Nota / Atualização</label>
-          <textarea id="f-note" class="f-textarea" placeholder="O que aconteceu neste contato?"></textarea>
-          <div class="qn-label" style="margin-top:.5rem">Notas rápidas:</div>
-          <div class="qn-grid">
-            <button class="qn-btn" onclick="addQuickNote('Script inicial enviado')">Script inicial enviado</button>
-            <button class="qn-btn" onclick="addQuickNote('Áudio de qualificação enviado')">Áudio de qualificação</button>
-            <button class="qn-btn" onclick="addQuickNote('Aguardando retorno')">Aguardando retorno</button>
-            <button class="qn-btn" onclick="addQuickNote('Lead não respondeu')">Lead não respondeu</button>
-            <button class="qn-btn" onclick="addQuickNote('Visualizou e não respondeu')">Visualizou sem resposta</button>
-            <button class="qn-btn" onclick="addQuickNote('Mensagem automática enviada')">Msg automática enviada</button>
-            <button class="qn-btn" onclick="addQuickNote('Cliente sumiu')">Cliente sumiu</button>
-            <button class="qn-btn" onclick="addQuickNote('Clicou por engano')">Clicou por engano</button>
-            <button class="qn-btn" onclick="addQuickNote('Encaminhado para a Dra.')">Encaminhado para a Dra.</button>
-            <button class="qn-btn" onclick="addQuickNote('Documentos solicitados')">Documentos solicitados</button>
-            <button class="qn-btn" onclick="addQuickNote('Contrato enviado para assinatura')">Contrato enviado</button>
-            <button class="qn-btn" onclick="addQuickNote('Pedimos indicação')">Pedimos indicação</button>
-            <button class="qn-btn" onclick="addQuickNote('Desqualificado — sem CLT')">Desqualif. sem CLT</button>
-            <button class="qn-btn" onclick="addQuickNote('Desqualificado — filho maior de 5 anos')">Desqualif. filho +5 anos</button>
-            <button class="qn-btn" onclick="addQuickNote('Link WhatsApp enviado')">Link WhatsApp enviado</button>
-            <button class="qn-btn" onclick="addQuickNote('Follow-up mensal SM realizado')">Follow-up mensal SM</button>
-          </div>
-        </div>
-      </div>
-      <div class="log-section">
-        <div class="log-title">Histórico de Atualizações</div>
-        <div id="lead-log"></div>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir Lead</button>
-      <div style="display:flex;gap:.5rem">
-        <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
-        <button class="btn-save" onclick="saveLead()">Salvar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL EQUIPE -->
-<div id="modal-equipe" class="modal-overlay">
-  <div class="modal-box" style="max-width:440px">
-    <div class="modal-head">
-      <span class="modal-title" id="eq-modal-title">Nova Colaboradora</span>
-      <button class="modal-close" onclick="fecharModalEquipe()">✕</button>
-    </div>
-    <div class="modal-body">
-      <input type="hidden" id="eq-uid"/>
-      <div class="f-group"><label class="f-label">Nome</label><input id="eq-nome" class="f-input" type="text" placeholder="Nome completo"/></div>
-      <div class="f-group"><label class="f-label">E-mail</label><input id="eq-email" class="f-input" type="email" placeholder="email@exemplo.com"/></div>
-      <div class="f-group">
-        <label class="f-label">Perfil</label>
-        <select id="eq-role" class="f-select"><option value="atendente">Atendente</option><option value="gestora">Gestora</option></select>
-      </div>
-      <div class="f-group" id="eq-senha-row">
-        <label class="f-label">Senha inicial (mínimo 6 caracteres)</label>
-        <input id="eq-senha" class="f-input" type="password" placeholder="Crie uma senha para ela"/>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button id="btn-eq-delete" class="btn-delete" onclick="excluirColaboradora()" style="display:none">Remover Acesso</button>
-      <div style="display:flex;gap:.5rem">
-        <button class="btn-cancel" onclick="fecharModalEquipe()">Cancelar</button>
-        <button id="btn-eq-save" class="btn-save" onclick="salvarColaboradora()">Salvar</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-// Máscara de telefone — escopo global
-function maskPhone(el) {
-  let v = el.value.replace(/\D/g,'');
-  if (v.length > 11) v = v.slice(0,11);
-  if (v.length <= 10) {
-    v = v.replace(/^(\d{0,2})(\d{0,4})(\d{0,4})$/, function(_,a,b,c){
-      if (!a) return '';
-      if (!b) return '('+a;
-      if (!c) return '('+a+') '+b;
-      return '('+a+') '+b+'-'+c;
-    });
-  } else {
-    v = v.replace(/^(\d{0,2})(\d{0,5})(\d{0,4})$/, function(_,a,b,c){
-      if (!a) return '';
-      if (!b) return '('+a;
-      if (!c) return '('+a+') '+b;
-      return '('+a+') '+b+'-'+c;
-    });
-  }
-  el.value = v;
-}
-</script>
-</body>
-</html>
+        <div class
