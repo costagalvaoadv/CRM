@@ -263,9 +263,17 @@ function renderFollowups(){
     return d>todayEnd;
   });
 
+  // Apply search filter
+  const fuSearchVal=(document.getElementById('fu-search')?.value||'').toLowerCase().trim();
+
   if(fuFilter!=='TODOS'){
     pendentes=pendentes.filter(l=>l.assignee===fuFilter);
     agendados=agendados.filter(l=>l.assignee===fuFilter);
+  }
+  if(fuSearchVal){
+    const filterFn=l=>(l.name||'').toLowerCase().includes(fuSearchVal)||(l.phone||'').replace(/\D/g,'').includes(fuSearchVal.replace(/\D/g,''));
+    pendentes=pendentes.filter(filterFn);
+    agendados=agendados.filter(filterFn);
   }
 
   const total=pendentes.length;
@@ -466,6 +474,7 @@ REGISTRO CRM:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-api-key': window.ANTHROPIC_API_KEY || '',
         'anthropic-version': '2023-06-01',
         'anthropic-dangerous-direct-browser-access': 'true'
       },
@@ -476,7 +485,11 @@ REGISTRO CRM:
       })
     });
 
-    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.ok) {
+      // Fallback: gerar mensagem localmente com templates inteligentes
+      gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas);
+      return;
+    }
     const data = await response.json();
     const text = data.content?.[0]?.text || '';
 
@@ -494,11 +507,60 @@ REGISTRO CRM:
     document.getElementById('msg-resultado').style.display= 'flex';
 
   } catch(err) {
-    document.getElementById('msg-loading').style.display = 'none';
-    document.getElementById('modal-mensagem').style.display = 'none';
-    showToast('Erro ao gerar: ' + err.message, 'error');
+    // Fallback local
+    gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas);
   }
 };
+
+function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
+  const nome = (l.name||'').split(' ')[0] || 'olá';
+
+  const templates = {
+    'FUP 24h': {
+      estrategia: 'Recuperar contato com leveza. Gatilho: facilidade de dar o próximo passo.',
+      msg: `Oi ${nome}! Tudo bem? Vi que você entrou em contato ontem sobre ${area}. Queria só saber se ficou com alguma dúvida que eu possa te ajudar a esclarecer 😊`,
+      registro: `Realizado FUP 24h via WhatsApp. Enviada mensagem de retorno inicial verificando dúvidas. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 3d': {
+      estrategia: 'Despertar curiosidade sobre o direito. Gatilho: oportunidade ainda disponível.',
+      msg: `Oi ${nome}! Passando para ver se você teve a chance de pensar sobre o ${area}. Muita gente não sabe, mas esse benefício tem um prazo — e vale a pena verificar se você tem direito antes que passe. Posso te ajudar com isso?`,
+      registro: `Realizado FUP 3d via WhatsApp. Abordagem sobre oportunidade e prazo do benefício ${area}. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 7d': {
+      estrategia: 'Percepção de perda por inércia. Gatilho: o tempo corre contra o lead.',
+      msg: `${nome}, boa tarde! Sei que a rotina é corrida, mas queria te lembrar que questões previdenciárias como ${area} podem ser mais simples do que parecem de resolver. Só depende de dar o primeiro passo. Ainda posso te ajudar?`,
+      registro: `Realizado FUP 7d via WhatsApp. Abordagem sobre simplicidade do processo e consequência da inércia. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 15d': {
+      estrategia: 'Reativação com encerramento implícito. Gatilho: fazer o lead decidir.',
+      msg: `Oi ${nome}! Tentei entrar em contato algumas vezes. Vou deixar em aberto aqui caso você queira retomar — se precisar de ajuda com ${area}, é só me chamar. 😊`,
+      registro: `Realizado FUP 15d via WhatsApp. Mensagem de reativação com encerramento implícito. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 30d': {
+      estrategia: 'Última tentativa. Gatilho: fechamento de ciclo.',
+      msg: `${nome}, tudo bem? Última mensagem da minha parte — se um dia precisar verificar seu direito ao ${area}, estaremos aqui. 👍`,
+      registro: `Realizado FUP 30d via WhatsApp. Última tentativa de contato antes do encerramento do ciclo. Aguardando retorno para continuidade do atendimento.`
+    },
+    'Mensal': {
+      estrategia: isGestante ? 'Relacionamento com gestante. Foco na conexão humana, não na venda.' : 'Manutenção de contato mensal.',
+      msg: isGestante
+        ? `Oi ${nome}! Passando para dar um oi e saber como você está se sentindo nessa fase tão especial 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`
+        : `Oi ${nome}! Passando para saber se você ainda tem interesse em verificar seu direito ao ${area}. Qualquer dúvida, estou à disposição 😊`,
+      registro: isGestante
+        ? `Realizado FUP Mensal Gestante via WhatsApp. Contato de acompanhamento humanizado focado na gestação. Aguardando retorno para continuidade do atendimento.`
+        : `Realizado FUP Mensal via WhatsApp. Contato de manutenção e reativação. Aguardando retorno para continuidade do atendimento.`
+    }
+  };
+
+  const t = templates[etapaLabel] || templates['FUP 24h'];
+
+  document.getElementById('msg-etapa-result').textContent  = etapaLabel;
+  document.getElementById('msg-estrat-result').textContent = t.estrategia;
+  document.getElementById('msg-texto').value               = t.msg;
+  document.getElementById('msg-registro').value            = t.registro;
+  document.getElementById('msg-loading').style.display  = 'none';
+  document.getElementById('msg-resultado').style.display= 'flex';
+}
 
 window.fecharModalMensagem = () => document.getElementById('modal-mensagem').style.display = 'none';
 
@@ -968,6 +1030,10 @@ window.renderEstrategia=function(){
   const ini=new Date(now.getFullYear(),now.getMonth(),1);
   const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
   const isG=currentUser?.role==='gestora';
+  const tituloEl=document.getElementById('est-titulo');
+  const subEl=document.getElementById('est-subtitulo');
+  if(tituloEl) tituloEl.textContent='🎯 Painel Estratégico'+(isG?'':' — '+(currentUser?.nome||''));
+  if(subEl) subEl.textContent=isG?'Visão completa do escritório':'Visão dos seus leads';
 
   // Atendentes veem apenas seus próprios leads
   const leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
@@ -1138,6 +1204,9 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .pulsing{animation:pulseGlow 2s ease-in-out infinite}
 .fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
 .fu-panel-title{font-size:.88rem;font-weight:700}
+.fu-search-input{background:#0B0D14;border:1px solid #2A2F45;border-radius:6px;padding:.25rem .65rem;color:#F1F3F9;font-size:.72rem;outline:none;width:160px;transition:border-color .2s;flex-shrink:0}
+.fu-search-input:focus{border-color:#4F6EF7}
+.fu-search-input::placeholder{color:#374151}
 .fu-badge{background:#F5A623;color:#0B0D14;font-size:.65rem;font-weight:800;border-radius:999px;padding:.15rem .5rem;display:none}
 .fu-filter-btns{display:flex;gap:.3rem;margin-left:auto;overflow-x:auto;scrollbar-width:none;max-width:45%;padding-bottom:1px;flex-shrink:0}
 .fu-filter-btns::-webkit-scrollbar{display:none}
@@ -1160,7 +1229,7 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .fu-stage-count{font-size:.65rem;font-weight:700;background:rgba(79,110,247,.15);color:#4F6EF7;border-radius:999px;padding:.1rem .45rem}
 .fu-stage-late{font-size:.65rem;font-weight:700;color:#EF4444}
 .fu-stage-empty{font-size:.75rem;color:#2A2F45;text-align:center;padding:1rem .5rem;font-style:italic}
-.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;max-height:320px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent}
+.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;height:340px;overflow-y:scroll;scrollbar-width:auto;scrollbar-color:#2A2F45 #13161F}
 /* FU CARD */
 .fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.8rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
 .fu-card2:hover{border-color:#4F6EF7;transform:translateY(-1px)}
@@ -1450,6 +1519,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <span style="font-size:1rem">🔥</span>
         <span class="fu-panel-title">Follow-ups</span>
         <span class="fu-badge" id="fu-badge">0</span>
+        <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderFollowups()"/>
         <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
       <div class="fu-stages-wrap">
@@ -1515,7 +1585,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     </div>
     <div id="view-estrategia" class="hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
-        <div><div style="font-size:.95rem;font-weight:700">🎯 Painel Estratégico${!isG?' — '+currentUser?.nome:''}</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">${isG?'Visão completa do escritório':'Visão dos seus leads'}</div></div>
+        <div><div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
         <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
       </div>
       <div id="estrategia-content"></div>
