@@ -32,11 +32,13 @@ let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
 let activeQuickNotes=new Set(),presenceInterval=null;
 
 const STATUS_META={
-  'EM ANDAMENTO':    {color:'#4F6EF7',bg:'rgba(79,110,247,0.12)', label:'Em Andamento'},
-  'QUALIFICADO':     {color:'#10B981',bg:'rgba(16,185,129,0.12)', label:'Qualificado'},
-  'CONTRATO FECHADO':{color:'#8B5CF6',bg:'rgba(139,92,246,0.12)',label:'Contrato Fechado'},
-  'DESQUALIFICADO':  {color:'#EF4444',bg:'rgba(239,68,68,0.12)',  label:'Desqualificado'},
-  'SEM RESPOSTA':    {color:'#F5A623',bg:'rgba(245,166,35,0.12)', label:'Sem Resposta'},
+  'EM ANDAMENTO':         {color:'#4F6EF7',bg:'rgba(79,110,247,0.12)',  label:'Em Andamento'},
+  'QUALIFICADO':          {color:'#10B981',bg:'rgba(16,185,129,0.12)',  label:'Qualificado'},
+  'AGUARDANDO DOCUMENTOS':{color:'#F59E0B',bg:'rgba(245,158,11,0.12)',  label:'Ag. Documentos'},
+  'AGUARDANDO ASSINATURA':{color:'#06B6D4',bg:'rgba(6,182,212,0.12)',   label:'Ag. Assinatura'},
+  'CONTRATO FECHADO':     {color:'#8B5CF6',bg:'rgba(139,92,246,0.12)', label:'Contrato Fechado'},
+  'DESQUALIFICADO':       {color:'#EF4444',bg:'rgba(239,68,68,0.12)',   label:'Desqualificado'},
+  'SEM RESPOSTA':         {color:'#F5A623',bg:'rgba(245,166,35,0.12)',  label:'Sem Resposta'},
 };
 
 // Trilha: cada prazo é APÓS o follow-up anterior ter sido feito
@@ -230,6 +232,8 @@ function renderMetrics(){
   document.getElementById('m-andamento').textContent=mo.filter(l=>l.status==='EM ANDAMENTO').length;
   document.getElementById('m-qualif').textContent  =mo.filter(l=>l.status==='QUALIFICADO').length;
   document.getElementById('m-contrato').textContent=mo.filter(l=>l.status==='CONTRATO FECHADO').length;
+  document.getElementById('m-agdocs').textContent=mo.filter(l=>l.status==='AGUARDANDO DOCUMENTOS').length;
+  document.getElementById('m-agass').textContent=mo.filter(l=>l.status==='AGUARDANDO ASSINATURA').length;
   document.getElementById('m-semresp').textContent =mo.filter(l=>l.status==='SEM RESPOSTA').length;
 }
 
@@ -240,6 +244,7 @@ function renderFuFilterBtns(){
   const unique=[...new Set(names)];
   cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${fuFilter===n?'active':''}" onclick="setFuFilter('${n}')">${n==='TODOS'?'Todos':n}</button>`).join('');
 }
+window.renderFollowups=renderFollowups;
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
 
 function renderFollowups(){
@@ -249,7 +254,7 @@ function renderFollowups(){
 
   // Pendentes/atrasados (aparecem no painel hoje)
   let pendentes=allLeads.filter(l=>{
-    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status))return false;
     if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<=todayEnd;
@@ -257,7 +262,7 @@ function renderFollowups(){
 
   // Agendados (follow-up feito, próximo ainda não chegou)
   let agendados=allLeads.filter(l=>{
-    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status))return false;
+    if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status))return false;
     if(!l.nextFollowup)return false;
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d>todayEnd;
@@ -686,7 +691,7 @@ window.confirmarDecisao=async function(decisao){
 
 // ─── KANBAN ───
 function renderKanban(){
-  const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
+  const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
   allLeads.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
@@ -712,7 +717,7 @@ function kanbanCard(l){
   let urgCls='';let daysLateHtml='';
   if(l.nextFollowup){
     const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
-    if(fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)){
+    if(fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status)){
       urgCls='k-card-urgent';
       const dl=Math.floor((todayS-fu)/(1000*60*60*24));
       if(dl>0)daysLateHtml=`<span class="k-late">${dl}d atraso</span>`;
@@ -759,7 +764,7 @@ function renderTable(){
     const created=l.createdAt?.toDate?l.createdAt.toDate():null;
     const fu=l.nextFollowup?.toDate?l.nextFollowup.toDate():l.nextFollowup?new Date(l.nextFollowup):null;
     const today=new Date();today.setHours(23,59,59,999);
-    const isUrgent=fu&&fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status);
+    const isUrgent=fu&&fu<=today&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status);
     return `<tr class="t-row" onclick="openLead('${l.id}')">
       <td>${created?formatDate(created):'—'}</td>
       <td class="t-name">${l.name||'Sem Nome'}</td>
@@ -1207,7 +1212,7 @@ header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1rem;height:
 .btn-hdr-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .btn-hdr-primary:hover{background:#3B5BDB;border-color:#3B5BDB;color:#fff}
 main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
-.metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1.25rem}
+.metrics-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.6rem;margin-bottom:1.25rem}
 .metric-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1.1rem}
 .metric-label{font-size:.65rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem}
 .metric-value{font-size:1.7rem;font-weight:800;line-height:1}
@@ -1216,6 +1221,8 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .mc-green{border-top:2px solid #10B981}.mc-green .metric-value{color:#10B981}
 .mc-purple{border-top:2px solid #8B5CF6}.mc-purple .metric-value{color:#8B5CF6}
 .mc-red{border-top:2px solid #EF4444}.mc-red .metric-value{color:#EF4444}
+.mc-amber2{border-top:2px solid #F59E0B}.mc-amber2 .metric-value{color:#F59E0B}
+.mc-cyan{border-top:2px solid #06B6D4}.mc-cyan .metric-value{color:#06B6D4}
 /* FOLLOW-UP */
 .fu-panel{background:#13161F;border:1px solid #1E2235;border-radius:12px;margin-bottom:1.25rem;overflow:hidden}
 @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
@@ -1309,7 +1316,7 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .tab-btn{padding:.38rem 1rem;border-radius:5px;border:none;background:transparent;color:#6B7280;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s}
 .tab-btn.tab-active{background:#1E2235;color:#F1F3F9}
 /* KANBAN */
-.kanban-board{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem}
+.kanban-board{display:grid;grid-template-columns:repeat(7,1fr);gap:.6rem}
 .k-col{background:#13161F;border:1px solid #1E2235;border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:260px}
 .k-col.drag-over{border-color:#4F6EF7;background:#171B2E}
 .k-col-header{padding:.7rem .9rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;justify-content:space-between}
@@ -1483,8 +1490,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 ::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:99px;border:2px solid #13161F}
 ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 @media print{header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast{display:none!important}body{background:#fff;color:#000}}
-@media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}.kanban-board{grid-template-columns:repeat(3,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
+@media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
 </style>
 </head>
@@ -1529,6 +1536,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       <div class="metric-card mc-blue">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
       <div class="metric-card mc-amber"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
       <div class="metric-card mc-green"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card mc-amber2"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
+      <div class="metric-card mc-cyan"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
       <div class="metric-card mc-purple"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
       <div class="metric-card mc-red">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
     </div>
@@ -1537,7 +1546,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <span style="font-size:1rem">🔥</span>
         <span class="fu-panel-title">Follow-ups</span>
         <span class="fu-badge" id="fu-badge">0</span>
-        <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderFollowups()"/>
+        <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="window.renderFollowups()"/>
         <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
       <div class="fu-stages-wrap">
@@ -1558,6 +1567,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #F5A623"><span class="k-col-title" style="color:#F5A623">Sem Resposta</span><span class="k-col-count" id="col-count-SEM RESPOSTA">0</span></div><div class="k-col-body" id="col-SEM RESPOSTA"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #10B981"><span class="k-col-title" style="color:#10B981">Qualificados</span><span class="k-col-count" id="col-count-QUALIFICADO">0</span></div><div class="k-col-body" id="col-QUALIFICADO"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #F59E0B"><span class="k-col-title" style="color:#F59E0B">📄 Ag. Documentos</span><span class="k-col-count" id="col-count-AGUARDANDO DOCUMENTOS">0</span></div><div class="k-col-body" id="col-AGUARDANDO DOCUMENTOS"></div></div>
+        <div class="k-col"><div class="k-col-header" style="border-top:2px solid #06B6D4"><span class="k-col-title" style="color:#06B6D4">✍️ Ag. Assinatura</span><span class="k-col-count" id="col-count-AGUARDANDO ASSINATURA">0</span></div><div class="k-col-body" id="col-AGUARDANDO ASSINATURA"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #8B5CF6"><span class="k-col-title" style="color:#8B5CF6">Contrato Fechado</span><span class="k-col-count" id="col-count-CONTRATO FECHADO">0</span></div><div class="k-col-body" id="col-CONTRATO FECHADO"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #EF4444"><span class="k-col-title" style="color:#EF4444">Desqualificados</span><span class="k-col-count" id="col-count-DESQUALIFICADO">0</span></div><div class="k-col-body" id="col-DESQUALIFICADO"></div></div>
       </div>
@@ -1570,6 +1581,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
           <button id="filter-EM ANDAMENTO"     class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
           <button id="filter-SEM RESPOSTA"     class="filter-btn"        onclick="setFilter('SEM RESPOSTA')">Sem Resposta</button>
           <button id="filter-QUALIFICADO"      class="filter-btn"        onclick="setFilter('QUALIFICADO')">Qualificados</button>
+          <button id="filter-AGUARDANDO DOCUMENTOS" class="filter-btn"   onclick="setFilter('AGUARDANDO DOCUMENTOS')">Ag. Docs</button>
+          <button id="filter-AGUARDANDO ASSINATURA"  class="filter-btn"   onclick="setFilter('AGUARDANDO ASSINATURA')">Ag. Assinatura</button>
           <button id="filter-CONTRATO FECHADO" class="filter-btn"        onclick="setFilter('CONTRATO FECHADO')">Contratos</button>
           <button id="filter-DESQUALIFICADO"   class="filter-btn"        onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
         </div>
@@ -1583,7 +1596,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
           <div class="rel-group"><label class="rel-label">De</label><input id="rel-data-ini" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
           <div class="rel-group"><label class="rel-label">Até</label><input id="rel-data-fim" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
         </div>
-        <div class="rel-group"><label class="rel-label">Status</label><select id="rel-status" class="rel-select" onchange="relKpiFilter=null;renderRelatorios()"><option value="TODOS">Todos</option><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="rel-group"><label class="rel-label">Status</label><select id="rel-status" class="rel-select" onchange="relKpiFilter=null;renderRelatorios()"><option value="TODOS">Todos</option><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="rel-btns"><button class="btn-export" onclick="exportarExcel()">⬇ Excel</button><button class="btn-print" onclick="imprimirRelatorio()">🖨 PDF</button></div>
       </div>
       <div class="rel-kpis">
@@ -1624,7 +1637,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
-        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
         <div class="f-group full">
@@ -1726,6 +1739,14 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
         <button onclick="confirmarDecisao('qualificar')" style="background:rgba(16,185,129,.12);border:1px solid #10B981;color:#10B981;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
           <span style="font-size:1.1rem">✅</span>
           <div><div>Qualificar lead</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Lead tem potencial — mover para Qualificados</div></div>
+        </button>
+        <button onclick="confirmarDecisao('ag-docs')" style="background:rgba(245,158,11,.08);border:1px solid #F59E0B;color:#F59E0B;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.1rem">📄</span>
+          <div><div>Aguardando Documentos</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Documentos solicitados — aguardando envio do lead</div></div>
+        </button>
+        <button onclick="confirmarDecisao('ag-ass')" style="background:rgba(6,182,212,.08);border:1px solid #06B6D4;color:#06B6D4;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.1rem">✍️</span>
+          <div><div>Aguardando Assinatura</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Contrato enviado — aguardando assinatura</div></div>
         </button>
         <button onclick="confirmarDecisao('continuar')" style="background:rgba(79,110,247,.08);border:1px solid #4F6EF7;color:#4F6EF7;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;text-align:left;display:flex;align-items:center;gap:.5rem">
           <span style="font-size:1.1rem">🔄</span>
