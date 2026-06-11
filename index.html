@@ -275,9 +275,15 @@ function renderFollowups(){
   }
 
   // Apply search filter
-  const fuSearchVal=(document.getElementById('fu-search')?.value||'').toLowerCase().trim();
+  const fuSearchVal=(document.getElementById('fu-search')?.value||'').trim();
   if(fuSearchVal){
-    const filterFn=l=>(l.name||'').toLowerCase().includes(fuSearchVal)||(l.phone||'').replace(/\D/g,'').slice(-4).includes(fuSearchVal.replace(/\D/g,''));
+    const q=fuSearchVal.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const qDigits=fuSearchVal.replace(/\D/g,'');
+    const filterFn=l=>{
+      const nameNorm=(l.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+      const phoneDigits=(l.phone||'').replace(/\D/g,'');
+      return nameNorm.includes(q)||(qDigits.length>=3&&phoneDigits.includes(qDigits));
+    };
     pendentes=pendentes.filter(filterFn);
     agendados=agendados.filter(filterFn);
   }
