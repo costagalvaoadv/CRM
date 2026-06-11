@@ -377,12 +377,163 @@ function fuCard(l,todayStart){
     ${l.currentNote?`<div class="fu2-note">${l.currentNote}</div>`:''}
     <div class="fu2-actions">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa" onclick="event.stopPropagation()">WhatsApp</a>`:''}
+      <button onclick="event.stopPropagation();gerarMensagemFUP('${l.id}')" class="btn-gerar-msg" title="Gerar mensagem com IA">✨ Gerar</button>
       <button onclick="event.stopPropagation();avancarEtapa('${l.id}')" class="btn-done">✓ Feito</button>
     </div>
   </div>`;
 }
 
-// ─── AVANÇAR ETAPA ───
+// ─── GERAR MENSAGEM FUP COM IA ───
+window.gerarMensagemFUP = async function(id) {
+  const l = allLeads.find(x => x.id === id);
+  if (!l) return;
+
+  const trilhaLabels = getTrilha(l.tipo || 'SM');
+  const etapa = l.etapaFollowup || 0;
+  const etapaLabel = trilhaLabels[etapa] || 'Mensal';
+  const isGestante = l.tipo === 'SM' && etapa >= trilhaLabels.length - 1;
+
+  // Pegar últimas 4 entradas do histórico
+  const log = l.log || [];
+  const ultimas = [...log].reverse().slice(0, 4)
+    .map(e => `[${formatDatetime(new Date(e.ts))} - ${e.user}] ${e.note}`)
+    .join('\n');
+
+  // Determinar área
+  const areaMap = {
+    'SM': 'Salário-Maternidade',
+    'GERAL': 'Previdenciário Geral',
+  };
+  let area = areaMap[l.tipo] || 'Previdenciário';
+  if ((l.campaign||'').toLowerCase().includes('bpc')) area = 'BPC/LOAS';
+  if ((l.currentNote||'').toLowerCase().includes('aposentadoria') || (l.campaign||'').toLowerCase().includes('apo')) area = 'Aposentadoria';
+  if ((l.currentNote||'').toLowerCase().includes('auxílio') || (l.currentNote||'').toLowerCase().includes('doença')) area = 'Auxílio-Doença';
+
+  // Parto se SM
+  let partoInfo = '';
+  if (l.dataParto) {
+    const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
+    const diasParto = Math.floor((p - new Date()) / (1000*60*60*24));
+    partoInfo = `Data prevista do parto: ${formatDate(p)} (em ${diasParto} dias).`;
+  }
+
+  // Abrir modal com loading
+  document.getElementById('msg-lead-id').value = id;
+  document.getElementById('msg-lead-name').textContent = l.name || 'Sem Nome';
+  document.getElementById('msg-etapa-label').textContent = etapaLabel;
+  document.getElementById('msg-area-label').textContent = area;
+  document.getElementById('msg-resultado').style.display = 'none';
+  document.getElementById('msg-loading').style.display = 'flex';
+  document.getElementById('modal-mensagem').style.display = 'flex';
+
+  const prompt = `Você é especialista em atendimento humanizado para escritório de advocacia previdenciária.
+
+DADOS DO LEAD:
+- Nome: ${l.name || 'Cliente'}
+- Área: ${area}
+- Etapa atual do follow-up: ${etapaLabel}
+- Status: ${STATUS_META[l.status]?.label || l.status}
+- Atendente: ${l.assignee || '—'}
+${partoInfo}
+
+HISTÓRICO RECENTE (últimas interações):
+${ultimas || 'Sem histórico registrado.'}
+
+FLUXO PSICOLÓGICO POR ETAPA:
+- FUP 24h: Objetivo recuperar contato. Gatilho: facilidade. CTA simples. Sem pressão.
+- FUP 3d: Objetivo despertar curiosidade. Gatilho: oportunidade. Mostrar que ainda é possível ajudar.
+- FUP 7d: Objetivo gerar percepção de perda. Gatilho: consequência da inércia. Sem alarmismo.
+- FUP 15d: Objetivo reativação. Gatilho: encerramento implícito. Fazer o lead decidir.
+- FUP 30d: Objetivo última tentativa. Gatilho: fechamento de ciclo. Mensagem curta.
+- Mensal (gestante SM): Objetivo relacionamento. Não vender. Perguntar sobre a gestação. Criar conexão. Reforçar presença do escritório.
+
+REGRAS DA MENSAGEM:
+- Humanizada, curta, conversacional
+- NÃO parecer mensagem automática
+- NÃO mencionar honorários ou valores
+- NÃO pressionar
+- NÃO usar linguagem comercial
+- Sempre terminar com pergunta simples ou CTA leve
+- Quanto mais avançada a etapa, mais curta a mensagem
+- NÃO repetir abordagens já usadas no histórico acima
+${isGestante ? '- Esta é uma gestante: foque no relacionamento, pergunte sobre a gestação, demonstre cuidado genuíno' : ''}
+
+Responda EXATAMENTE neste formato (sem texto adicional antes ou depois):
+
+ETAPA: [nome da etapa]
+ESTRATÉGIA: [estratégia psicológica usada, 1-2 frases]
+MENSAGEM:
+[mensagem de WhatsApp pronta para envio, sem aspas, sem prefixo]
+REGISTRO CRM:
+[texto objetivo no padrão: "Realizado [etapa] via WhatsApp. [Resumo da ação]. Aguardando retorno para continuidade do atendimento."]`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '';
+
+    // Parse response
+    const etapaMatch   = text.match(/ETAPA:\s*(.+)/);
+    const estratMatch  = text.match(/ESTRATÉGIA:\s*(.+)/);
+    const msgMatch     = text.match(/MENSAGEM:\n([\s\S]*?)(?=REGISTRO CRM:|$)/);
+    const registroMatch= text.match(/REGISTRO CRM:\n([\s\S]*?)$/);
+
+    const etapaParsed    = etapaMatch?.[1]?.trim() || etapaLabel;
+    const estratParsed   = estratMatch?.[1]?.trim() || '';
+    const msgParsed      = msgMatch?.[1]?.trim() || text;
+    const registroParsed = registroMatch?.[1]?.trim() || '';
+
+    document.getElementById('msg-etapa-result').textContent  = etapaParsed;
+    document.getElementById('msg-estrat-result').textContent = estratParsed;
+    document.getElementById('msg-texto').value               = msgParsed;
+    document.getElementById('msg-registro').value            = registroParsed;
+
+    document.getElementById('msg-loading').style.display  = 'none';
+    document.getElementById('msg-resultado').style.display= 'flex';
+
+  } catch(err) {
+    document.getElementById('msg-loading').style.display = 'none';
+    showToast('Erro ao gerar mensagem: ' + err.message, 'error');
+    document.getElementById('modal-mensagem').style.display = 'none';
+  }
+};
+
+window.fecharModalMensagem = () => document.getElementById('modal-mensagem').style.display = 'none';
+
+window.copiarMensagem = function() {
+  const txt = document.getElementById('msg-texto').value;
+  navigator.clipboard.writeText(txt).then(() => showToast('✅ Mensagem copiada!'));
+};
+
+window.salvarRegistroCRM = async function() {
+  const id       = document.getElementById('msg-lead-id').value;
+  const registro = document.getElementById('msg-registro').value.trim();
+  const etapa    = document.getElementById('msg-etapa-result').textContent;
+  if (!id || !registro) return;
+  const l = allLeads.find(x => x.id === id);
+  if (!l) return;
+  await updateDoc(doc(db, 'leads', id), {
+    currentNote: registro,
+    lastContact: serverTimestamp(),
+    log: arrayUnion({
+      user: currentUser?.nome || '—',
+      note: registro,
+      ts: new Date().toISOString(),
+      statusChange: null
+    })
+  });
+  showToast('✅ Registro salvo no CRM!');
+  fecharModalMensagem();
+};
 async function avancarEtapa(id){
   const l=allLeads.find(x=>x.id===id);
   if(!l){ showToast('Lead não encontrado','error'); return; }
@@ -1203,6 +1354,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .btn-wa{background:#1DAA61;color:#fff;border:none;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap}
 .btn-done{background:transparent;color:#10B981;border:1px solid #10B981;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer}
 .btn-done:hover{background:rgba(16,185,129,.12)}
+.btn-gerar-msg{background:rgba(139,92,246,.15);color:#8B5CF6;border:1px solid #8B5CF6;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-gerar-msg:hover{background:rgba(139,92,246,.3)}
 .btn-wa-xs{display:inline-flex;background:#1DAA61;color:#fff;border:none;border-radius:5px;padding:.22rem .55rem;font-size:.68rem;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap}
 .urgent-fu{color:#F5A623;font-weight:600}
 /* MODAL */
@@ -1240,6 +1393,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.warn{border-left-color:#F5A623}
 .toast.error{border-left-color:#EF4444}
+.msg-spinner{width:36px;height:36px;border:3px solid #2A2F45;border-top-color:#8B5CF6;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none!important}
 ::-webkit-scrollbar{width:4px;height:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -1484,6 +1639,65 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
           <span style="font-size:1.1rem">❌</span>
           <div><div>Desqualificar lead</div><div style="font-size:.7rem;opacity:.7;font-weight:400">Sem interesse — arquivar como desqualificado</div></div>
         </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL MENSAGEM IA -->
+<div id="modal-mensagem" class="modal-overlay">
+  <div class="modal-box" style="max-width:580px">
+    <div class="modal-head">
+      <div>
+        <span class="modal-title">✨ Mensagem Gerada por IA</span>
+        <div style="font-size:.68rem;color:#6B7280;margin-top:.15rem">
+          <span id="msg-lead-name" style="color:#8B5CF6;font-weight:600"></span>
+          &nbsp;·&nbsp;<span id="msg-etapa-label"></span>
+          &nbsp;·&nbsp;<span id="msg-area-label"></span>
+        </div>
+      </div>
+      <button class="modal-close" onclick="fecharModalMensagem()">✕</button>
+    </div>
+    <input type="hidden" id="msg-lead-id"/>
+    <div class="modal-body">
+      <!-- LOADING -->
+      <div id="msg-loading" style="display:flex;flex-direction:column;align-items:center;gap:1rem;padding:2rem">
+        <div class="msg-spinner"></div>
+        <div style="font-size:.82rem;color:#9CA3AF">Analisando histórico e gerando mensagem...</div>
+      </div>
+      <!-- RESULTADO -->
+      <div id="msg-resultado" style="display:none;flex-direction:column;gap:1rem">
+        <!-- Etapa + Estratégia -->
+        <div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:.85rem 1rem">
+          <div style="display:flex;gap:1rem;flex-wrap:wrap">
+            <div>
+              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Etapa</div>
+              <div style="font-size:.82rem;font-weight:700;color:#8B5CF6" id="msg-etapa-result"></div>
+            </div>
+            <div style="flex:1">
+              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Estratégia</div>
+              <div style="font-size:.78rem;color:#D1D5DB" id="msg-estrat-result"></div>
+            </div>
+          </div>
+        </div>
+        <!-- Mensagem editável -->
+        <div class="f-group">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
+            <label class="f-label">💬 Mensagem WhatsApp — revise antes de enviar</label>
+            <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:6px;padding:.3rem .75rem;font-size:.72rem;font-weight:600;cursor:pointer">📋 Copiar</button>
+          </div>
+          <textarea id="msg-texto" class="f-textarea" style="min-height:120px;font-size:.85rem;line-height:1.6"></textarea>
+        </div>
+        <!-- Registro CRM editável -->
+        <div class="f-group">
+          <label class="f-label">📝 Registro CRM — será salvo no histórico do lead</label>
+          <textarea id="msg-registro" class="f-textarea" style="min-height:65px;font-size:.8rem"></textarea>
+        </div>
+        <div style="display:flex;gap:.5rem;justify-content:flex-end">
+          <button onclick="fecharModalMensagem()" class="btn-cancel">Fechar</button>
+          <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:8px;padding:.5rem 1.1rem;font-size:.82rem;font-weight:700;cursor:pointer">📋 Copiar Mensagem</button>
+          <button onclick="salvarRegistroCRM()" class="btn-save">✅ Salvar no CRM</button>
+        </div>
       </div>
     </div>
   </div>
