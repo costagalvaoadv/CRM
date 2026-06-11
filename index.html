@@ -263,15 +263,16 @@ function renderFollowups(){
     return d>todayEnd;
   });
 
-  // Apply search filter
-  const fuSearchVal=(document.getElementById('fu-search')?.value||'').toLowerCase().trim();
-
+  // Apply atendente filter first
   if(fuFilter!=='TODOS'){
     pendentes=pendentes.filter(l=>l.assignee===fuFilter);
     agendados=agendados.filter(l=>l.assignee===fuFilter);
   }
+
+  // Apply search filter
+  const fuSearchVal=(document.getElementById('fu-search')?.value||'').toLowerCase().trim();
   if(fuSearchVal){
-    const filterFn=l=>(l.name||'').toLowerCase().includes(fuSearchVal)||(l.phone||'').replace(/\D/g,'').includes(fuSearchVal.replace(/\D/g,''));
+    const filterFn=l=>(l.name||'').toLowerCase().includes(fuSearchVal)||(l.phone||'').replace(/\D/g,'').slice(-4).includes(fuSearchVal.replace(/\D/g,''));
     pendentes=pendentes.filter(filterFn);
     agendados=agendados.filter(filterFn);
   }
@@ -570,24 +571,30 @@ window.copiarMensagem = function() {
 };
 
 window.salvarRegistroCRM = async function() {
+  const btn = document.querySelector('#modal-mensagem .btn-save');
+  if (btn?.disabled) return; // prevent double click
   const id       = document.getElementById('msg-lead-id').value;
   const registro = document.getElementById('msg-registro').value.trim();
-  const etapa    = document.getElementById('msg-etapa-result').textContent;
   if (!id || !registro) return;
   const l = allLeads.find(x => x.id === id);
   if (!l) return;
-  await updateDoc(doc(db, 'leads', id), {
-    currentNote: registro,
-    lastContact: serverTimestamp(),
-    log: arrayUnion({
-      user: currentUser?.nome || '—',
-      note: registro,
-      ts: new Date().toISOString(),
-      statusChange: null
-    })
-  });
-  showToast('✅ Registro salvo no CRM!');
-  fecharModalMensagem();
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando...'; }
+  try {
+    await updateDoc(doc(db, 'leads', id), {
+      currentNote: registro,
+      lastContact: serverTimestamp(),
+      log: arrayUnion({
+        user: currentUser?.nome || '—',
+        note: registro,
+        ts: new Date().toISOString(),
+        statusChange: null
+      })
+    });
+    showToast('✅ Registro salvo no CRM!');
+    fecharModalMensagem();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✅ Salvar no CRM'; }
+  }
 };
 async function avancarEtapa(id){
   const l=allLeads.find(x=>x.id===id);
@@ -632,6 +639,11 @@ async function avancarEtapa(id){
   await updateDoc(doc(db,'leads',id),upd);
   showToast(nextFollowup?`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`:`✓ ${labelFeita} feito!`);
 }
+window.avancarEtapaDoModal = async function() {
+  if (!editingLeadId) return;
+  await avancarEtapa(editingLeadId);
+  closeLead();
+};
 window.avancarEtapa=avancarEtapa;
 window.avancarEtapaFollowup=avancarEtapa;
 
@@ -780,6 +792,12 @@ window.openLead=function(id){
   togglePartoField();
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
   renderLog(l?.log||[]);
+  // Show "FUP Feito" button if lead has pending followup
+  const btnFeito = document.getElementById('btn-feito-modal');
+  if (btnFeito) {
+    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l?.status||'');
+    btnFeito.style.display = hasPendingFup ? 'inline-flex' : 'none';
+  }
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
@@ -1654,7 +1672,11 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     </div>
     <div class="modal-foot">
       <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir</button>
-      <div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="closeLead()">Cancelar</button><button class="btn-save" onclick="saveLead()">Salvar</button></div>
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+        <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
+        <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
+        <button class="btn-save" onclick="saveLead()">Salvar</button>
+      </div>
     </div>
   </div>
 </div>
