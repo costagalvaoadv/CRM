@@ -719,6 +719,7 @@ window.openLead=function(id){
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
   renderLog(l?.log||[]);
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
+  const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
 window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
@@ -1104,15 +1105,15 @@ body{font-family:'Inter',sans-serif;background:#0B0D14;color:#F1F3F9;min-height:
 .btn-primary{background:#4F6EF7;color:#fff;border:none;border-radius:10px;padding:.8rem;font-size:.9rem;font-weight:700;cursor:pointer;width:100%;transition:all .2s}
 .btn-primary:hover{background:#3B5BDB}
 .btn-primary:disabled{opacity:.6;cursor:not-allowed}
-header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1.75rem;height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:1rem}
+header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1rem;height:auto;min-height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:.5rem;flex-wrap:wrap;padding-top:.4rem;padding-bottom:.4rem}
 .h-brand{font-size:.88rem;font-weight:800;color:#4F6EF7;letter-spacing:.05em;white-space:nowrap}
-.h-center{flex:1;display:flex;justify-content:center}
+.h-center{display:flex;justify-content:center;order:-1;width:100%;margin-bottom:.1rem}
 #online-users{display:flex;align-items:center;gap:.4rem}
 .online-badge{display:flex;align-items:center;gap:.3rem;background:#13161F;border:1px solid #1E2235;border-radius:999px;padding:.2rem .6rem}
 .online-dot{width:6px;height:6px;border-radius:50%;background:#10B981;animation:onP 2s ease-in-out infinite}
 @keyframes onP{0%,100%{opacity:1}50%{opacity:.4}}
 .online-name{font-size:.7rem;font-weight:600;color:#10B981}
-.h-right{display:flex;align-items:center;gap:.6rem;flex-shrink:0}
+.h-right{display:flex;align-items:center;gap:.4rem;flex-shrink:0;flex-wrap:wrap}
 .h-user{display:flex;flex-direction:column;align-items:flex-end}
 .h-user-name{font-size:.8rem;font-weight:600}
 .h-user-role{font-size:.65rem;color:#6B7280}
@@ -1121,7 +1122,7 @@ header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1.75rem;heig
 .btn-hdr-danger:hover{border-color:#EF4444;color:#EF4444}
 .btn-hdr-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .btn-hdr-primary:hover{background:#3B5BDB;border-color:#3B5BDB;color:#fff}
-main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
+main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .metrics-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1.25rem}
 .metric-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1.1rem}
 .metric-label{font-size:.65rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem}
@@ -1142,7 +1143,7 @@ main{padding:1.25rem 1.75rem;max-width:1700px;margin:0 auto}
 .fu-filter-btns::-webkit-scrollbar{display:none}
 .fu-filter-btn{padding:.25rem .7rem;border-radius:5px;border:1px solid #1E2235;background:#0B0D14;color:#6B7280;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
 .fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
-.fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;overflow:hidden}
+.fu-panel-header{padding:.75rem 1rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.5rem;min-width:0}
 /* FU AGENDADOS */
 .fu-agendados-sep{font-size:.65rem;font-weight:700;color:#6B7280;padding:.4rem .2rem .2rem;border-top:1px solid #2A2F45;margin-top:.3rem;display:flex;align-items:center;gap:.3rem}
 .fu-card-agendado{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.65rem .75rem;cursor:pointer;transition:border-color .15s;display:flex;flex-direction:column;gap:.3rem;opacity:.75}
@@ -1264,7 +1265,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .t-name{font-weight:600;color:#F1F3F9}
 .t-note{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#9CA3AF}
 /* REL */
-.rel-controls{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;display:flex;gap:.85rem;flex-wrap:wrap;align-items:flex-end}
+.rel-controls{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1rem 1.25rem;margin-bottom:1rem;display:flex;gap:.85rem;flex-wrap:wrap;align-items:flex-end;overflow:hidden}
 .rel-group{display:flex;flex-direction:column;gap:.35rem}
 .rel-label{font-size:.65rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 .rel-select,.rel-date{background:#1E2235;border:1px solid #2A2F45;border-radius:7px;padding:.45rem .8rem;color:#F1F3F9;font-size:.8rem;font-family:'Inter',sans-serif;outline:none;transition:border-color .2s}
@@ -1273,7 +1274,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .btn-export{background:#10B981;color:#fff;border:none;border-radius:7px;padding:.45rem .9rem;font-size:.76rem;font-weight:600;cursor:pointer}
 .btn-print{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:7px;padding:.45rem .9rem;font-size:.76rem;font-weight:600;cursor:pointer}
 .btn-print:hover{border-color:#4F6EF7;color:#4F6EF7}
-.rel-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1rem}
+.rel-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:.75rem;margin-bottom:1rem;overflow:hidden}
 .rel-kpi{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.9rem 1rem;text-align:center;cursor:pointer;transition:all .15s}
 .rel-kpi:hover{border-color:#4F6EF7;transform:translateY(-1px)}
 .rel-kpi.kpi-active{border-color:#4F6EF7;background:#171B2E;box-shadow:0 0 0 2px rgba(79,110,247,.25)}
@@ -1326,18 +1327,18 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .est-r-name{font-size:.82rem;font-weight:600;color:#F1F3F9}
 .est-r-info{font-size:.7rem;color:#6B7280}
 /* EQUIPE */
-.equipe-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem}
+.equipe-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem}
 .equipe-title{font-size:.95rem;font-weight:700}
-#equipe-lista{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:.85rem}
-.user-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1.1rem;display:flex;align-items:center;gap:.85rem}
+#equipe-lista{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:.85rem}
+.user-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1rem;display:flex;align-items:center;gap:.75rem;overflow:hidden;cursor:pointer;transition:border-color .15s}.user-card:hover{border-color:#4F6EF7}
 .user-avatar{width:40px;height:40px;border-radius:50%;background:#4F6EF7;display:flex;align-items:center;justify-content:center;font-size:1rem;font-weight:700;color:#fff;flex-shrink:0}
-.user-info{flex:1;display:flex;flex-direction:column;gap:.18rem}
+.user-info{flex:1;display:flex;flex-direction:column;gap:.18rem;min-width:0;overflow:hidden}
 .user-name{font-size:.85rem;font-weight:600}
-.user-email{font-size:.7rem;color:#6B7280}
+.user-email{font-size:.7rem;color:#6B7280;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .user-role{display:inline-flex;padding:.12rem .45rem;border-radius:4px;font-size:.65rem;font-weight:700;margin-top:.15rem}
 .role-gestora{background:rgba(79,110,247,.15);color:#4F6EF7}
 .role-atendente{background:rgba(16,185,129,.12);color:#10B981}
-.btn-edit-user{background:#1E2235;border:1px solid #2A2F45;border-radius:6px;color:#9CA3AF;font-size:.7rem;padding:.3rem .65rem;cursor:pointer;transition:all .15s}
+.btn-edit-user{background:#1E2235;border:1px solid #2A2F45;border-radius:6px;color:#9CA3AF;font-size:.7rem;padding:.3rem .65rem;cursor:pointer;transition:all .15s;flex-shrink:0;white-space:nowrap}
 .btn-edit-user:hover{border-color:#4F6EF7;color:#4F6EF7}
 /* SHARED */
 .status-pill{display:inline-flex;padding:.18rem .55rem;border-radius:999px;font-size:.65rem;font-weight:700;white-space:nowrap}
@@ -1390,9 +1391,10 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .msg-spinner{width:36px;height:36px;border:3px solid #2A2F45;border-top-color:#8B5CF6;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none!important}
-::-webkit-scrollbar{width:4px;height:4px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:#1E2235;border-radius:99px}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:#13161F}
+::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:99px;border:2px solid #13161F}
+::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 @media print{header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast{display:none!important}body{background:#fff;color:#000}}
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(3,1fr)}.kanban-board{grid-template-columns:repeat(3,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
@@ -1577,7 +1579,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
           <div style="font-size:.8rem;font-weight:700;color:#8B5CF6">✨ Gerar mensagem estratégica com IA</div>
           <div style="font-size:.7rem;color:#6B7280;margin-top:.15rem">A IA analisa o histórico e gera a mensagem certa para esta etapa do follow-up</div>
         </div>
-        <button onclick="gerarMensagemFUP(editingLeadId)" class="btn-gerar-msg" style="flex-shrink:0">✨ Gerar mensagem</button>
+        <button id="btn-gerar-ia" onclick="gerarMensagemFUP(document.getElementById('msg-lead-id-hidden').value)" class="btn-gerar-msg" style="flex-shrink:0">✨ Gerar mensagem</button>
       </div>
     </div>
     <div class="modal-foot">
@@ -1660,7 +1662,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       </div>
       <button class="modal-close" onclick="fecharModalMensagem()">✕</button>
     </div>
-    <input type="hidden" id="msg-lead-id"/>
+    <input type="hidden" id="msg-lead-id"/><input type="hidden" id="msg-lead-id-hidden"/>
     <div class="modal-body">
       <!-- LOADING -->
       <div id="msg-loading" style="display:flex;flex-direction:column;align-items:center;gap:1rem;padding:2rem">
