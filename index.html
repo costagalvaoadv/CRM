@@ -259,6 +259,22 @@ function renderFuFilterBtns(){
 }
 window.renderFollowups=renderFollowups;
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
+window.toggleKanbanPanel=function(){
+  const wrap=document.getElementById('kanban-board-wrap');
+  const btn=document.getElementById('kanban-collapse-btn');
+  const collapsed=wrap.classList.toggle('kanban-collapsed');
+  btn.textContent=collapsed?'▸':'▾';
+  localStorage.setItem('cg-kanban-collapsed',collapsed?'1':'0');
+};
+(function(){
+  if(localStorage.getItem('cg-kanban-collapsed')==='1'){
+    document.addEventListener('DOMContentLoaded',()=>{
+      const wrap=document.getElementById('kanban-board-wrap');
+      const btn=document.getElementById('kanban-collapse-btn');
+      if(wrap){wrap.classList.add('kanban-collapsed');if(btn)btn.textContent='▸';}
+    });
+  }
+})();
 window.toggleFuPanel=function(){
   const wrap=document.getElementById('fu-stages-wrap');
   const btn=document.getElementById('fu-collapse-btn');
@@ -1184,24 +1200,24 @@ window.renderEstrategia=function(){
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     <div class="est-alerts-grid">
-      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" onclick="${partoProximo.length?`abrirListaLeads(${JSON.stringify(partoProximo.map(l=>l.id))},'SM com parto em até 60 dias')`:''}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
-      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" onclick="${qualifParados.length?`abrirListaLeads(${JSON.stringify(qualifParados.map(l=>l.id))},'Qualificados parados +7 dias')`:''}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
-      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" onclick="${esfriando.length?`abrirListaLeads(${JSON.stringify(esfriando.map(l=>l.id))},'Esfriando +15 dias sem contato')`:''}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
-      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" onclick="${fuAtrasados.length?`abrirListaLeads(${JSON.stringify(fuAtrasados.map(l=>l.id))},'Follow-ups em atraso')`:''}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
+      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" onclick="${partoProximo.length?`abrirListaLeads(${JSON.stringify(partoProximo.map(l=>l.id)).replace(/\"/g,'&quot;')},'SM com parto em até 60 dias')`:''}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
+      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" onclick="${qualifParados.length?`abrirListaLeads(${JSON.stringify(qualifParados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados parados +7 dias')`:''}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
+      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" onclick="${esfriando.length?`abrirListaLeads(${JSON.stringify(esfriando.map(l=>l.id)).replace(/\"/g,'&quot;')},'Esfriando +15 dias sem contato')`:''}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
+      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" onclick="${fuAtrasados.length?`abrirListaLeads(${JSON.stringify(fuAtrasados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Follow-ups em atraso')`:''}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
     </div>
   </div>
   <div class="est-section">
     <div class="est-section-title">📊 Pipeline do Mês</div>
     <div class="est-pipeline-grid">
-      <div class="est-pipe-card ${mesLeads.length?'clickable-card':''}" onclick="${mesLeads.length?`abrirListaLeads(${JSON.stringify(mesLeads.map(l=>l.id))},'Leads entrados no mês')`:''}"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
+      <div class="est-pipe-card ${mesLeads.length?'clickable-card':''}" onclick="${mesLeads.length?`abrirListaLeads(${JSON.stringify(mesLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Leads entrados no mês')`:''}"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card ${qualifLeads.length?'clickable-card':''}" onclick="${qualifLeads.length?`abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id))},'Qualificados do mês')`:''}"><div class="est-pipe-num" style="color:#10B981">${qualif}</div><div class="est-pipe-label">Qualificados</div></div>
+      <div class="est-pipe-card ${qualifLeads.length?'clickable-card':''}" onclick="${qualifLeads.length?`abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados do mês')`:''}"><div class="est-pipe-num" style="color:#10B981">${qualif}</div><div class="est-pipe-label">Qualificados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card ${contratosLeads.length?'clickable-card':''}" onclick="${contratosLeads.length?`abrirListaLeads(${JSON.stringify(contratosLeads.map(l=>l.id))},'Contratos fechados no mês')`:''}"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
+      <div class="est-pipe-card ${contratosLeads.length?'clickable-card':''}" onclick="${contratosLeads.length?`abrirListaLeads(${JSON.stringify(contratosLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Contratos fechados no mês')`:''}"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
       <div class="est-pipe-arrow">→</div>
       <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
-    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id))},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
+    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
     <div class="est-section-title">📢 Eficiência por Campanha</div>
@@ -1335,6 +1351,11 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
+.kanban-panel-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem}
+.kanban-panel-title{font-size:.88rem;font-weight:700}
+.kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
+.kanban-board.kanban-collapsed{max-height:0;opacity:0}
+body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
 .fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
@@ -1759,7 +1780,12 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
       </div>
     </div>
     <div id="view-kanban">
-      <div class="kanban-board">
+      <div class="kanban-panel-header">
+        <span style="font-size:1rem">📋</span>
+        <span class="kanban-panel-title">Kanban de Leads</span>
+        <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
+      </div>
+      <div class="kanban-board" id="kanban-board-wrap">
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #F5A623"><span class="k-col-title" style="color:#F5A623">Sem Resposta</span><span class="k-col-count" id="col-count-SEM RESPOSTA">0</span></div><div class="k-col-body" id="col-SEM RESPOSTA"></div></div>
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #10B981"><span class="k-col-title" style="color:#10B981">Qualificados</span><span class="k-col-count" id="col-count-QUALIFICADO">0</span></div><div class="k-col-body" id="col-QUALIFICADO"></div></div>
