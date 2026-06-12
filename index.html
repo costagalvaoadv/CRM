@@ -70,8 +70,21 @@ function showScreen(n){
   const el=document.getElementById('screen-'+n);if(el)el.style.display='flex';
 }
 
+window.toggleTheme=function(){
+  const isLight=document.body.classList.toggle('light-theme');
+  document.getElementById('btn-theme').textContent=isLight?'☀️':'🌙';
+  localStorage.setItem('cg-theme',isLight?'light':'dark');
+};
+(function(){
+  if(localStorage.getItem('cg-theme')==='light'){
+    document.body.classList.add('light-theme');
+  }
+})();
+
 function showApp(){
   showScreen('app');
+  const btnTheme=document.getElementById('btn-theme');
+  if(btnTheme) btnTheme.textContent=document.body.classList.contains('light-theme')?'☀️':'🌙';
   document.getElementById('header-name').textContent=currentUser.nome||currentUser.email;
   document.getElementById('header-role').textContent=currentUser.role==='gestora'?'Gestora':'Atendente';
   const isG=currentUser.role==='gestora';
@@ -246,6 +259,22 @@ function renderFuFilterBtns(){
 }
 window.renderFollowups=renderFollowups;
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
+window.toggleFuPanel=function(){
+  const wrap=document.getElementById('fu-stages-wrap');
+  const btn=document.getElementById('fu-collapse-btn');
+  const collapsed=wrap.classList.toggle('fu-collapsed');
+  btn.textContent=collapsed?'▸':'▾';
+  localStorage.setItem('cg-fu-collapsed',collapsed?'1':'0');
+};
+(function(){
+  if(localStorage.getItem('cg-fu-collapsed')==='1'){
+    document.addEventListener('DOMContentLoaded',()=>{
+      const wrap=document.getElementById('fu-stages-wrap');
+      const btn=document.getElementById('fu-collapse-btn');
+      if(wrap){wrap.classList.add('fu-collapsed');if(btn)btn.textContent='▸';}
+    });
+  }
+})();
 
 function renderFollowups(){
   const now=new Date();
@@ -417,7 +446,7 @@ window.gerarMensagemFUP = async function(id) {
     .map(e => `[${formatDatetime(new Date(e.ts))} - ${e.user}] ${e.note}`)
     .join('\n');
 
-  let area = l.tipo === 'SM' ? 'Salário-Maternidade' : 'Previdenciário Geral';
+  let area = l.tipo === 'SM' ? 'Salário-Maternidade' : 'benefícios do INSS';
   const noteL = (l.currentNote||'').toLowerCase();
   const campL = (l.campaign||'').toLowerCase();
   if(campL.includes('bpc')||noteL.includes('bpc')) area='BPC/LOAS';
@@ -1251,7 +1280,10 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .fua-dias{font-size:.65rem;font-weight:700;color:#4F6EF7;background:rgba(79,110,247,.12);border-radius:4px;padding:.1rem .35rem;white-space:nowrap}
 .fua-data{font-size:.68rem;color:#6B7280}
 /* FU STAGE KANBAN */
-.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent}
+.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
+.fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
+.fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
+.fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
 .fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
@@ -1499,6 +1531,99 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
+
+/* ═══ LIGHT THEME ═══ */
+body.light-theme{background:#F4F5F8;color:#1A1D2E}
+body.light-theme header{background:#FFFFFF;border-bottom:1px solid #E2E5EE}
+body.light-theme .h-brand{color:#4F6EF7}
+body.light-theme .h-user-role{color:#8B92A8}
+body.light-theme .btn-hdr{background:#FFFFFF;border-color:#E2E5EE;color:#5A6378}
+body.light-theme .btn-hdr:hover{border-color:#4F6EF7;color:#4F6EF7}
+body.light-theme .online-badge{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .metric-card{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .metric-label{color:#8B92A8}
+body.light-theme .fu-panel{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .fu-panel-header{border-bottom-color:#E2E5EE}
+body.light-theme .fu-panel-title{color:#1A1D2E}
+body.light-theme .fu-collapse-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .fu-search-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .fu-search-input::placeholder{color:#B0B6C5}
+body.light-theme .fu-filter-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
+body.light-theme .fu-stage-col{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .fu-stage-header{background:#FFFFFF;border-bottom-color:#E2E5EE}
+body.light-theme .fu-stage-title{color:#4F6EF7}
+body.light-theme .fu-stage-count{background:rgba(79,110,247,.1)}
+body.light-theme .fu-stage-empty{color:#C7CCDA}
+body.light-theme .fu-card2,body.light-theme .fu-card-agendado{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .fu2-name{color:#1A1D2E}
+body.light-theme .fu2-resp,body.light-theme .fua-data,body.light-theme .fuh-when{color:#8B92A8}
+body.light-theme .fu2-note{color:#5A6378}
+body.light-theme .mini-step.ms-pending{color:#C7CCDA}
+body.light-theme .fu-agendados-sep{border-top-color:#E2E5EE;color:#8B92A8}
+body.light-theme .tabs{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .tab-btn{color:#8B92A8}
+body.light-theme .tab-btn.tab-active{background:#F4F5F8;color:#1A1D2E}
+body.light-theme .k-col{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .k-col-header{border-bottom-color:#E2E5EE}
+body.light-theme .k-col-count{background:#F4F5F8;color:#8B92A8}
+body.light-theme .k-card{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .k-name{color:#1A1D2E}
+body.light-theme .k-phone,body.light-theme .k-fu,body.light-theme .col-empty{color:#8B92A8}
+body.light-theme .k-note{color:#5A6378}
+body.light-theme .table-wrap{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme thead th{border-bottom-color:#E2E5EE;color:#8B92A8}
+body.light-theme .t-row td{border-bottom-color:#F0F2F7;color:#5A6378}
+body.light-theme .t-row:hover td{background:#F8F9FC}
+body.light-theme .t-name{color:#1A1D2E}
+body.light-theme .search-input{background:#FFFFFF;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .filter-btn{background:#FFFFFF;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
+body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .rel-kpi{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
+body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .est-section-title{color:#1A1D2E}
+body.light-theme .est-alert,body.light-theme .est-pipe-card{background:#F8F9FC}
+body.light-theme .est-alert.alert-ok{border-color:#E2E5EE}
+body.light-theme .est-alert-label,body.light-theme .est-pipe-label{color:#8B92A8}
+body.light-theme .est-insight{color:#5A6378}
+body.light-theme .est-table thead th{border-bottom-color:#E2E5EE;color:#8B92A8}
+body.light-theme .est-table tbody td{border-bottom-color:#F0F2F7;color:#5A6378}
+body.light-theme .est-table tbody tr:hover td{background:#F8F9FC}
+body.light-theme .est-camp-name{color:#1A1D2E}
+body.light-theme .est-resgate-card{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .est-r-name{color:#1A1D2E}
+body.light-theme .est-r-info{color:#8B92A8}
+body.light-theme .user-card{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .user-name{color:#1A1D2E}
+body.light-theme .user-email{color:#8B92A8}
+body.light-theme .btn-edit-user{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .modal-box{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .modal-head{background:#FFFFFF;border-bottom-color:#E2E5EE}
+body.light-theme .modal-title{color:#1A1D2E}
+body.light-theme .modal-close{color:#8B92A8}
+body.light-theme .modal-foot{background:#FFFFFF;border-top-color:#E2E5EE}
+body.light-theme .f-label{color:#8B92A8}
+body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .qn-btn:hover{background:#EDEFF5}
+body.light-theme #progress-container{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .psh-circle{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .ps-pending .psh-circle{color:#C7CCDA;border-color:#E2E5EE}
+body.light-theme .ps-pending .psh-label{color:#C7CCDA}
+body.light-theme .fuh-item{background:#FFFFFF}
+body.light-theme .fuh-who{color:#1A1D2E}
+body.light-theme .log-entry{background:#F8F9FC;border-left-color:#E2E5EE}
+body.light-theme .log-time{color:#8B92A8}
+body.light-theme .log-body{color:#5A6378;border-left-color:#E2E5EE}
+body.light-theme .log-empty{color:#8B92A8}
+body.light-theme .btn-cancel{background:#FFFFFF;border-color:#E2E5EE;color:#8B92A8}
+body.light-theme .auth-box{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .auth-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .auth-sub{color:#8B92A8}
+body.light-theme ::-webkit-scrollbar-track{background:#F0F2F7}
+body.light-theme ::-webkit-scrollbar-thumb{background:#D5D9E3;border-color:#F0F2F7}
 </style>
 </head>
 <body>
@@ -1530,6 +1655,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
+      <button class="btn-hdr" onclick="toggleTheme()" title="Alternar contraste" id="btn-theme">🌙</button>
       <button class="btn-hdr btn-hdr-danger" onclick="fazerLogout()">Sair</button>
       <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
       <button class="btn-hdr" onclick="fazerBackup()" title="Backup completo">💾</button>
@@ -1551,11 +1677,12 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
       <div class="fu-panel-header">
         <span style="font-size:1rem">🔥</span>
         <span class="fu-panel-title">Follow-ups</span>
+        <button class="fu-collapse-btn" onclick="toggleFuPanel()" id="fu-collapse-btn" title="Encolher/Expandir painel">▾</button>
         <span class="fu-badge" id="fu-badge">0</span>
         <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="window.renderFollowups()"/>
         <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
-      <div class="fu-stages-wrap">
+      <div class="fu-stages-wrap" id="fu-stages-wrap">
         <div id="fu-stages" class="fu-stages"></div>
       </div>
     </div>
