@@ -1129,6 +1129,7 @@ window.renderRelatorios=function(){
   }).join('');
 };
 window.clickKpi=function(s){relKpiFilter=relKpiFilter===s?null:s;renderRelatorios();};
+window.getLeadsFiltrados=getLeadsFiltrados;
 
 function renderChart(id,type,labels,data,colors){
   const canvas=document.getElementById(id);if(!canvas)return;
@@ -1484,8 +1485,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .rel-kpi.kpi-active{border-color:#4F6EF7;background:#171B2E;box-shadow:0 0 0 2px rgba(79,110,247,.25)}
 .rel-kpi-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem}
 .rel-kpi-val{font-size:1.5rem;font-weight:800}
-.kpi-clear{font-size:.65rem;color:#4F6EF7;margin-top:.2rem;display:none}
-.rel-kpi.kpi-active .kpi-clear{display:block}
+.kpi-ver-btn{font-size:.65rem;color:#4F6EF7;margin-top:.35rem;background:rgba(79,110,247,.1);border:1px solid rgba(79,110,247,.25);border-radius:5px;padding:.15rem .55rem;cursor:pointer;transition:all .15s}
+.kpi-ver-btn:hover{background:#4F6EF7;color:#fff;border-color:#4F6EF7}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin-bottom:1rem}
 .chart-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1.1rem}
 .chart-title{font-size:.72rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.85rem}
@@ -1822,10 +1823,10 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
         <div class="rel-btns"><button class="btn-export" onclick="exportarExcel()">⬇ Excel</button><button class="btn-print" onclick="imprimirRelatorio()">🖨 PDF</button></div>
       </div>
       <div class="rel-kpis">
-        <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><div class="kpi-clear">✕ limpar</div></div>
-        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="kpi-clear">✕ limpar</div></div>
-        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="kpi-clear">✕ limpar</div></div>
-        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="kpi-clear">✕ limpar</div></div>
+        <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
       </div>
       <div class="charts-grid">
