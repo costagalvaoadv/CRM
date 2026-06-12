@@ -687,6 +687,52 @@ window.avancarEtapaDoModal = async function() {
 window.avancarEtapa=avancarEtapa;
 window.avancarEtapaFollowup=avancarEtapa;
 
+// ─── MODAL LISTA DE LEADS CLICÁVEL ───
+window.abrirListaLeads = function(leadIds, titulo) {
+  const leads = leadIds.map(id => allLeads.find(l => l.id === id)).filter(Boolean);
+  document.getElementById('lead-list-title').textContent = titulo + ` (${leads.length})`;
+  const el = document.getElementById('lead-list-content');
+  if (!leads.length) {
+    el.innerHTML = `<div style="text-align:center;color:#6B7280;padding:1.5rem;font-size:.85rem">Nenhum lead encontrado.</div>`;
+  } else {
+    el.innerHTML = leads.map(l => {
+      const sm = STATUS_META[l.status] || STATUS_META['EM ANDAMENTO'];
+      const wa = formatPhone(l.phone);
+      return `
+      <div class="llist-item" onclick="fecharListaLeads();openLead('${l.id}')">
+        <div class="llist-info">
+          <div class="llist-name">${l.name || 'Sem Nome'}</div>
+          <div class="llist-meta">
+            ${l.tipo ? `<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'SM':'Geral'}</span>` : ''}
+            <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
+            <span class="llist-resp">${l.assignee || '—'}</span>
+          </div>
+        </div>
+        ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" onclick="event.stopPropagation()">WhatsApp</a>` : ''}
+      </div>`;
+    }).join('');
+  }
+  document.getElementById('modal-lead-list').style.display = 'flex';
+};
+window.fecharListaLeads = () => document.getElementById('modal-lead-list').style.display = 'none';
+
+// Abrir lista a partir dos cards de métricas do dashboard (filtra pelo mês atual)
+window.abrirMetricaLeads = function(status) {
+  const now = new Date();
+  const m = now.getMonth(), y = now.getFullYear();
+  let leads = allLeads.filter(l => {
+    const d = l.createdAt?.toDate?.();
+    return d && d.getMonth() === m && d.getFullYear() === y;
+  });
+  let titulo = 'Leads no Mês';
+  if (status !== 'TODOS') {
+    leads = leads.filter(l => l.status === status);
+    titulo = STATUS_META[status]?.label || status;
+  }
+  abrirListaLeads(leads.map(l => l.id), titulo);
+};
+
+
 // ─── MODAL DECISÃO FINAL ───
 function abrirModalDecisao(l, labelFeita){
   document.getElementById('dec-lead-name').textContent=l.name||'Sem Nome';
@@ -1123,8 +1169,10 @@ window.renderEstrategia=function(){
     const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
     return d<todayStart;
   });
-  const qualif=mesLeads.filter(l=>l.status==='QUALIFICADO').length;
-  const contratos=mesLeads.filter(l=>l.status==='CONTRATO FECHADO').length;
+  const qualifLeads=mesLeads.filter(l=>l.status==='QUALIFICADO');
+  const contratosLeads=mesLeads.filter(l=>l.status==='CONTRATO FECHADO');
+  const qualif=qualifLeads.length;
+  const contratos=contratosLeads.length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
   const taxaConv=qualif?Math.round(contratos/qualif*100):0;
   const campStats={};
@@ -1136,24 +1184,24 @@ window.renderEstrategia=function(){
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     <div class="est-alerts-grid">
-      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
-      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
-      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
-      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
+      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" onclick="${partoProximo.length?`abrirListaLeads(${JSON.stringify(partoProximo.map(l=>l.id))},'SM com parto em até 60 dias')`:''}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
+      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" onclick="${qualifParados.length?`abrirListaLeads(${JSON.stringify(qualifParados.map(l=>l.id))},'Qualificados parados +7 dias')`:''}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
+      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" onclick="${esfriando.length?`abrirListaLeads(${JSON.stringify(esfriando.map(l=>l.id))},'Esfriando +15 dias sem contato')`:''}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
+      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" onclick="${fuAtrasados.length?`abrirListaLeads(${JSON.stringify(fuAtrasados.map(l=>l.id))},'Follow-ups em atraso')`:''}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
     </div>
   </div>
   <div class="est-section">
     <div class="est-section-title">📊 Pipeline do Mês</div>
     <div class="est-pipeline-grid">
-      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
+      <div class="est-pipe-card ${mesLeads.length?'clickable-card':''}" onclick="${mesLeads.length?`abrirListaLeads(${JSON.stringify(mesLeads.map(l=>l.id))},'Leads entrados no mês')`:''}"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#10B981">${qualif}</div><div class="est-pipe-label">Qualificados</div></div>
+      <div class="est-pipe-card ${qualifLeads.length?'clickable-card':''}" onclick="${qualifLeads.length?`abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id))},'Qualificados do mês')`:''}"><div class="est-pipe-num" style="color:#10B981">${qualif}</div><div class="est-pipe-label">Qualificados</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
+      <div class="est-pipe-card ${contratosLeads.length?'clickable-card':''}" onclick="${contratosLeads.length?`abrirListaLeads(${JSON.stringify(contratosLeads.map(l=>l.id))},'Contratos fechados no mês')`:''}"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
       <div class="est-pipe-arrow">→</div>
       <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
-    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623">${qualif} qualificados sem contrato.</span>`:''}</div>
+    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id))},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
     <div class="est-section-title">📢 Eficiência por Campanha</div>
@@ -1184,9 +1232,9 @@ window.renderEstrategia=function(){
   <div class="est-section">
     <div class="est-section-title">🔁 Leads para Ação Imediata</div>
     <div class="est-resgate-grid">
-      ${partoProximo.map(l=>{const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);const dias=Math.floor((p-now)/(1000*60*60*24));const wa=formatPhone(l.phone);return `<div class="est-resgate-card urgente"><div class="est-r-tag">🍼 Parto em ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
-      ${qualifParados.map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card qualif"><div class="est-r-tag">⭐ Qualif. parado ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
-      ${esfriando.slice(0,6).map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card esfriando"><div class="est-r-tag">❄️ Esfriando ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem">WhatsApp</a>`:''}</div>`;}).join('')}
+      ${partoProximo.map(l=>{const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);const dias=Math.floor((p-now)/(1000*60*60*24));const wa=formatPhone(l.phone);return `<div class="est-resgate-card urgente" onclick="openLead('${l.id}')"><div class="est-r-tag">🍼 Parto em ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem" onclick="event.stopPropagation()">WhatsApp</a>`:''}</div>`;}).join('')}
+      ${qualifParados.map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card qualif" onclick="openLead('${l.id}')"><div class="est-r-tag">⭐ Qualif. parado ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem" onclick="event.stopPropagation()">WhatsApp</a>`:''}</div>`;}).join('')}
+      ${esfriando.slice(0,6).map(l=>{const wa=formatPhone(l.phone);const lc=l.lastContact?.toDate?l.lastContact.toDate():null;const dias=lc?Math.floor((now-lc)/(1000*60*60*24)):0;return `<div class="est-resgate-card esfriando" onclick="openLead('${l.id}')"><div class="est-r-tag">❄️ Esfriando ${dias}d</div><div class="est-r-name">${l.name||'Sem Nome'}</div><div class="est-r-info">${l.assignee||'—'} · ${l.campaign||'—'}</div>${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" style="margin-top:.4rem" onclick="event.stopPropagation()">WhatsApp</a>`:''}</div>`;}).join('')}
     </div>
   </div>`:''}`;
 };
@@ -1256,6 +1304,9 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 .mc-green{border-top:2px solid #10B981}.mc-green .metric-value{color:#10B981}
 .mc-purple{border-top:2px solid #8B5CF6}.mc-purple .metric-value{color:#8B5CF6}
 .mc-red{border-top:2px solid #EF4444}.mc-red .metric-value{color:#EF4444}
+.clickable-card{cursor:pointer;transition:transform .15s,box-shadow .15s}
+.clickable-card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.25)}
+body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .mc-amber2{border-top:2px solid #F59E0B}.mc-amber2 .metric-value{color:#F59E0B}
 .mc-cyan{border-top:2px solid #06B6D4}.mc-cyan .metric-value{color:#06B6D4}
 /* FOLLOW-UP */
@@ -1451,7 +1502,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .diag-red{background:rgba(239,68,68,.12);color:#EF4444}
 .text-red{color:#EF4444;font-weight:700}
 .est-resgate-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:.75rem}
-.est-resgate-card{background:#0B0D14;border-radius:9px;padding:.9rem;display:flex;flex-direction:column;gap:.3rem;border:1px solid #1E2235}
+.est-resgate-card{background:#0B0D14;border-radius:9px;padding:.9rem;display:flex;flex-direction:column;gap:.3rem;border:1px solid #1E2235;cursor:pointer;transition:transform .15s,border-color .15s}
+.est-resgate-card:hover{transform:translateY(-2px);border-color:#4F6EF7}
 .est-resgate-card.urgente{border-color:rgba(239,68,68,.3)}
 .est-resgate-card.qualif{border-color:rgba(16,185,129,.3)}
 .est-resgate-card.esfriando{border-color:rgba(79,110,247,.3)}
@@ -1531,6 +1583,16 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
+
+
+.llist-item{background:#1A1D2E;border:1px solid #2A2F45;border-radius:8px;padding:.65rem .85rem;display:flex;align-items:center;justify-content:space-between;gap:.75rem;cursor:pointer;transition:border-color .15s,transform .15s}
+.llist-item:hover{border-color:#4F6EF7;transform:translateX(2px)}
+.llist-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:.25rem}
+.llist-name{font-size:.85rem;font-weight:700;color:#F1F3F9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.llist-meta{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.llist-resp{font-size:.68rem;color:#6B7280}
+body.light-theme .llist-item{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .llist-name{color:#1A1D2E}
 
 /* ═══ LIGHT THEME ═══ */
 body.light-theme{background:#F4F5F8;color:#1A1D2E}
@@ -1622,8 +1684,9 @@ body.light-theme .btn-cancel{background:#FFFFFF;border-color:#E2E5EE;color:#8B92
 body.light-theme .auth-box{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .auth-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .auth-sub{color:#8B92A8}
-body.light-theme ::-webkit-scrollbar-track{background:#F0F2F7}
-body.light-theme ::-webkit-scrollbar-thumb{background:#D5D9E3;border-color:#F0F2F7}
+body.light-theme ::-webkit-scrollbar-track{background:#E8EAF0}
+body.light-theme ::-webkit-scrollbar-thumb{background:#B0B6C5;border:2px solid #E8EAF0}
+body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 </style>
 </head>
 <body>
@@ -1665,13 +1728,13 @@ body.light-theme ::-webkit-scrollbar-thumb{background:#D5D9E3;border-color:#F0F2
   </header>
   <main>
     <div class="metrics-grid">
-      <div class="metric-card mc-blue">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
-      <div class="metric-card mc-amber"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
-      <div class="metric-card mc-green"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
-      <div class="metric-card mc-amber2"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
-      <div class="metric-card mc-cyan"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
-      <div class="metric-card mc-purple"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
-      <div class="metric-card mc-red">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
+      <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
+      <div class="metric-card mc-amber clickable-card" onclick="abrirMetricaLeads('EM ANDAMENTO')"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
+      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card mc-amber2 clickable-card" onclick="abrirMetricaLeads('AGUARDANDO DOCUMENTOS')"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
+      <div class="metric-card mc-cyan clickable-card" onclick="abrirMetricaLeads('AGUARDANDO ASSINATURA')"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
+      <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
+      <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
     </div>
     <div class="fu-panel" id="fu-panel">
       <div class="fu-panel-header">
@@ -1949,6 +2012,19 @@ body.light-theme ::-webkit-scrollbar-thumb{background:#D5D9E3;border-color:#F0F2
           <button onclick="salvarRegistroCRM()" class="btn-save">✅ Salvar no CRM</button>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL LISTA DE LEADS (clicável de alertas/dashboard) -->
+<div id="modal-lead-list" class="modal-overlay">
+  <div class="modal-box" style="max-width:560px">
+    <div class="modal-head">
+      <span class="modal-title" id="lead-list-title">Leads</span>
+      <button class="modal-close" onclick="fecharListaLeads()">✕</button>
+    </div>
+    <div class="modal-body" style="padding-top:.75rem">
+      <div id="lead-list-content" style="display:flex;flex-direction:column;gap:.5rem;max-height:60vh;overflow-y:auto"></div>
     </div>
   </div>
 </div>
