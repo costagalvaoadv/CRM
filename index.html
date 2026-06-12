@@ -1400,7 +1400,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .log-body{font-size:.78rem;color:#D1D5DB;line-height:1.5;padding-left:.85rem;border-left:1px solid #2A2F45;margin-left:.15rem}
 .log-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.65rem}
 /* TABS */
-.tabs-row{display:flex;align-items:center;margin-bottom:1rem}
+.tabs-row{display:flex;align-items:center;margin-bottom:1rem;margin-top:.25rem}
 .tabs{display:flex;gap:.2rem;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:3px}
 .tab-btn{padding:.38rem 1rem;border-radius:5px;border:none;background:transparent;color:#6B7280;font-size:.78rem;font-weight:600;cursor:pointer;transition:all .15s}
 .tab-btn.tab-active{background:#1E2235;color:#F1F3F9}
@@ -1727,6 +1727,15 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
     </div>
   </header>
   <main>
+    <div class="tabs-row">
+      <div class="tabs">
+        <button id="tab-kanban"     class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
+        <button id="tab-table"      class="tab-btn"            onclick="switchTab('table')">Tabela</button>
+        <button id="tab-relatorios" class="tab-btn"            onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
+        <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
+        <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
+      </div>
+    </div>
     <div class="metrics-grid">
       <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
       <div class="metric-card mc-amber clickable-card" onclick="abrirMetricaLeads('EM ANDAMENTO')"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
@@ -1747,15 +1756,6 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
       </div>
       <div class="fu-stages-wrap" id="fu-stages-wrap">
         <div id="fu-stages" class="fu-stages"></div>
-      </div>
-    </div>
-    <div class="tabs-row">
-      <div class="tabs">
-        <button id="tab-kanban"     class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
-        <button id="tab-table"      class="tab-btn"            onclick="switchTab('table')">Tabela</button>
-        <button id="tab-relatorios" class="tab-btn"            onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
-        <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
-        <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
       </div>
     </div>
     <div id="view-kanban">
