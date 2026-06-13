@@ -704,6 +704,16 @@ async function avancarEtapa(id){
 }
 window.avancarEtapaDoModal = async function() {
   if (!editingLeadId) return;
+  // Salva nota antes de avançar FUP, se houver texto
+  const note = document.getElementById('f-note').value.trim();
+  const assignee = document.getElementById('f-assignee').value;
+  if (note) {
+    await updateDoc(doc(db,'leads',editingLeadId), {
+      currentNote: note,
+      lastContact: serverTimestamp(),
+      log: arrayUnion({user: currentUser?.nome||assignee||'—', note, ts: new Date().toISOString(), statusChange: null})
+    });
+  }
   await avancarEtapa(editingLeadId);
   closeLead();
 };
@@ -914,7 +924,7 @@ window.openLead=function(id){
   // Show "FUP Feito" button if lead has pending followup
   const btnFeito = document.getElementById('btn-feito-modal');
   if (btnFeito) {
-    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l?.status||'');
+    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l?.status||'');
     btnFeito.style.display = hasPendingFup ? 'inline-flex' : 'none';
   }
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
@@ -1006,13 +1016,24 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
 
-  // Bloqueio de duplicidade ao salvar
-  if(phone){
+  // Bloqueio de duplicidade ao salvar (apenas ao criar novo lead)
+  if(phone && !editingLeadId){
+    const digits=normalizePhoneDigits(phone);
+    const dup=allLeads.find(l=>normalizePhoneDigits(l.phone)===digits);
+    if(dup){
+      const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
+      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
+      document.getElementById('f-phone').focus();
+      return;
+    }
+  }
+  // Ao editar: só bloqueia se o telefone foi trocado para um que pertence a OUTRO lead
+  if(phone && editingLeadId){
     const digits=normalizePhoneDigits(phone);
     const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
     if(dup){
       const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
+      showToast(`❌ Este telefone pertence a "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
       document.getElementById('f-phone').focus();
       return;
     }
@@ -1047,9 +1068,21 @@ window.saveLead=async function(){
       const trilhaDias=getTrilhaDias('SM');
       if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
     }
-    upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+    upd.log=arrayUnion({user:currentUser?.nome||assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
     await updateDoc(doc(db,'leads',editingLeadId),upd);
-    showToast('Lead atualizado!');
+    showToast('✅ Lead atualizado!');
+    // Limpa nota e notas rápidas mas mantém modal aberto
+    document.getElementById('f-note').value='';
+    activeQuickNotes.clear();
+    document.querySelectorAll('.qn-btn').forEach(b=>b.classList.remove('qn-active'));
+    // Atualiza botão FUP Feito com status novo
+    const l2=allLeads.find(x=>x.id===editingLeadId);
+    const btnFeito2=document.getElementById('btn-feito-modal');
+    if(btnFeito2){
+      const hasPending=l2?.nextFollowup&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
+      btnFeito2.style.display=hasPending?'inline-flex':'none';
+    }
+    return; // não fecha o modal
   }
   closeLead();
 };
@@ -2129,7 +2162,7 @@ function checkPhoneDuplicate(phoneRaw){
   const warn=document.getElementById('phone-duplicate-warn');
   if(!warn)return;
   if(digits.length<10){warn.style.display='none';return;}
-  // Ignora o próprio lead sendo editado
+  // Ao editar: só alerta se o telefone digitado pertence a OUTRO lead (não a si mesmo)
   const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
   if(dup){
     const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
