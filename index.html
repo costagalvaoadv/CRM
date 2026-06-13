@@ -892,6 +892,9 @@ window.openLead=function(id){
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
+  // Limpa aviso de duplicidade ao abrir o modal
+  const warn=document.getElementById('phone-duplicate-warn');
+  if(warn)warn.style.display='none';
   document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
   document.getElementById('f-tipo').value    =l?.tipo||'SM';
@@ -1002,6 +1005,18 @@ window.saveLead=async function(){
   const assignee=document.getElementById('f-assignee').value;
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
+
+  // Bloqueio de duplicidade ao salvar
+  if(phone){
+    const digits=normalizePhoneDigits(phone);
+    const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
+    if(dup){
+      const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
+      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
+      document.getElementById('f-phone').focus();
+      return;
+    }
+  }
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
   const fcVal=document.getElementById('f-first-contact').value;
   const firstContact=fcVal?Timestamp.fromDate(new Date(fcVal+'T12:00:00')):null;
@@ -1617,6 +1632,13 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .toast.error{border-left-color:#EF4444}
 .msg-spinner{width:36px;height:36px;border:3px solid #2A2F45;border-top-color:#8B5CF6;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.phone-dup-warn{margin-top:.3rem;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:.4rem .65rem;font-size:.72rem;color:#EF4444;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;line-height:1.4}
+.phone-dup-warn strong{color:#F87171}
+.dup-ver-btn{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:4px;color:#F87171;font-size:.68rem;font-weight:700;padding:.18rem .55rem;cursor:pointer;white-space:nowrap;transition:all .15s}
+.dup-ver-btn:hover{background:rgba(239,68,68,.3)}
+body.light-theme .phone-dup-warn{background:rgba(239,68,68,.07);border-color:rgba(239,68,68,.3);color:#DC2626}
+body.light-theme .phone-dup-warn strong{color:#DC2626}
+body.light-theme .dup-ver-btn{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:#DC2626}
 .hidden{display:none!important}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:#13161F}
@@ -1884,7 +1906,11 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
     <div class="modal-body">
       <div class="form-grid">
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
-        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
+        <div class="f-group">
+          <label class="f-label">Telefone / WhatsApp</label>
+          <input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/>
+          <div id="phone-duplicate-warn" class="phone-dup-warn" style="display:none"></div>
+        </div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
         <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="SEM RESPOSTA">Sem Resposta</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option></select></div>
@@ -2092,6 +2118,26 @@ function maskPhone(el){
   if(v.length<=10)v=v.replace(/^(\d{0,2})(\d{0,4})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
   else v=v.replace(/^(\d{0,2})(\d{0,5})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
   el.value=v;
+  // Verificação de duplicidade em tempo real
+  checkPhoneDuplicate(v);
+}
+
+function normalizePhoneDigits(p){return (p||'').replace(/\D/g,'');}
+
+function checkPhoneDuplicate(phoneRaw){
+  const digits=normalizePhoneDigits(phoneRaw);
+  const warn=document.getElementById('phone-duplicate-warn');
+  if(!warn)return;
+  if(digits.length<10){warn.style.display='none';return;}
+  // Ignora o próprio lead sendo editado
+  const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
+  if(dup){
+    const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
+    warn.innerHTML=`⚠️ Telefone já cadastrado: <strong>${dup.name||'Sem Nome'}</strong> · <span style="color:${sm.color}">${sm.label}</span> · ${dup.assignee||'—'} &nbsp;<button class="dup-ver-btn" onclick="closeLead();openLead('${dup.id}')">Ver lead →</button>`;
+    warn.style.display='flex';
+  }else{
+    warn.style.display='none';
+  }
 }
 </script>
 </body>
