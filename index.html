@@ -929,6 +929,7 @@ window.openLead=function(id){
   }
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
+  const hiddenEditId=document.getElementById('editing-lead-id-hidden');if(hiddenEditId)hiddenEditId.value=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
 window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
@@ -1016,24 +1017,23 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
 
-  // Bloqueio de duplicidade ao salvar (apenas ao criar novo lead)
-  if(phone && !editingLeadId){
+  // Lê o ID do lead do campo hidden (mais confiável que a variável global em eventos async)
+  const hiddenId=document.getElementById('editing-lead-id-hidden')?.value||'';
+  const isEditing=!!hiddenId;
+
+  // Bloqueio de duplicidade: só para NOVO lead ou se trocou de telefone para um de OUTRO lead
+  if(phone){
     const digits=normalizePhoneDigits(phone);
-    const dup=allLeads.find(l=>normalizePhoneDigits(l.phone)===digits);
+    const dup=allLeads.find(l=>{
+      if(isEditing && l.id===hiddenId) return false; // ignora o próprio lead
+      return normalizePhoneDigits(l.phone)===digits;
+    });
     if(dup){
       const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
-      document.getElementById('f-phone').focus();
-      return;
-    }
-  }
-  // Ao editar: só bloqueia se o telefone foi trocado para um que pertence a OUTRO lead
-  if(phone && editingLeadId){
-    const digits=normalizePhoneDigits(phone);
-    const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
-    if(dup){
-      const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-      showToast(`❌ Este telefone pertence a "${dup.name||'Sem Nome'}" (${sm.label})`, 'error');
+      const msg=isEditing
+        ?`❌ Este telefone pertence a "${dup.name||'Sem Nome'}" (${sm.label})`
+        :`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`;
+      showToast(msg,'error');
       document.getElementById('f-phone').focus();
       return;
     }
@@ -1041,12 +1041,10 @@ window.saveLead=async function(){
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
   const fcVal=document.getElementById('f-first-contact').value;
   const firstContact=fcVal?Timestamp.fromDate(new Date(fcVal+'T12:00:00')):null;
-  if(!editingLeadId){
+  if(!isEditing){
     const trilhaDias=getTrilhaDias(tipo);
-    // nextFollowup: a partir da data de primeiro contato (se informada) ou agora
     const baseDate=firstContact?firstContact.toDate():new Date();
     const d=new Date(baseDate);d.setDate(d.getDate()+trilhaDias[0]);
-    // createdAt usa firstContact se informado, senão serverTimestamp
     const cAt=firstContact||serverTimestamp();
     await addDoc(collection(db,'leads'),{
       name,phone,campaign,status,tipo,assignee,currentNote:note,
@@ -1056,7 +1054,7 @@ window.saveLead=async function(){
     });
     showToast('Lead criado! FUP 24h agendado.');
   }else{
-    const existing=allLeads.find(l=>l.id===editingLeadId);
+    const existing=allLeads.find(l=>l.id===hiddenId);
     const statusChanged=existing?.status&&existing.status!==status;
     const partoChanged=partoVal&&!existing?.dataParto;
     const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
@@ -1069,20 +1067,18 @@ window.saveLead=async function(){
       if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
     }
     upd.log=arrayUnion({user:currentUser?.nome||assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
-    await updateDoc(doc(db,'leads',editingLeadId),upd);
+    await updateDoc(doc(db,'leads',hiddenId),upd);
     showToast('✅ Lead atualizado!');
-    // Limpa nota e notas rápidas mas mantém modal aberto
     document.getElementById('f-note').value='';
     activeQuickNotes.clear();
     document.querySelectorAll('.qn-btn').forEach(b=>b.classList.remove('qn-active'));
-    // Atualiza botão FUP Feito com status novo
-    const l2=allLeads.find(x=>x.id===editingLeadId);
+    const l2=allLeads.find(x=>x.id===hiddenId);
     const btnFeito2=document.getElementById('btn-feito-modal');
     if(btnFeito2){
       const hasPending=l2?.nextFollowup&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
       btnFeito2.style.display=hasPending?'inline-flex':'none';
     }
-    return; // não fecha o modal
+    return;
   }
   closeLead();
 };
@@ -1994,6 +1990,7 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       </div>
     </div>
     <div class="modal-foot">
+      <input type="hidden" id="editing-lead-id-hidden" value=""/>
       <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir</button>
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
@@ -2162,8 +2159,11 @@ function checkPhoneDuplicate(phoneRaw){
   const warn=document.getElementById('phone-duplicate-warn');
   if(!warn)return;
   if(digits.length<10){warn.style.display='none';return;}
-  // Ao editar: só alerta se o telefone digitado pertence a OUTRO lead (não a si mesmo)
-  const dup=allLeads.find(l=>l.id!==editingLeadId && normalizePhoneDigits(l.phone)===digits);
+  const currentId=document.getElementById('editing-lead-id-hidden')?.value||editingLeadId||'';
+  const dup=allLeads.find(l=>{
+    if(currentId && l.id===currentId) return false;
+    return normalizePhoneDigits(l.phone)===digits;
+  });
   if(dup){
     const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
     warn.innerHTML=`⚠️ Telefone já cadastrado: <strong>${dup.name||'Sem Nome'}</strong> · <span style="color:${sm.color}">${sm.label}</span> · ${dup.assignee||'—'} &nbsp;<button class="dup-ver-btn" onclick="closeLead();openLead('${dup.id}')">Ver lead →</button>`;
