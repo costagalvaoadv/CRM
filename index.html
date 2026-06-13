@@ -930,6 +930,7 @@ window.openLead=function(id){
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
   const hiddenEditId=document.getElementById('editing-lead-id-hidden');if(hiddenEditId)hiddenEditId.value=editingLeadId||'';
+  const btnSave=document.getElementById('btn-save-lead');if(btnSave)btnSave.dataset.leadId=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
 window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
@@ -1017,23 +1018,20 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
 
-  // Lê o ID do lead do campo hidden (mais confiável que a variável global em eventos async)
-  const hiddenId=document.getElementById('editing-lead-id-hidden')?.value||'';
-  const isEditing=!!hiddenId;
+  // ID do lead: lê de 3 fontes para máxima confiabilidade
+  const hiddenId = document.getElementById('btn-save-lead')?.dataset?.leadId
+    || document.getElementById('editing-lead-id-hidden')?.value
+    || editingLeadId
+    || '';
+  const isEditing = !!hiddenId;
 
-  // Bloqueio de duplicidade: só para NOVO lead ou se trocou de telefone para um de OUTRO lead
-  if(phone){
+  // Bloqueio de duplicidade: APENAS ao criar lead novo (nunca ao editar)
+  if(phone && !isEditing){
     const digits=normalizePhoneDigits(phone);
-    const dup=allLeads.find(l=>{
-      if(isEditing && l.id===hiddenId) return false; // ignora o próprio lead
-      return normalizePhoneDigits(l.phone)===digits;
-    });
+    const dup=allLeads.find(l=>normalizePhoneDigits(l.phone)===digits);
     if(dup){
       const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-      const msg=isEditing
-        ?`❌ Este telefone pertence a "${dup.name||'Sem Nome'}" (${sm.label})`
-        :`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`;
-      showToast(msg,'error');
+      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`,'error');
       document.getElementById('f-phone').focus();
       return;
     }
@@ -1995,7 +1993,7 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
         <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
-        <button class="btn-save" onclick="saveLead()">Salvar</button>
+        <button class="btn-save" id="btn-save-lead" onclick="saveLead()" data-lead-id="">Salvar</button>
       </div>
     </div>
   </div>
