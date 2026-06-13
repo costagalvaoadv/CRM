@@ -342,6 +342,13 @@ function renderFollowups(){
   const stageMap={};
   ALL_STAGES.forEach(s=>stageMap[s]=[]);
 
+  // Ordenar pendentes: vencidos primeiro (mais antigos primeiro), depois os de hoje
+  pendentes.sort((a,b)=>{
+    const da=a.nextFollowup?.toDate?a.nextFollowup.toDate():new Date(a.nextFollowup);
+    const db=b.nextFollowup?.toDate?b.nextFollowup.toDate():new Date(b.nextFollowup);
+    return da-db;
+  });
+
   pendentes.forEach(l=>{
     const trilhaLabels=getTrilha(l.tipo||'SM');
     const etapa=l.etapaFollowup||0;
@@ -891,6 +898,13 @@ window.openLead=function(id){
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
+  // Data do primeiro contato: se já existe no lead usa ela, senão default hoje (apenas para novos)
+  const fcEl=document.getElementById('f-first-contact');
+  if(fcEl){
+    if(l?.firstContact){fcEl.value=toDateInput(l.firstContact);}
+    else if(!l){const t=new Date();fcEl.value=t.toISOString().slice(0,10);}
+    else fcEl.value='';
+  }
   togglePartoField();
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
   renderLog(l?.log||[]);
@@ -989,14 +1003,20 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
+  const fcVal=document.getElementById('f-first-contact').value;
+  const firstContact=fcVal?Timestamp.fromDate(new Date(fcVal+'T12:00:00')):null;
   if(!editingLeadId){
     const trilhaDias=getTrilhaDias(tipo);
-    const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
+    // nextFollowup: a partir da data de primeiro contato (se informada) ou agora
+    const baseDate=firstContact?firstContact.toDate():new Date();
+    const d=new Date(baseDate);d.setDate(d.getDate()+trilhaDias[0]);
+    // createdAt usa firstContact se informado, senão serverTimestamp
+    const cAt=firstContact||serverTimestamp();
     await addDoc(collection(db,'leads'),{
       name,phone,campaign,status,tipo,assignee,currentNote:note,
-      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
-      followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
-      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+      nextFollowup:Timestamp.fromDate(d),dataParto,firstContact,etapaFollowup:0,
+      followupHistory:[],createdAt:cAt,lastContact:cAt,
+      log:note?[{user:assignee,note,ts:(firstContact?firstContact.toDate():new Date()).toISOString(),statusChange:null}]:[]
     });
     showToast('Lead criado! FUP 24h agendado.');
   }else{
@@ -1006,6 +1026,7 @@ window.saveLead=async function(){
     const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
     if(note)upd.currentNote=note;
     if(dataParto)upd.dataParto=dataParto;
+    if(firstContact)upd.firstContact=firstContact;
     if(partoChanged&&tipo==='SM'){
       const etapa=existing?.etapaFollowup||0;
       const trilhaDias=getTrilhaDias('SM');
@@ -1665,6 +1686,7 @@ body.light-theme .filter-btn{background:#FFFFFF;border-color:#E2E5EE;color:#8B92
 body.light-theme .filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .rel-kpi{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .rel-select option{background:#FFFFFF;color:#1A1D2E}
 body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
 body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .est-section-title{color:#1A1D2E}
@@ -1690,6 +1712,8 @@ body.light-theme .modal-close{color:#8B92A8}
 body.light-theme .modal-foot{background:#FFFFFF;border-top-color:#E2E5EE}
 body.light-theme .f-label{color:#8B92A8}
 body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .f-select option{background:#FFFFFF;color:#1A1D2E}
+body.light-theme select option{background:#FFFFFF;color:#1A1D2E}
 body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
 body.light-theme .qn-btn:hover{background:#EDEFF5}
 body.light-theme #progress-container{background:#F8F9FC;border-color:#E2E5EE}
@@ -1707,8 +1731,11 @@ body.light-theme .auth-box{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .auth-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .auth-sub{color:#8B92A8}
 body.light-theme ::-webkit-scrollbar-track{background:#E8EAF0}
-body.light-theme ::-webkit-scrollbar-thumb{background:#B0B6C5;border:2px solid #E8EAF0}
+body.light-theme ::-webkit-scrollbar-thumb{background:#C0C4D0;border:2px solid #E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
+body.light-theme .fu-stage-body{scrollbar-color:#C0C4D0 #E8EAF0}
+body.light-theme .fu-stages-wrap{scrollbar-color:#C0C4D0 #E8EAF0}
+body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
 </style>
 </head>
 <body>
@@ -1860,8 +1887,9 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
-        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="SEM RESPOSTA">Sem Resposta</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
+        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-first-contact" class="f-input" type="date" title="Quando o lead entrou em contato pela primeira vez"/></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
