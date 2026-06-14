@@ -28,7 +28,7 @@ const auth=getAuth(app);
 
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
-let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
+let chartInstances={},fuFilter='TODOS',fuDateFilter='TODOS',relKpiFilter=null;
 let activeQuickNotes=new Set(),presenceInterval=null;
 
 const STATUS_META={
@@ -259,6 +259,12 @@ function renderFuFilterBtns(){
 }
 window.renderFollowups=renderFollowups;
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
+window.toggleFuHoje=function(){
+  fuDateFilter=fuDateFilter==='HOJE'?'TODOS':'HOJE';
+  const btn=document.getElementById('fu-hoje-btn');
+  if(btn)btn.classList.toggle('fu-hoje-active',fuDateFilter==='HOJE');
+  renderFollowups();
+};
 window.toggleKanbanPanel=function(){
   const wrap=document.getElementById('kanban-board-wrap');
   const btn=document.getElementById('kanban-collapse-btn');
@@ -317,6 +323,16 @@ function renderFollowups(){
   if(fuFilter!=='TODOS'){
     pendentes=pendentes.filter(l=>l.assignee===fuFilter);
     agendados=agendados.filter(l=>l.assignee===fuFilter);
+  }
+
+  // Apply date filter: "Hoje" mostra apenas pendentes com data = hoje (não atrasados, só de hoje)
+  if(fuDateFilter==='HOJE'){
+    pendentes=pendentes.filter(l=>{
+      const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+      return d>=todayStart && d<=todayEnd;
+    });
+    // No modo Hoje, esconde agendados futuros
+    agendados=[];
   }
 
   // Apply search filter
@@ -1401,6 +1417,11 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fu-badge{background:#F5A623;color:#0B0D14;font-size:.65rem;font-weight:800;border-radius:999px;padding:.15rem .5rem;display:none}
 .fu-filter-btns{display:flex;gap:.3rem;margin-left:auto;overflow-x:auto;scrollbar-width:none;max-width:45%;padding-bottom:1px;flex-shrink:0}
 .fu-filter-btns::-webkit-scrollbar{display:none}
+.fu-hoje-btn{padding:.25rem .75rem;border-radius:5px;border:1px solid #F5A623;background:transparent;color:#F5A623;font-size:.7rem;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
+.fu-hoje-btn:hover{background:rgba(245,166,35,.15)}
+.fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#0B0D14}
+body.light-theme .fu-hoje-btn{border-color:#D97706;color:#D97706}
+body.light-theme .fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#fff;border-color:#F5A623}
 .fu-filter-btn{padding:.25rem .7rem;border-radius:5px;border:1px solid #1E2235;background:#0B0D14;color:#6B7280;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
 .fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .fu-panel-header{padding:.75rem 1rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.5rem;min-width:0}
@@ -1454,6 +1475,7 @@ body.light-theme .kanban-panel-title{color:#1A1D2E}
 .psbh-steps{display:flex;align-items:flex-start;justify-content:space-between;position:relative;z-index:1}
 .psbh-track{position:absolute;top:13px;left:calc(.5rem + 13px);right:calc(.5rem + 13px);height:2px;background:#2A2F45;z-index:0;border-radius:99px}
 .progress-step-h{display:flex;flex-direction:column;align-items:center;gap:.2rem;flex:1;z-index:1;cursor:default}
+#progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem;position:relative;z-index:1}
 .psh-circle{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;border:2px solid #2A2F45;background:#13161F;flex-shrink:0;transition:all .2s}
 .psh-label{font-size:.62rem;font-weight:700;text-align:center;white-space:nowrap}
 .psh-done-info{font-size:.55rem;color:#10B981;text-align:center;line-height:1.3;margin-top:.05rem}
@@ -1647,7 +1669,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .progress-section{display:flex;flex-direction:column;gap:.6rem}
 .progress-section-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 #progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem}
-.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
+.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F;z-index:10}
 .btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
 .btn-delete:hover{background:rgba(239,68,68,.1)}
 .btn-save{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem 1.35rem;font-size:.82rem;font-weight:700;cursor:pointer}
@@ -1849,6 +1871,7 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <span class="fu-panel-title">Follow-ups</span>
         <button class="fu-collapse-btn" onclick="toggleFuPanel()" id="fu-collapse-btn" title="Encolher/Expandir painel">▾</button>
         <span class="fu-badge" id="fu-badge">0</span>
+        <button id="fu-hoje-btn" class="fu-hoje-btn" onclick="toggleFuHoje()" title="Mostrar apenas follow-ups de hoje">📅 Hoje</button>
         <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="window.renderFollowups()"/>
         <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
