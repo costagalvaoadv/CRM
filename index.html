@@ -1388,6 +1388,8 @@ window.switchTab=function(tab){
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
+  // Rola para o topo para o conteúdo aparecer logo abaixo do menu
+  window.scrollTo({top:0,behavior:'smooth'});
   if(tab==='relatorios')setTimeout(renderRelatorios,100);
   else if(tab==='estrategia')setTimeout(renderEstrategia,100);
   else renderAll();
