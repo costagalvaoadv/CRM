@@ -29,6 +29,7 @@ const auth=getAuth(app);
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
 let chartInstances={},fuFilter='TODOS',fuDateFilter='TODOS',estPeriod='mes-atual',relKpiFilter=null;
+let kanbanAtendFilter='TODOS';
 let activeQuickNotes=new Set(),presenceInterval=null;
 
 const STATUS_META={
@@ -145,7 +146,7 @@ async function startPresence(){
 function startUsersListener(){
   onSnapshot(collection(db,'usuarios'),snap=>{
     allUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderFuFilterBtns();if(currentTab==='equipe')renderEquipe();
+    renderFuFilterBtns();renderKanbanFilterBtns();if(currentTab==='equipe')renderEquipe();
   });
 }
 window.abrirModalEquipe=function(uid){
@@ -231,7 +232,7 @@ function startLeadsListener(){
   onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));renderAll();});
 }
 function renderAll(){
-  renderMetrics();renderFollowups();
+  renderMetrics();renderFollowups();renderKanbanFilterBtns();
   if(currentTab==='kanban')renderKanban();
   else if(currentTab==='table')renderTable();
   else if(currentTab==='equipe')renderEquipe();
@@ -271,6 +272,23 @@ window.toggleKanbanPanel=function(){
   const collapsed=wrap.classList.toggle('kanban-collapsed');
   btn.textContent=collapsed?'▸':'▾';
   localStorage.setItem('cg-kanban-collapsed',collapsed?'1':'0');
+};
+window.toggleTablePanel=function(){
+  const wrap=document.getElementById('table-panel-wrap');
+  const btn=document.getElementById('table-collapse-btn');
+  const collapsed=wrap.classList.toggle('panel-collapsed');
+  btn.textContent=collapsed?'▸':'▾';
+};
+window.toggleRelTable=function(){
+  const wrap=document.getElementById('rel-table-wrap');
+  const btn=document.getElementById('rel-table-collapse-btn');
+  const collapsed=wrap.classList.toggle('panel-collapsed');
+  btn.textContent=collapsed?'▸':'▾';
+};
+window.toggleEstSection=function(id,btn){
+  const el=document.getElementById(id);if(!el)return;
+  const collapsed=el.classList.toggle('panel-collapsed');
+  btn.textContent=collapsed?'▸':'▾';
 };
 (function(){
   if(localStorage.getItem('cg-kanban-collapsed')==='1'){
@@ -820,9 +838,18 @@ window.confirmarDecisao=async function(decisao){
 };
 
 // ─── KANBAN ───
+function renderKanbanFilterBtns(){
+  const cont=document.getElementById('kanban-filter-btns');if(!cont)return;
+  const unique=['TODOS',...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).sort())];
+  cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${kanbanAtendFilter===n?'active':''}" onclick="setKanbanFilter('${n}')">${n==='TODOS'?'Todos':n}</button>`).join('');
+}
+window.setKanbanFilter=function(f){kanbanAtendFilter=f;renderKanbanFilterBtns();renderKanban();};
 function renderKanban(){
+  const isG=currentUser?.role==='gestora';
+  let leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
+  if(kanbanAtendFilter!=='TODOS') leadsBase=leadsBase.filter(l=>l.assignee===kanbanAtendFilter);
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
-  allLeads.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
+  leadsBase.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
     document.getElementById('col-count-'+status).textContent=cols[status].length;
@@ -1346,7 +1373,11 @@ window.renderEstrategia=function(){
     <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
-    <div class="est-section-title">📢 Eficiência por Campanha</div>
+    <div class="est-section-title" style="display:flex;align-items:center;justify-content:space-between">
+      <span>📢 Eficiência por Campanha</span>
+      <button class="fu-collapse-btn" onclick="toggleEstSection('est-camp-body',this)" title="Minimizar/Maximizar">▾</button>
+    </div>
+    <div id="est-camp-body">
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa</th><th>Diagnóstico</th></tr></thead>
       <tbody>${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
@@ -1359,9 +1390,14 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${dc}">${diag}</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
+    </div>
   </div>
   <div class="est-section">
-    <div class="est-section-title">👥 Desempenho da Equipe</div>
+    <div class="est-section-title" style="display:flex;align-items:center;justify-content:space-between">
+      <span>👥 Desempenho da Equipe</span>
+      <button class="fu-collapse-btn" onclick="toggleEstSection('est-equipe-body',this)" title="Minimizar/Maximizar">▾</button>
+    </div>
+    <div id="est-equipe-body">
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
       <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
@@ -1369,6 +1405,7 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
+    </div>
   </div>
   ${(partoProximo.length||qualifParados.length||esfriando.length)?`
   <div class="est-section">
@@ -1482,12 +1519,20 @@ body.light-theme .fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#fff;borde
 /* FU STAGE KANBAN */
 .fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
+.panel-collapsed{max-height:0!important;opacity:0!important;overflow:hidden!important;padding:0!important;margin:0!important;transition:max-height .3s ease,opacity .3s ease;}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
-.kanban-panel-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem}
+.kanban-panel-header{background:#13161F;border:1px solid #1E2235;border-radius:12px 12px 0 0;padding:.85rem 1.25rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:0}
 .kanban-panel-title{font-size:.88rem;font-weight:700}
 .kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
+#kanban-board-wrap{border:1px solid #1E2235;border-top:none;border-radius:0 0 12px 12px;padding:.75rem;margin-bottom:1.25rem;background:#0F1118}
+body.light-theme #kanban-board-wrap{background:#F4F5FB;border-color:#E2E5EE}
+#table-panel-wrap,#rel-table-wrap{border:1px solid #1E2235;border-top:none;border-radius:0 0 12px 12px;padding:.75rem 1rem;margin-bottom:1.25rem;overflow:hidden;transition:max-height .3s ease,opacity .3s ease}
+body.light-theme #table-panel-wrap,body.light-theme #rel-table-wrap{background:#FFFFFF;border-color:#E2E5EE}
+#view-equipe .kanban-panel-header{border-radius:12px;margin-bottom:.75rem}
+#view-relatorios .kanban-panel-header,#view-estrategia .kanban-panel-header{border-radius:12px;margin-bottom:.75rem}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
+body.light-theme .kanban-panel-header{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
@@ -1943,6 +1988,7 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <span style="font-size:1rem">📋</span>
         <span class="kanban-panel-title">Kanban de Leads</span>
         <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
+        <div class="fu-filter-btns" id="kanban-filter-btns" style="margin-left:.5rem"></div>
       </div>
       <div class="kanban-board" id="kanban-board-wrap">
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
@@ -1955,6 +2001,12 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       </div>
     </div>
     <div id="view-table" class="hidden">
+      <div class="kanban-panel-header">
+        <span style="font-size:1rem">📋</span>
+        <span class="kanban-panel-title">Tabela de Leads</span>
+        <button class="fu-collapse-btn" onclick="toggleTablePanel()" id="table-collapse-btn" title="Encolher/Expandir">▾</button>
+      </div>
+      <div id="table-panel-wrap">
       <div class="table-controls">
         <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
         <div class="filter-btns">
@@ -1969,8 +2021,13 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         </div>
       </div>
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
+      </div>
     </div>
     <div id="view-relatorios" class="hidden">
+      <div class="kanban-panel-header">
+        <span style="font-size:1rem">📊</span>
+        <span class="kanban-panel-title">Relatórios</span>
+      </div>
       <div class="rel-controls">
         <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
         <div class="rel-group" id="rel-data-range" style="display:none;gap:.4rem;flex-direction:row;align-items:flex-end">
@@ -1993,12 +2050,22 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
       </div>
+      <div class="kanban-panel-header" style="margin-top:1rem">
+        <span style="font-size:.9rem">📋</span>
+        <span class="kanban-panel-title">Lista de Leads</span>
+        <button class="fu-collapse-btn" onclick="toggleRelTable()" id="rel-table-collapse-btn" title="Encolher/Expandir">▾</button>
+      </div>
+      <div id="rel-table-wrap">
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
+      </div>
     </div>
     <div id="view-estrategia" class="hidden">
+      <div class="kanban-panel-header">
+        <span style="font-size:1rem">🎯</span>
+        <span class="kanban-panel-title">Painel Estratégico</span>
+      </div>
       <div class="est-header-bar">
         <div>
-          <div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div>
           <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div>
         </div>
         <div class="est-period-bar">
@@ -2021,7 +2088,11 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       <div id="estrategia-content"></div>
     </div>
     <div id="view-equipe" class="hidden">
-      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
+      <div class="kanban-panel-header">
+        <span style="font-size:1rem">👥</span>
+        <span class="kanban-panel-title">Gestão de Equipe</span>
+        <button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)" style="margin-left:auto">+ Nova Colaboradora</button>
+      </div>
       <div id="equipe-lista"></div>
     </div>
   </main>
