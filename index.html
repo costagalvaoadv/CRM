@@ -93,6 +93,8 @@ function showApp(){
   if(tabEst)tabEst.style.display='inline-block';
   startLeadsListener();startPresence();
   if(isG)startUsersListener();
+  carregarCampanhas();
+  if(isG)carregarPlanos().then(()=>{ if(currentTab==='estrategia')renderEstrategia(); });
 }
 
 // ─── SETUP / LOGIN ───
@@ -1159,6 +1161,26 @@ window.renderEstrategia=function(){
   if(tituloEl) tituloEl.textContent='🎯 Painel Estratégico'+(isG?'':' — '+(currentUser?.nome||''));
   if(subEl) subEl.textContent=isG?'Visão completa do escritório':'Visão dos seus leads';
 
+  // Show/populate planning module for gestora
+  const metaWrap=document.getElementById('meta-module-wrap');
+  if(metaWrap){
+    metaWrap.style.display=isG?'block':'none';
+    if(isG){
+      // Populate plan selector
+      const sel=document.getElementById('select-plano');
+      if(sel&&planosAtivos.length>0){
+        sel.innerHTML=planosAtivos.map(p=>`<option value="${p.id}" ${planoSelecionado?.id===p.id?'selected':''}>${p.nome}</option>`).join('');
+      }
+      // Update active badge
+      const badge=document.getElementById('meta-badge-status');
+      if(badge&&planoSelecionado){
+        const now2=new Date();const fim2=new Date(planoSelecionado.fim+'T23:59:59');
+        badge.textContent=now2<=fim2?'ATIVA':'ENCERRADA';
+        badge.className=now2<=fim2?'meta-badge-ativa':'meta-badge-atrasada';
+      }
+    }
+  }
+
   // Atendentes veem apenas seus próprios leads
   const leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
   const mesLeads=leadsBase.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
@@ -1199,6 +1221,12 @@ window.renderEstrategia=function(){
   mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
   const equipeStats={};
   mesLeads.forEach(l=>{const a=l.assignee||'—';if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0};equipeStats[a].total++;if(l.status==='QUALIFICADO')equipeStats[a].qualif++;if(l.status==='CONTRATO FECHADO')equipeStats[a].contrato++;if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;});
+  // ── Planning module (gestora only) ──
+  if(isG){
+    const pmEl=document.getElementById('meta-module-content');
+    if(pmEl)renderPlanejamento();
+  }
+
   const el=document.getElementById('estrategia-content');if(!el)return;
   el.innerHTML=`
   <div class="est-section">
@@ -1259,7 +1287,502 @@ window.renderEstrategia=function(){
   </div>`:''}`;
 };
 
+
+// ═══════════════════════════════════════════════════════
+// MÓDULO PLANEJAMENTO DE META
+// ═══════════════════════════════════════════════════════
+
+// Default plan (pre-filled with the 30-contract campaign data)
+const PLAN_DEFAULT = {
+  id: 'plan_30sm_jun2026',
+  nome: '30 Contratos SM — Jun/Jul 2026',
+  meta: 30,
+  inicio: '2026-06-16',
+  fim: '2026-07-20',
+  investimento: 1500,
+  metaConversao: 8,
+  campanhas: ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico'],
+  semanas: [
+    {label:'S1',inicio:'2026-06-16',fim:'2026-06-22',meta:4},
+    {label:'S2',inicio:'2026-06-23',fim:'2026-06-29',meta:6},
+    {label:'S3',inicio:'2026-06-30',fim:'2026-07-06',meta:7},
+    {label:'S4',inicio:'2026-07-07',fim:'2026-07-13',meta:7},
+    {label:'S5',inicio:'2026-07-14',fim:'2026-07-20',meta:6},
+  ]
+};
+
+let planosAtivos = [];
+let planoSelecionado = null;
+let chartRitmo = null, chartFunil = null, chartCampanha = null;
+
+// Load plans from Firestore (collection 'config/planos')
+async function carregarPlanos() {
+  try {
+    const snap = await getDoc(doc(db, 'config', 'planos_meta'));
+    if (snap.exists()) {
+      planosAtivos = snap.data().planos || [];
+    } else {
+      // First time: save default plan
+      planosAtivos = [PLAN_DEFAULT];
+      await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
+    }
+    if (!planoSelecionado && planosAtivos.length > 0) {
+      planoSelecionado = planosAtivos[0];
+    }
+  } catch(e) {
+    planosAtivos = [PLAN_DEFAULT];
+    planoSelecionado = PLAN_DEFAULT;
+  }
+}
+
+async function salvarPlanos() {
+  try {
+    await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
+  } catch(e) { console.error('Erro ao salvar planos', e); }
+}
+
+// ── Campaign dynamic management ──
+let campanhasDinamicas = [];
+
+async function carregarCampanhas() {
+  try {
+    const snap = await getDoc(doc(db, 'config', 'campanhas'));
+    if (snap.exists()) {
+      campanhasDinamicas = snap.data().lista || [];
+    } else {
+      campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
+      await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas });
+    }
+  } catch(e) {
+    campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
+  }
+  atualizarSelectCampanha();
+}
+
+async function adicionarNovaCampanha() {
+  const nome = prompt('Nome da nova campanha:');
+  if (!nome || !nome.trim()) return;
+  const n = nome.trim();
+  if (campanhasDinamicas.includes(n)) { showToast('Campanha já existe'); return; }
+  campanhasDinamicas.push(n);
+  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
+  atualizarSelectCampanha();
+  showToast('Campanha "' + n + '" adicionada!');
+}
+
+function atualizarSelectCampanha() {
+  const sel = document.getElementById('f-campaign');
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">Selecione...</option>' +
+    campanhasDinamicas.map(c => `<option value="${c}">${c}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+
+// ── Plan calculations ──
+function calcularPlano(plano) {
+  const now = new Date();
+  const inicio = new Date(plano.inicio + 'T00:00:00');
+  const fim = new Date(plano.fim + 'T23:59:59');
+
+  // Filter leads that belong to this plan's campaigns
+  const campanhas = plano.campanhas || [];
+  const leadsPlano = allLeads.filter(l => {
+    if (campanhas.length === 0) return true;
+    return campanhas.includes(l.campaign);
+  });
+
+  // Contracts closed since plan start
+  const contratos = leadsPlano.filter(l => {
+    if (l.status !== 'CONTRATO FECHADO') return false;
+    const d = l.lastContact?.toDate ? l.lastContact.toDate() : (l.createdAt?.toDate ? l.createdAt.toDate() : null);
+    // Use log to find when contract was closed if possible
+    if (l.log && l.log.length > 0) {
+      const logContrato = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
+      if (logContrato.length > 0) {
+        const ts = new Date(logContrato[logContrato.length-1].ts);
+        return ts >= inicio && ts <= fim;
+      }
+    }
+    const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+    return cd && cd >= inicio;
+  });
+
+  // All leads that entered during campaign period
+  const leadsNoPeriodo = leadsPlano.filter(l => {
+    const d = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+    return d && d >= inicio && d <= fim;
+  });
+
+  const qualificados = leadsNoPeriodo.filter(l => 
+    ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA','CONTRATO FECHADO'].includes(l.status)
+  );
+
+  // Weekly breakdown
+  const semanas = plano.semanas.map(s => {
+    const si = new Date(s.inicio + 'T00:00:00');
+    const sf = new Date(s.fim + 'T23:59:59');
+    const contrSem = contratos.filter(l => {
+      if (l.log && l.log.length > 0) {
+        const logC = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
+        if (logC.length > 0) {
+          const ts = new Date(logC[logC.length-1].ts);
+          return ts >= si && ts <= sf;
+        }
+      }
+      const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
+      return cd && cd >= si && cd <= sf;
+    });
+    const isAtual = now >= si && now <= sf;
+    const isPast = sf < now;
+    const isFuture = si > now;
+    return { ...s, realizado: contrSem.length, isAtual, isPast, isFuture };
+  });
+
+  // Campaign performance
+  const campStats = {};
+  leadsNoPeriodo.forEach(l => {
+    const c = l.campaign || 'Sem campanha';
+    if (!campStats[c]) campStats[c] = { total: 0, qualif: 0, contrato: 0 };
+    campStats[c].total++;
+    if (['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA','CONTRATO FECHADO'].includes(l.status)) campStats[c].qualif++;
+    if (l.status === 'CONTRATO FECHADO') campStats[c].contrato++;
+  });
+
+  // Projections
+  const diasDecorridos = Math.max(1, Math.floor((now - inicio) / (1000*60*60*24)));
+  const diasTotal = Math.ceil((fim - inicio) / (1000*60*60*24));
+  const diasRestantes = Math.max(0, Math.ceil((fim - now) / (1000*60*60*24)));
+  const ritmoAtual = contratos.length / diasDecorridos;
+  const projecaoFinal = Math.round(ritmoAtual * diasTotal);
+  const necessarioPorDia = diasRestantes > 0 ? ((plano.meta - contratos.length) / diasRestantes).toFixed(1) : 0;
+  const taxaConvAtual = leadsNoPeriodo.length > 0 ? (contratos.length / leadsNoPeriodo.length * 100).toFixed(1) : 0;
+  const cplEstimado = leadsNoPeriodo.length > 0 ? (plano.investimento / leadsNoPeriodo.length).toFixed(2) : '—';
+  const custoContrato = contratos.length > 0 ? (plano.investimento / contratos.length).toFixed(2) : '—';
+
+  return {
+    contratos, leadsNoPeriodo, qualificados, semanas, campStats,
+    diasDecorridos, diasTotal, diasRestantes, projecaoFinal,
+    necessarioPorDia, taxaConvAtual, cplEstimado, custoContrato,
+    pct: Math.min(100, Math.round(contratos.length / plano.meta * 100))
+  };
+}
+
+// ── Render planning module ──
+window.renderPlanejamento = function() {
+  const el = document.getElementById('meta-module-content');
+  if (!el || !planoSelecionado) return;
+
+  const p = planoSelecionado;
+  const c = calcularPlano(p);
+  const now = new Date();
+  const fim = new Date(p.fim + 'T23:59:59');
+  const ativa = now <= fim;
+  const atras = c.projecaoFinal < p.meta && ativa;
+
+  // Destroy old charts
+  if (chartRitmo) { chartRitmo.destroy(); chartRitmo = null; }
+  if (chartFunil) { chartFunil.destroy(); chartFunil = null; }
+  if (chartCampanha) { chartCampanha.destroy(); chartCampanha = null; }
+
+  const nContratosTotal = c.contratos.length;
+  const pctBar = c.pct;
+  const corBarra = pctBar >= 100 ? '#10B981' : atras ? '#EF4444' : '#4F6EF7';
+
+  // Alertas
+  const alertas = [];
+  if (!ativa) alertas.push({tipo:'green', icon:'✅', texto:`Campanha encerrada. <strong>${nContratosTotal} contratos</strong> de ${p.meta} fechados.`});
+  else if (c.projecaoFinal >= p.meta) alertas.push({tipo:'green', icon:'🎯', texto:`No ritmo atual, você fecha <strong>${c.projecaoFinal} contratos</strong> até ${new Date(p.fim+'T12:00:00').toLocaleDateString('pt-BR')} — acima da meta!`});
+  else alertas.push({tipo:'red', icon:'⚠️', texto:`Projeção atual: <strong>${c.projecaoFinal} contratos</strong>. Faltam <strong>${p.meta - nContratosTotal}</strong> em <strong>${c.diasRestantes} dias</strong>. Necessário: ${c.necessarioPorDia}/dia.`});
+  if (parseFloat(c.taxaConvAtual) < p.metaConversao && c.leadsNoPeriodo.length >= 5)
+    alertas.push({tipo:'orange', icon:'📉', texto:`Taxa de conversão atual: <strong>${c.taxaConvAtual}%</strong> — abaixo da meta de <strong>${p.metaConversao}%</strong>. Revisar etapa do gargalo.`});
+  if (c.leadsNoPeriodo.length === 0 && ativa)
+    alertas.push({tipo:'orange', icon:'📥', texto:`Nenhum lead das campanhas desta meta registrado ainda. Verifique se o campo <strong>Campanha</strong> está sendo preenchido nos cadastros.`});
+
+  // Semanas HTML
+  const semsHTML = c.semanas.map(s => {
+    let cls = 'meta-semana';
+    let statusTxt = '';
+    let badgeHTML = '';
+    if (s.isAtual) { cls += ' sem-atual'; badgeHTML = '<span class="meta-sem-badge atual">ATUAL</span>'; }
+    else if (s.isPast) { cls += s.realizado >= s.meta ? ' sem-ok' : ' sem-atras'; }
+    else { cls += ' sem-futura'; }
+    if (s.isPast) statusTxt = s.realizado >= s.meta ? `<div class="meta-sem-status" style="color:#10B981">✓ Meta batida</div>` : `<div class="meta-sem-status" style="color:#EF4444">✗ Abaixo</div>`;
+    else if (s.isAtual) statusTxt = `<div class="meta-sem-status" style="color:#4F6EF7">Em andamento</div>`;
+    const si = new Date(s.inicio+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+    const sf = new Date(s.fim+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+    return `<div class="${cls}">${badgeHTML}
+      <div class="meta-sem-label">${s.label}</div>
+      <div class="meta-sem-periodo">${si}–${sf}</div>
+      <div class="meta-sem-vals">
+        <span class="meta-sem-real" style="color:${s.isPast?(s.realizado>=s.meta?'#10B981':'#EF4444'):'#4F6EF7'}">${s.realizado}</span>
+        <span class="meta-sem-sep">/</span>
+        <span class="meta-sem-meta">${s.meta}</span>
+      </div>
+      ${statusTxt}
+    </div>`;
+  }).join('');
+
+  // Funil HTML
+  const nLeads = c.leadsNoPeriodo.length;
+  const nQualif = c.qualificados.length;
+  const nContr = nContratosTotal;
+  const txQL = nLeads > 0 ? (nQualif/nLeads*100).toFixed(0) : 0;
+  const txCQ = nQualif > 0 ? (nContr/nQualif*100).toFixed(0) : 0;
+  const txCL = nLeads > 0 ? (nContr/nLeads*100).toFixed(1) : 0;
+
+  el.innerHTML = `
+  <div id="print-only-header">
+    <strong style="font-size:1.1rem">Costa Galvão Advocacia</strong><br>
+    <span style="font-size:.85rem">${p.nome}</span><br>
+    <span style="font-size:.75rem;color:#555">Gerado em ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
+  </div>
+
+  <!-- Alertas -->
+  <div class="meta-alertas">
+    ${alertas.map(a=>`<div class="meta-alerta alerta-${a.tipo}"><span class="meta-alerta-icon">${a.icon}</span><div class="meta-alerta-texto">${a.texto}</div></div>`).join('')}
+  </div>
+
+  <!-- KPIs principais -->
+  <div class="meta-placar">
+    <div class="meta-kpi">
+      <div class="meta-kpi-val" style="color:#4F6EF7">${nContratosTotal}<span style="font-size:.9rem;color:#6B7280">/${p.meta}</span></div>
+      <div class="meta-kpi-label">Contratos fechados</div>
+      <div class="meta-kpi-sub">${pctBar}% da meta</div>
+    </div>
+    <div class="meta-kpi">
+      <div class="meta-kpi-val" style="color:${parseFloat(c.taxaConvAtual)>=p.metaConversao?'#10B981':'#EF4444'}">${c.taxaConvAtual}%</div>
+      <div class="meta-kpi-label">Taxa de conversão</div>
+      <div class="meta-kpi-sub">Meta: ${p.metaConversao}%</div>
+    </div>
+    <div class="meta-kpi">
+      <div class="meta-kpi-val" style="color:${c.projecaoFinal>=p.meta?'#10B981':'#EF4444'}">${c.projecaoFinal}</div>
+      <div class="meta-kpi-label">Projeção final</div>
+      <div class="meta-kpi-sub">${c.diasRestantes}d restantes</div>
+    </div>
+    <div class="meta-kpi">
+      <div class="meta-kpi-val" style="color:#8B5CF6">R$${c.custoContrato}</div>
+      <div class="meta-kpi-label">Custo/contrato</div>
+      <div class="meta-kpi-sub">CPL: R$${c.cplEstimado}</div>
+    </div>
+  </div>
+
+  <!-- Barra de progresso -->
+  <div class="meta-progress-wrap">
+    <div class="meta-progress-label"><span>Progresso da meta</span><span>${nContratosTotal} de ${p.meta} contratos</span></div>
+    <div class="meta-progress-bar">
+      <div class="meta-progress-fill" style="width:${pctBar}%;background:${corBarra}">
+        ${pctBar>8?`<span class="meta-progress-pct">${pctBar}%</span>`:''}
+      </div>
+    </div>
+  </div>
+
+  <!-- Semanas -->
+  <div style="font-size:.72rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Ritmo Semanal</div>
+  <div class="meta-semanas">${semsHTML}</div>
+
+  <!-- Funil -->
+  <div style="font-size:.72rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Funil de Conversão</div>
+  <div class="meta-funil">
+    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#4F6EF7">${nLeads}</div><div class="meta-funil-label">Leads entrados</div><div class="meta-funil-taxa" style="color:#6B7280">100%</div></div>
+    <div class="meta-funil-seta">›</div>
+    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#10B981">${nQualif}</div><div class="meta-funil-label">Qualificados</div><div class="meta-funil-taxa" style="color:${txQL>=25?'#10B981':'#F5A623'}">${txQL}%</div></div>
+    <div class="meta-funil-seta">›</div>
+    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#8B5CF6">${nContr}</div><div class="meta-funil-label">Contratos</div><div class="meta-funil-taxa" style="color:${txCQ>=30?'#10B981':txCQ>=15?'#F5A623':'#EF4444'}">${txCQ}% dos qualif.</div></div>
+    <div class="meta-funil-seta">›</div>
+    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:${parseFloat(txCL)>=8?'#10B981':'#EF4444'}">${txCL}%</div><div class="meta-funil-label">Conversão geral</div><div class="meta-funil-taxa" style="color:#6B7280">Meta: ${p.metaConversao}%</div></div>
+  </div>
+
+  <!-- Gráficos -->
+  <div class="meta-graficos">
+    <div class="meta-grafico-box">
+      <div class="meta-grafico-title">📊 Meta vs. Realizado por Semana</div>
+      <canvas id="chart-ritmo" height="180"></canvas>
+    </div>
+    <div class="meta-grafico-box">
+      <div class="meta-grafico-title">📢 Contratos por Campanha</div>
+      <canvas id="chart-campanha" height="180"></canvas>
+    </div>
+    <div class="meta-grafico-box full-width">
+      <div class="meta-grafico-title">🔽 Funil de Conversão</div>
+      <canvas id="chart-funil" height="120"></canvas>
+    </div>
+  </div>`;
+
+  // Draw charts after DOM is updated
+  setTimeout(() => desenharGraficos(p, c), 50);
+};
+
+function desenharGraficos(p, c) {
+  // Chart 1 — Ritmo semanal
+  const ctxR = document.getElementById('chart-ritmo');
+  if (ctxR) {
+    chartRitmo = new Chart(ctxR, {
+      type: 'bar',
+      data: {
+        labels: c.semanas.map(s => s.label),
+        datasets: [
+          { label: 'Meta', data: c.semanas.map(s => s.meta), backgroundColor: '#1E2235', borderColor: '#4F6EF7', borderWidth: 2, type: 'line', tension: 0.3, pointRadius: 4 },
+          { label: 'Realizado', data: c.semanas.map(s => s.realizado), backgroundColor: c.semanas.map(s => s.realizado >= s.meta ? '#10B98188' : s.isAtual ? '#4F6EF788' : s.isPast ? '#EF444488' : '#2A2F45'), borderColor: c.semanas.map(s => s.realizado >= s.meta ? '#10B981' : s.isAtual ? '#4F6EF7' : s.isPast ? '#EF4444' : '#2A2F45'), borderWidth: 1, borderRadius: 5 }
+        ]
+      },
+      options: { responsive: true, plugins: { legend: { labels: { color: '#9CA3AF', font: { size: 10 } } } }, scales: { x: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { color: '#1E2235' } }, y: { ticks: { color: '#9CA3AF', font: { size: 10 }, stepSize: 1 }, grid: { color: '#1E2235' }, beginAtZero: true } } }
+    });
+  }
+
+  // Chart 2 — Campanha
+  const campEntries = Object.entries(c.campStats).sort((a,b)=>b[1].contrato-a[1].contrato).slice(0,6);
+  const ctxC = document.getElementById('chart-campanha');
+  if (ctxC && campEntries.length > 0) {
+    chartCampanha = new Chart(ctxC, {
+      type: 'doughnut',
+      data: {
+        labels: campEntries.map(([k])=>k),
+        datasets: [{ data: campEntries.map(([,v])=>v.contrato||0), backgroundColor: ['#4F6EF7','#10B981','#F5A623','#8B5CF6','#EF4444','#06B6D4'], borderWidth: 0 }]
+      },
+      options: { responsive: true, plugins: { legend: { position: 'right', labels: { color: '#9CA3AF', font: { size: 10 }, padding: 8 } } } }
+    });
+  } else if (ctxC) {
+    const ctx2 = ctxC.getContext('2d');
+    ctx2.fillStyle = '#6B7280'; ctx2.font = '12px Inter'; ctx2.textAlign = 'center';
+    ctx2.fillText('Dados insuficientes', ctxC.width/2, ctxC.height/2);
+  }
+
+  // Chart 3 — Funil horizontal
+  const ctxF = document.getElementById('chart-funil');
+  if (ctxF) {
+    const nL = c.leadsNoPeriodo.length; const nQ = c.qualificados.length; const nC = c.contratos.length;
+    chartFunil = new Chart(ctxF, {
+      type: 'bar',
+      data: {
+        labels: ['Leads entrados','Qualificados','Contratos fechados'],
+        datasets: [{ data: [nL, nQ, nC], backgroundColor: ['#4F6EF788','#10B98188','#8B5CF688'], borderColor: ['#4F6EF7','#10B981','#8B5CF6'], borderWidth: 2, borderRadius: 6 }]
+      },
+      options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { color: '#1E2235' }, beginAtZero: true }, y: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { display: false } } } }
+    });
+  }
+}
+
+// ── Modal: criar/editar plano ──
+window.abrirModalPlano = function(planoId) {
+  const p = planoId ? planosAtivos.find(x=>x.id===planoId) : null;
+  const isEdit = !!p;
+  const camps = (p?.campanhas || campanhasDinamicas).join(', ');
+
+  const html = `<div class="modal-plan-overlay" id="modal-plan">
+    <div class="modal-plan-box">
+      <div class="modal-plan-head">
+        <span class="modal-plan-title">${isEdit?'✏️ Editar':'➕ Novo'} Planejamento de Meta</span>
+        <button class="modal-close" onclick="document.getElementById('modal-plan').remove()">✕</button>
+      </div>
+      <div class="modal-plan-body">
+        <div class="plan-form-grid">
+          <div class="plan-f-group full"><label class="plan-f-label">Nome do planejamento</label><input class="plan-f-input" id="pf-nome" value="${p?.nome||''}" placeholder="Ex: 30 Contratos SM — Jun/Jul 2026"/></div>
+          <div class="plan-f-group"><label class="plan-f-label">Meta de contratos</label><input class="plan-f-input" id="pf-meta" type="number" value="${p?.meta||30}" oninput="atualizarCalcPreview()"/></div>
+          <div class="plan-f-group"><label class="plan-f-label">Investimento/mês (R$)</label><input class="plan-f-input" id="pf-invest" type="number" value="${p?.investimento||1500}" oninput="atualizarCalcPreview()"/></div>
+          <div class="plan-f-group"><label class="plan-f-label">Data início</label><input class="plan-f-input" id="pf-inicio" type="date" value="${p?.inicio||''}" oninput="atualizarCalcPreview()"/></div>
+          <div class="plan-f-group"><label class="plan-f-label">Data fim</label><input class="plan-f-input" id="pf-fim" type="date" value="${p?.fim||''}" oninput="atualizarCalcPreview()"/></div>
+          <div class="plan-f-group"><label class="plan-f-label">Meta de conversão (%)</label><input class="plan-f-input" id="pf-conv" type="number" value="${p?.metaConversao||8}" oninput="atualizarCalcPreview()"/></div>
+          <div class="plan-f-group full"><label class="plan-f-label">Campanhas vinculadas (separadas por vírgula)</label><input class="plan-f-input" id="pf-camps" value="${camps}" placeholder="SM - V3, SM - 01, Indicação"/></div>
+        </div>
+        <div class="plan-calc-preview" id="plan-calc-preview">
+          <div class="plan-calc-title">📐 Cálculo automático</div>
+          <div class="plan-calc-grid" id="plan-calc-grid">Preencha as datas e a meta para ver a projeção.</div>
+        </div>
+        <div style="display:flex;gap:.6rem;margin-top:1rem;justify-content:flex-end;">
+          ${isEdit?`<button class="btn-meta btn-meta-danger" onclick="excluirPlano('${p.id}')">Excluir</button>`:''}
+          <button class="btn-meta" onclick="document.getElementById('modal-plan').remove()">Cancelar</button>
+          <button class="btn-meta btn-meta-primary" onclick="salvarPlanoForm('${p?.id||''}')">💾 Salvar</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  atualizarCalcPreview();
+};
+
+window.atualizarCalcPreview = function() {
+  const meta = parseInt(document.getElementById('pf-meta')?.value)||0;
+  const inicio = document.getElementById('pf-inicio')?.value;
+  const fim = document.getElementById('pf-fim')?.value;
+  const invest = parseFloat(document.getElementById('pf-invest')?.value)||0;
+  const conv = parseFloat(document.getElementById('pf-conv')?.value)||8;
+  const el = document.getElementById('plan-calc-grid');
+  if (!el || !meta || !inicio || !fim) return;
+  const di = new Date(inicio+'T12:00:00'), df = new Date(fim+'T12:00:00');
+  const dias = Math.ceil((df-di)/(1000*60*60*24));
+  const semanas = Math.ceil(dias/7);
+  const porSemana = (meta/semanas).toFixed(1);
+  const leadsNec = conv>0 ? Math.ceil(meta/(conv/100)) : '—';
+  const cpl = leadsNec!=='—'&&invest>0 ? 'R$'+(invest/(leadsNec/semanas*4)).toFixed(2) : '—';
+  const custContr = invest>0&&meta>0 ? 'R$'+(invest/meta*semanas/4).toFixed(2) : '—';
+  el.innerHTML = `
+    <div class="plan-calc-item">⏱ Dias de operação: <strong>${dias}</strong></div>
+    <div class="plan-calc-item">📅 Semanas: <strong>${semanas}</strong></div>
+    <div class="plan-calc-item">📈 Contratos/semana: <strong>${porSemana}</strong></div>
+    <div class="plan-calc-item">👥 Leads necessários: <strong>${leadsNec}</strong></div>
+    <div class="plan-calc-item">💰 CPL estimado: <strong>${cpl}</strong></div>
+    <div class="plan-calc-item">📋 Custo/contrato: <strong>${custContr}</strong></div>`;
+};
+
+window.salvarPlanoForm = async function(idExistente) {
+  const nome = document.getElementById('pf-nome')?.value.trim();
+  const meta = parseInt(document.getElementById('pf-meta')?.value)||0;
+  const inicio = document.getElementById('pf-inicio')?.value;
+  const fim = document.getElementById('pf-fim')?.value;
+  const invest = parseFloat(document.getElementById('pf-invest')?.value)||0;
+  const conv = parseFloat(document.getElementById('pf-conv')?.value)||8;
+  const campsRaw = document.getElementById('pf-camps')?.value||'';
+  const campanhas = campsRaw.split(',').map(s=>s.trim()).filter(Boolean);
+  if (!nome||!meta||!inicio||!fim) { showToast('Preencha todos os campos obrigatórios'); return; }
+
+  // Auto-generate semanas
+  const di = new Date(inicio+'T12:00:00');
+  const df = new Date(fim+'T12:00:00');
+  const dias = Math.ceil((df-di)/(1000*60*60*24));
+  const nSems = Math.ceil(dias/7);
+  const baseContr = Math.floor(meta/nSems);
+  const resto = meta - baseContr*nSems;
+  const semanas = [];
+  for (let i=0;i<nSems;i++){
+    const si = new Date(di); si.setDate(di.getDate()+i*7);
+    const sf = new Date(si); sf.setDate(si.getDate()+6); if(sf>df) sf.setTime(df.getTime());
+    const metaSem = baseContr+(i<resto?1:0);
+    semanas.push({label:`S${i+1}`,inicio:si.toISOString().slice(0,10),fim:sf.toISOString().slice(0,10),meta:metaSem});
+  }
+
+  const id = idExistente || 'plan_'+Date.now();
+  const novoPlan = {id, nome, meta, inicio, fim, investimento:invest, metaConversao:conv, campanhas, semanas};
+  const idx = planosAtivos.findIndex(x=>x.id===id);
+  if (idx>=0) planosAtivos[idx]=novoPlan; else planosAtivos.unshift(novoPlan);
+  planoSelecionado = novoPlan;
+  await salvarPlanos();
+  document.getElementById('modal-plan')?.remove();
+  renderPlanejamento();
+  showToast('Planejamento salvo!');
+};
+
+window.excluirPlano = async function(id) {
+  if (!confirm('Excluir este planejamento?')) return;
+  planosAtivos = planosAtivos.filter(x=>x.id!==id);
+  planoSelecionado = planosAtivos[0]||null;
+  await salvarPlanos();
+  document.getElementById('modal-plan')?.remove();
+  renderPlanejamento();
+  showToast('Planejamento excluído');
+};
+
+window.imprimirRelatorio = function() {
+  window.print();
+};
+
+
 // ─── TABS ───
+window.trocarPlano=function(id){
+  planoSelecionado=planosAtivos.find(x=>x.id===id)||null;
+  renderPlanejamento();
+};
+
 window.switchTab=function(tab){
   currentTab=tab;
   ['kanban','table','equipe','relatorios','estrategia'].forEach(t=>{
@@ -1712,6 +2235,123 @@ body.light-theme .auth-sub{color:#8B92A8}
 body.light-theme ::-webkit-scrollbar-track{background:#E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb{background:#B0B6C5;border:2px solid #E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
+
+/* ═══ MÓDULO PLANEJAMENTO DE META ═══ */
+.meta-module{background:#0F1420;border:1px solid #1E2235;border-radius:14px;padding:1.2rem 1.4rem;margin-bottom:1.4rem;}
+.meta-module-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;}
+.meta-module-title{font-size:.95rem;font-weight:700;color:#F1F3F9;display:flex;align-items:center;gap:.5rem;}
+.meta-badge-ativa{background:#10B981;color:#fff;font-size:.62rem;font-weight:700;padding:.15rem .5rem;border-radius:20px;letter-spacing:.04em;}
+.meta-badge-atrasada{background:#EF4444;color:#fff;font-size:.62rem;font-weight:700;padding:.15rem .5rem;border-radius:20px;}
+.meta-module-actions{display:flex;gap:.5rem;flex-wrap:wrap;}
+.btn-meta{background:#1E2235;border:1px solid #2A2F45;color:#C4C9D8;font-size:.72rem;padding:.3rem .75rem;border-radius:7px;cursor:pointer;transition:background .2s;}
+.btn-meta:hover{background:#2A2F45;}
+.btn-meta-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
+.btn-meta-primary:hover{background:#3d5ce0;}
+.btn-meta-danger{background:#EF4444;border-color:#EF4444;color:#fff;}
+.btn-meta-print{background:#8B5CF6;border-color:#8B5CF6;color:#fff;}
+.btn-meta-print:hover{background:#7c3aed;}
+
+/* Placar principal */
+.meta-placar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.85rem;margin-bottom:1rem;}
+@media(max-width:700px){.meta-placar{grid-template-columns:1fr 1fr;}}
+.meta-kpi{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.8rem 1rem;text-align:center;}
+.meta-kpi-val{font-size:1.6rem;font-weight:800;line-height:1;}
+.meta-kpi-label{font-size:.67rem;color:#6B7280;margin-top:.3rem;}
+.meta-kpi-sub{font-size:.65rem;color:#9CA3AF;margin-top:.15rem;}
+
+/* Barra de progresso da meta */
+.meta-progress-wrap{margin-bottom:1rem;}
+.meta-progress-label{display:flex;justify-content:space-between;font-size:.72rem;color:#9CA3AF;margin-bottom:.35rem;}
+.meta-progress-bar{height:18px;background:#1E2235;border-radius:9px;overflow:hidden;position:relative;}
+.meta-progress-fill{height:100%;border-radius:9px;transition:width .5s ease;display:flex;align-items:center;justify-content:flex-end;padding-right:.5rem;}
+.meta-progress-pct{font-size:.65rem;font-weight:700;color:#fff;}
+.meta-progress-marker{position:absolute;top:0;height:100%;width:2px;background:#fff;opacity:.4;}
+.meta-progress-marker-label{position:absolute;top:-18px;font-size:.6rem;color:#9CA3AF;transform:translateX(-50%);}
+
+/* Semanas */
+.meta-semanas{display:grid;grid-template-columns:repeat(5,1fr);gap:.6rem;margin-bottom:1rem;}
+@media(max-width:700px){.meta-semanas{grid-template-columns:repeat(3,1fr);}}
+.meta-semana{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.65rem .6rem;text-align:center;position:relative;}
+.meta-semana.sem-atual{border-color:#4F6EF7;box-shadow:0 0 0 1px #4F6EF755;}
+.meta-semana.sem-ok{border-color:#10B98155;}
+.meta-semana.sem-atras{border-color:#EF444455;}
+.meta-semana.sem-futura{opacity:.5;}
+.meta-sem-label{font-size:.6rem;color:#6B7280;margin-bottom:.3rem;}
+.meta-sem-periodo{font-size:.55rem;color:#6B7280;margin-bottom:.35rem;}
+.meta-sem-vals{display:flex;justify-content:center;align-items:baseline;gap:.3rem;}
+.meta-sem-real{font-size:1.2rem;font-weight:800;}
+.meta-sem-sep{font-size:.7rem;color:#6B7280;}
+.meta-sem-meta{font-size:.8rem;color:#6B7280;}
+.meta-sem-status{font-size:.58rem;margin-top:.3rem;font-weight:600;}
+.meta-sem-badge{position:absolute;top:.3rem;right:.3rem;font-size:.55rem;padding:.1rem .35rem;border-radius:10px;}
+.meta-sem-badge.atual{background:#4F6EF7;color:#fff;}
+
+/* Funil de conversão */
+.meta-funil{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;}
+.meta-funil-etapa{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.65rem .9rem;text-align:center;flex:1;min-width:80px;}
+.meta-funil-num{font-size:1.3rem;font-weight:800;}
+.meta-funil-label{font-size:.62rem;color:#6B7280;margin-top:.2rem;}
+.meta-funil-taxa{font-size:.65rem;font-weight:600;margin-top:.25rem;}
+.meta-funil-seta{color:#2A2F45;font-size:1.2rem;flex-shrink:0;}
+
+/* Gráficos */
+.meta-graficos{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin-bottom:1rem;}
+@media(max-width:700px){.meta-graficos{grid-template-columns:1fr;}}
+.meta-grafico-box{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.8rem;}
+.meta-grafico-title{font-size:.72rem;font-weight:600;color:#C4C9D8;margin-bottom:.7rem;}
+.meta-grafico-box.full-width{grid-column:1/-1;}
+
+/* Alertas estratégicos */
+.meta-alertas{display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem;}
+.meta-alerta{display:flex;align-items:flex-start;gap:.7rem;background:#13161F;border-radius:9px;padding:.65rem .85rem;border-left:3px solid #4F6EF7;}
+.meta-alerta.alerta-red{border-left-color:#EF4444;}
+.meta-alerta.alerta-orange{border-left-color:#F5A623;}
+.meta-alerta.alerta-green{border-left-color:#10B981;}
+.meta-alerta-icon{font-size:1rem;flex-shrink:0;}
+.meta-alerta-texto{font-size:.73rem;color:#C4C9D8;line-height:1.45;}
+.meta-alerta-texto strong{color:#F1F3F9;}
+
+/* Modal planejamento */
+.modal-plan-overlay{position:fixed;inset:0;background:#000000cc;z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;}
+.modal-plan-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;}
+.modal-plan-head{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.2rem;border-bottom:1px solid #1E2235;}
+.modal-plan-title{font-size:.9rem;font-weight:700;color:#F1F3F9;}
+.modal-plan-body{padding:1.2rem;}
+.plan-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;}
+@media(max-width:500px){.plan-form-grid{grid-template-columns:1fr;}}
+.plan-form-grid .full{grid-column:1/-1;}
+.plan-f-group{display:flex;flex-direction:column;gap:.35rem;}
+.plan-f-label{font-size:.7rem;color:#9CA3AF;font-weight:500;}
+.plan-f-input{background:#13161F;border:1px solid #1E2235;border-radius:7px;padding:.45rem .75rem;color:#F1F3F9;font-size:.8rem;outline:none;}
+.plan-f-input:focus{border-color:#4F6EF7;}
+.plan-calc-preview{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.85rem;margin-top:.85rem;}
+.plan-calc-title{font-size:.7rem;color:#6B7280;font-weight:600;margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.05em;}
+.plan-calc-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;}
+.plan-calc-item{font-size:.72rem;color:#C4C9D8;}
+.plan-calc-item strong{color:#F1F3F9;}
+
+/* Campanhas dinâmicas */
+.campaign-add-wrap{display:flex;align-items:center;gap:.4rem;margin-top:.35rem;}
+.btn-add-campaign{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.7rem;padding:.25rem .6rem;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.btn-add-campaign:hover{background:#2A2F45;color:#F1F3F9;}
+
+/* Print */
+@media print{
+  header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast,
+  .meta-module-actions,.btn-meta,.est-section,.estrategia-period-bar{display:none!important;}
+  body{background:#fff!important;color:#000!important;}
+  .meta-module{background:#fff!important;border:1px solid #ddd!important;color:#000!important;}
+  .meta-kpi,.meta-semana,.meta-funil-etapa,.meta-grafico-box{background:#f9f9f9!important;border:1px solid #ddd!important;color:#000!important;}
+  .meta-kpi-val,.meta-sem-real,.meta-funil-num{color:#000!important;}
+  #print-only-header{display:block!important;}
+}
+#print-only-header{display:none;text-align:center;padding:1rem 0 .5rem;border-bottom:2px solid #000;margin-bottom:1rem;}
+
+/* Light theme overrides */
+body.light-theme .meta-module{background:#fff;border-color:#E2E5EE;}
+body.light-theme .meta-kpi,body.light-theme .meta-semana,body.light-theme .meta-funil-etapa,body.light-theme .meta-grafico-box,body.light-theme .meta-alerta{background:#F4F5F8;border-color:#E2E5EE;}
+body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme .meta-funil-num{color:#1A1D2E;}
+
 </style>
 </head>
 <body>
@@ -1842,9 +2482,27 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
     </div>
     <div id="view-estrategia" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
         <div><div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
-        <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn-hdr" onclick="imprimirRelatorio()" style="background:#8B5CF6;color:#fff;border-color:#8B5CF6">🖨️ Imprimir / PDF</button>
+          <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
+        </div>
+      </div>
+      <!-- Planning module — visible only to gestora -->
+      <div id="meta-module-wrap" class="meta-module" style="display:none">
+        <div class="meta-module-header">
+          <div class="meta-module-title">
+            🎯 Planejamento de Meta
+            <span class="meta-badge-ativa" id="meta-badge-status">ATIVA</span>
+          </div>
+          <div class="meta-module-actions">
+            <select id="select-plano" class="fu-search-input" style="width:auto;padding:.3rem .65rem" onchange="trocarPlano(this.value)"></select>
+            <button class="btn-meta btn-meta-primary" onclick="abrirModalPlano(null)">+ Nova Meta</button>
+            <button class="btn-meta" onclick="abrirModalPlano(planoSelecionado?.id)">✏️ Editar</button>
+          </div>
+        </div>
+        <div id="meta-module-content"></div>
       </div>
       <div id="estrategia-content"></div>
     </div>
@@ -1863,7 +2521,7 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
-        <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
+        <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
         <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
