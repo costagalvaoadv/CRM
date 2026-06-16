@@ -1460,11 +1460,50 @@ function calcularPlano(plano) {
   const cplEstimado = leadsNoPeriodo.length > 0 ? (plano.investimento / leadsNoPeriodo.length).toFixed(2) : '—';
   const custoContrato = contratos.length > 0 ? (plano.investimento / contratos.length).toFixed(2) : '—';
 
+  // Ritmo esperado hoje vs. real (quantos contratos deveriam ter sido fechados até hoje)
+  const pctTempoDecorrido = diasDecorridos / diasTotal;
+  const contratosEsperadosHoje = Math.round(plano.meta * pctTempoDecorrido);
+  const diferencaRitmo = contratos.length - contratosEsperadosHoje; // positive = ahead, negative = behind
+
+  // Funil breakdown for gargalo detection
+  const emAndamento = leadsNoPeriodo.filter(l => l.status === 'EM ANDAMENTO').length;
+  const semResposta = leadsNoPeriodo.filter(l => l.status === 'SEM RESPOSTA').length;
+  const agDocs = leadsNoPeriodo.filter(l => l.status === 'AGUARDANDO DOCUMENTOS').length;
+  const agAssin = leadsNoPeriodo.filter(l => l.status === 'AGUARDANDO ASSINATURA').length;
+  const desqualif = leadsNoPeriodo.filter(l => l.status === 'DESQUALIFICADO').length;
+  const nQualif2 = qualificados.length;
+  const nLeads2 = leadsNoPeriodo.length;
+
+  // Identify where the funnel is bleeding
+  let gargalo = null;
+  if (nLeads2 >= 5) {
+    const txQualif = nLeads2 > 0 ? nQualif2 / nLeads2 : 0;       // leads → qualificados
+    const txDocs   = nQualif2 > 0 ? agDocs / nQualif2 : 0;        // qualif → ag.docs (travados)
+    const txAssin  = (agDocs + agAssin) > 0 ? agAssin / (agDocs + agAssin) : 0; // docs → assinatura (travados)
+    const txSemResp = nLeads2 > 0 ? semResposta / nLeads2 : 0;
+    const txConv   = nQualif2 > 0 ? contratos.length / nQualif2 : 0;
+
+    if (txSemResp > 0.40)
+      gargalo = { etapa: '1ª resposta', descricao: `${Math.round(txSemResp*100)}% dos leads não responderam ao primeiro contato`, acao: 'Revisar horário de envio da primeira mensagem e testar áudio no lugar de texto' };
+    else if (txQualif < 0.20 && nLeads2 >= 10)
+      gargalo = { etapa: 'qualificação', descricao: `Apenas ${Math.round(txQualif*100)}% dos leads estão sendo qualificados`, acao: 'Verificar se o Flow do Meta está filtrando corretamente. Revisar script A1 de primeiro contato' };
+    else if (agDocs >= 3)
+      gargalo = { etapa: 'documentos', descricao: `${agDocs} lead${agDocs>1?'s':''} travado${agDocs>1?'s':''} em Aguardando Documentos`, acao: 'Ligar diretamente para cada lead em ag. documentos. Oferecer começar com o que ela tem' };
+    else if (agAssin >= 2)
+      gargalo = { etapa: 'assinatura', descricao: `${agAssin} contrato${agAssin>1?'s':''} com link enviado sem assinatura`, acao: 'Ligar agora — link enviado há mais de 15 min sem assinar fecha apenas 10% por mensagem, 70% por ligação' };
+    else if (txConv < 0.25 && nQualif2 >= 5)
+      gargalo = { etapa: 'fechamento', descricao: `Apenas ${Math.round(txConv*100)}% dos qualificados viraram contrato`, acao: 'Revisar script de quebra de objeção. Oferecer videochamada com a Dra. Jucineide para leads travados' };
+  }
+
   return {
     contratos, leadsNoPeriodo, qualificados, semanas, campStats,
     diasDecorridos, diasTotal, diasRestantes, projecaoFinal,
     necessarioPorDia, taxaConvAtual, cplEstimado, custoContrato,
-    pct: Math.min(100, Math.round(contratos.length / plano.meta * 100))
+    pct: Math.min(100, Math.round(contratos.length / plano.meta * 100)),
+    // new
+    contratosEsperadosHoje, diferencaRitmo,
+    emAndamento, semResposta, agDocs, agAssin, desqualif,
+    gargalo
   };
 }
 
@@ -1489,15 +1528,62 @@ window.renderPlanejamento = function() {
   const pctBar = c.pct;
   const corBarra = pctBar >= 100 ? '#10B981' : atras ? '#EF4444' : '#4F6EF7';
 
-  // Alertas
+  // ── Alertas inteligentes ──
   const alertas = [];
-  if (!ativa) alertas.push({tipo:'green', icon:'✅', texto:`Campanha encerrada. <strong>${nContratosTotal} contratos</strong> de ${p.meta} fechados.`});
-  else if (c.projecaoFinal >= p.meta) alertas.push({tipo:'green', icon:'🎯', texto:`No ritmo atual, você fecha <strong>${c.projecaoFinal} contratos</strong> até ${new Date(p.fim+'T12:00:00').toLocaleDateString('pt-BR')} — acima da meta!`});
-  else alertas.push({tipo:'red', icon:'⚠️', texto:`Projeção atual: <strong>${c.projecaoFinal} contratos</strong>. Faltam <strong>${p.meta - nContratosTotal}</strong> em <strong>${c.diasRestantes} dias</strong>. Necessário: ${c.necessarioPorDia}/dia.`});
-  if (parseFloat(c.taxaConvAtual) < p.metaConversao && c.leadsNoPeriodo.length >= 5)
-    alertas.push({tipo:'orange', icon:'📉', texto:`Taxa de conversão atual: <strong>${c.taxaConvAtual}%</strong> — abaixo da meta de <strong>${p.metaConversao}%</strong>. Revisar etapa do gargalo.`});
-  if (c.leadsNoPeriodo.length === 0 && ativa)
-    alertas.push({tipo:'orange', icon:'📥', texto:`Nenhum lead das campanhas desta meta registrado ainda. Verifique se o campo <strong>Campanha</strong> está sendo preenchido nos cadastros.`});
+  const fimFormatado = new Date(p.fim+'T12:00:00').toLocaleDateString('pt-BR');
+
+  if (!ativa) {
+    // Campanha encerrada
+    const cor = nContratosTotal >= p.meta ? 'green' : 'orange';
+    alertas.push({tipo:cor, icon: nContratosTotal >= p.meta ? '✅':'📋',
+      texto:`Campanha encerrada. <strong>${nContratosTotal} de ${p.meta} contratos</strong> fechados.${nContratosTotal < p.meta ? ` Faltaram <strong>${p.meta - nContratosTotal}</strong> para a meta.` : ' Meta atingida!'}`});
+  } else {
+    // ── Alerta 1: Ritmo — à frente ou atrás ──
+    const diff = c.diferencaRitmo;
+    if (diff > 0) {
+      alertas.push({tipo:'green', icon:'🚀',
+        texto:`Você está <strong>${diff} contrato${diff>1?'s':''} à frente</strong> do ritmo necessário. No ritmo atual, fecha <strong>${c.projecaoFinal} contratos</strong> até ${fimFormatado} — acima da meta de ${p.meta}!`});
+    } else if (diff < 0) {
+      const atras = Math.abs(diff);
+      alertas.push({tipo:'red', icon:'⚠️',
+        texto:`Você está <strong>${atras} contrato${atras>1?'s':''} atrás</strong> do ritmo necessário. Com o ritmo atual, fecha <strong>${c.projecaoFinal} contrato${c.projecaoFinal!==1?'s':''} até ${fimFormatado} — não os ${p.meta}</strong>. Precisa de <strong>${c.necessarioPorDia} contrato${parseFloat(c.necessarioPorDia)>1?'s':''}/dia</strong> daqui para frente.`});
+    } else {
+      alertas.push({tipo:'green', icon:'🎯',
+        texto:`No ritmo exato da meta. Projeção: <strong>${c.projecaoFinal} contratos</strong> até ${fimFormatado}. Mantenha o ritmo!`});
+    }
+
+    // ── Alerta 2: Taxa de conversão com diagnóstico de etapa ──
+    if (c.leadsNoPeriodo.length >= 5) {
+      const txAtual = parseFloat(c.taxaConvAtual);
+      if (txAtual < p.metaConversao) {
+        const txNecessaria = c.leadsNoPeriodo.length > 0
+          ? ((p.meta / (c.leadsNoPeriodo.length + Math.max(0, c.diasRestantes * 10))) * 100).toFixed(1)
+          : p.metaConversao;
+        let gargaloTexto = 'Revisar o funil completo.';
+        if (c.gargalo) gargaloTexto = `O gargalo está em <strong>${c.gargalo.etapa}</strong>: ${c.gargalo.descricao}.`;
+        alertas.push({tipo:'orange', icon:'📉',
+          texto:`Taxa de conversão atual: <strong>${c.taxaConvAtual}%</strong> — você precisa de <strong>${p.metaConversao}%</strong>. ${gargaloTexto}`});
+      }
+    }
+
+    // ── Alerta 3: Ação concreta baseada no gargalo ──
+    if (c.gargalo) {
+      alertas.push({tipo:'orange', icon:'🔧',
+        texto:`<strong>Ação agora:</strong> ${c.gargalo.acao}.`});
+    }
+
+    // ── Alerta 4: Links sem assinatura (urgência máxima) ──
+    if (c.agAssin >= 1) {
+      alertas.push({tipo:'red', icon:'✍️',
+        texto:`<strong>${c.agAssin} contrato${c.agAssin>1?'s':''} aguardando assinatura</strong> agora. Ligue imediatamente — cada hora sem assinar reduz em 30% a chance de fechar.`});
+    }
+
+    // ── Alerta 5: Sem leads registrados ──
+    if (c.leadsNoPeriodo.length === 0) {
+      alertas.push({tipo:'orange', icon:'📥',
+        texto:`Nenhum lead das campanhas desta meta registrado ainda. Verifique se o campo <strong>Campanha</strong> está sendo preenchido nos cadastros.`});
+    }
+  }
 
   // Semanas HTML
   const semsHTML = c.semanas.map(s => {
@@ -1511,7 +1597,16 @@ window.renderPlanejamento = function() {
     else if (s.isAtual) statusTxt = `<div class="meta-sem-status" style="color:#4F6EF7">Em andamento</div>`;
     const si = new Date(s.inicio+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
     const sf = new Date(s.fim+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
-    return `<div class="${cls}">${badgeHTML}
+    // Get leads with contracts in this week
+    const siD = new Date(s.inicio+'T00:00:00'); const sfD = new Date(s.fim+'T23:59:59');
+    const contrSem = c.contratos.filter(l=>{
+      if(l.log&&l.log.length>0){const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');if(lc.length>0){const ts=new Date(lc[lc.length-1].ts);return ts>=siD&&ts<=sfD;}}
+      const cd=l.createdAt?.toDate?l.createdAt.toDate():null;return cd&&cd>=siD&&cd<=sfD;
+    });
+    const hasLeads = contrSem.length > 0 || s.isAtual || s.isPast;
+    const clickable = hasLeads ? 'clickable' : '';
+    const onclick = contrSem.length > 0 ? `onclick="abrirListaLeads(${JSON.stringify(contrSem.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos ${s.label}: ${si}–${sf}')"` : (s.isAtual||s.isPast ? `onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads ativos — ${s.label}')"` : '');
+    return `<div class="${cls} ${clickable}" ${onclick} title="${s.isAtual||s.isPast?'Clique para ver os leads':'Semana futura'}">${badgeHTML}
       <div class="meta-sem-label">${s.label}</div>
       <div class="meta-sem-periodo">${si}–${sf}</div>
       <div class="meta-sem-vals">
@@ -1545,22 +1640,22 @@ window.renderPlanejamento = function() {
 
   <!-- KPIs principais -->
   <div class="meta-placar">
-    <div class="meta-kpi">
+    <div class="meta-kpi clickable" onclick="abrirListaLeads(${JSON.stringify(c.contratos.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos fechados na campanha')" title="Ver contratos fechados">
       <div class="meta-kpi-val" style="color:#4F6EF7">${nContratosTotal}<span style="font-size:.9rem;color:#6B7280">/${p.meta}</span></div>
       <div class="meta-kpi-label">Contratos fechados</div>
       <div class="meta-kpi-sub">${pctBar}% da meta</div>
     </div>
-    <div class="meta-kpi">
+    <div class="meta-kpi clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads da campanha — taxa de conversão ${c.taxaConvAtual}%')" title="Ver todos os leads da campanha">
       <div class="meta-kpi-val" style="color:${parseFloat(c.taxaConvAtual)>=p.metaConversao?'#10B981':'#EF4444'}">${c.taxaConvAtual}%</div>
       <div class="meta-kpi-label">Taxa de conversão</div>
       <div class="meta-kpi-sub">Meta: ${p.metaConversao}%</div>
     </div>
-    <div class="meta-kpi">
+    <div class="meta-kpi" title="Projeção calculada do ritmo atual">
       <div class="meta-kpi-val" style="color:${c.projecaoFinal>=p.meta?'#10B981':'#EF4444'}">${c.projecaoFinal}</div>
       <div class="meta-kpi-label">Projeção final</div>
       <div class="meta-kpi-sub">${c.diasRestantes}d restantes</div>
     </div>
-    <div class="meta-kpi">
+    <div class="meta-kpi" title="Custo por contrato fechado com base no investimento informado">
       <div class="meta-kpi-val" style="color:#8B5CF6">R$${c.custoContrato}</div>
       <div class="meta-kpi-label">Custo/contrato</div>
       <div class="meta-kpi-sub">CPL: R$${c.cplEstimado}</div>
@@ -1584,13 +1679,21 @@ window.renderPlanejamento = function() {
   <!-- Funil -->
   <div style="font-size:.72rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Funil de Conversão</div>
   <div class="meta-funil">
-    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#4F6EF7">${nLeads}</div><div class="meta-funil-label">Leads entrados</div><div class="meta-funil-taxa" style="color:#6B7280">100%</div></div>
+    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads entrados na campanha')" title="Ver todos os leads">
+      <div class="meta-funil-num" style="color:#4F6EF7">${nLeads}</div><div class="meta-funil-label">Leads entrados</div><div class="meta-funil-taxa" style="color:#6B7280">100%</div>
+    </div>
     <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#10B981">${nQualif}</div><div class="meta-funil-label">Qualificados</div><div class="meta-funil-taxa" style="color:${txQL>=25?'#10B981':'#F5A623'}">${txQL}%</div></div>
+    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.qualificados.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads qualificados na campanha')" title="Ver leads qualificados">
+      <div class="meta-funil-num" style="color:#10B981">${nQualif}</div><div class="meta-funil-label">Qualificados</div><div class="meta-funil-taxa" style="color:${txQL>=25?'#10B981':'#F5A623'}">${txQL}%</div>
+    </div>
     <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:#8B5CF6">${nContr}</div><div class="meta-funil-label">Contratos</div><div class="meta-funil-taxa" style="color:${txCQ>=30?'#10B981':txCQ>=15?'#F5A623':'#EF4444'}">${txCQ}% dos qualif.</div></div>
+    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.contratos.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos fechados na campanha')" title="Ver contratos fechados">
+      <div class="meta-funil-num" style="color:#8B5CF6">${nContr}</div><div class="meta-funil-label">Contratos</div><div class="meta-funil-taxa" style="color:${txCQ>=30?'#10B981':txCQ>=15?'#F5A623':'#EF4444'}">${txCQ}% dos qualif.</div>
+    </div>
     <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa"><div class="meta-funil-num" style="color:${parseFloat(txCL)>=8?'#10B981':'#EF4444'}">${txCL}%</div><div class="meta-funil-label">Conversão geral</div><div class="meta-funil-taxa" style="color:#6B7280">Meta: ${p.metaConversao}%</div></div>
+    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Todos os leads — conversão geral ${txCL}%')" title="Ver todos os leads da campanha">
+      <div class="meta-funil-num" style="color:${parseFloat(txCL)>=8?'#10B981':'#EF4444'}">${txCL}%</div><div class="meta-funil-label">Conversão geral</div><div class="meta-funil-taxa" style="color:#6B7280">Meta: ${p.metaConversao}%</div>
+    </div>
   </div>
 
   <!-- Gráficos -->
@@ -1778,6 +1881,14 @@ window.imprimirRelatorio = function() {
 
 
 // ─── TABS ───
+window.toggleMetaModule = function() {
+  const body = document.getElementById('meta-module-body');
+  const btn = document.getElementById('meta-collapse-btn');
+  if (!body) return;
+  const collapsed = body.classList.toggle('collapsed');
+  if (btn) btn.textContent = collapsed ? '▸' : '▾';
+};
+
 window.trocarPlano=function(id){
   planoSelecionado=planosAtivos.find(x=>x.id===id)||null;
   renderPlanejamento();
@@ -2352,6 +2463,62 @@ body.light-theme .meta-module{background:#fff;border-color:#E2E5EE;}
 body.light-theme .meta-kpi,body.light-theme .meta-semana,body.light-theme .meta-funil-etapa,body.light-theme .meta-grafico-box,body.light-theme .meta-alerta{background:#F4F5F8;border-color:#E2E5EE;}
 body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme .meta-funil-num{color:#1A1D2E;}
 
+
+/* ── Meta cards: hover + clickable ── */
+.meta-kpi.clickable,
+.meta-semana.clickable,
+.meta-funil-etapa.clickable {
+  cursor:pointer;
+  transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.meta-kpi.clickable:hover {
+  transform:translateY(-2px);
+  box-shadow:0 4px 18px #4F6EF733;
+  border-color:#4F6EF7;
+}
+.meta-semana.clickable:hover {
+  transform:translateY(-2px);
+  box-shadow:0 4px 14px #4F6EF722;
+  border-color:#4F6EF7 !important;
+}
+.meta-funil-etapa.clickable:hover {
+  transform:translateY(-2px);
+  box-shadow:0 4px 14px #10B98122;
+  border-color:#10B981;
+}
+.meta-kpi.clickable::after,
+.meta-semana.clickable::after,
+.meta-funil-etapa.clickable::after {
+  content:'🔍';
+  display:block;
+  font-size:.55rem;
+  color:#6B7280;
+  margin-top:.3rem;
+  opacity:0;
+  transition:opacity .15s;
+}
+.meta-kpi.clickable:hover::after,
+.meta-semana.clickable:hover::after,
+.meta-funil-etapa.clickable:hover::after { opacity:1; }
+
+/* ── Collapse ── */
+.btn-meta-collapse {
+  background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;
+  font-size:.75rem;padding:.25rem .6rem;border-radius:7px;
+  cursor:pointer;transition:background .2s;line-height:1;
+}
+.btn-meta-collapse:hover{background:#2A2F45;color:#F1F3F9;}
+#meta-module-body {
+  transition:max-height .35s ease, opacity .25s ease;
+  overflow:hidden;
+  max-height:3000px;
+  opacity:1;
+}
+#meta-module-body.collapsed {
+  max-height:0;
+  opacity:0;
+}
+
 </style>
 </head>
 <body>
@@ -2500,9 +2667,10 @@ body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme 
             <select id="select-plano" class="fu-search-input" style="width:auto;padding:.3rem .65rem" onchange="trocarPlano(this.value)"></select>
             <button class="btn-meta btn-meta-primary" onclick="abrirModalPlano(null)">+ Nova Meta</button>
             <button class="btn-meta" onclick="abrirModalPlano(planoSelecionado?.id)">✏️ Editar</button>
+            <button class="btn-meta-collapse" id="meta-collapse-btn" onclick="toggleMetaModule()" title="Minimizar/Maximizar">▾</button>
           </div>
         </div>
-        <div id="meta-module-content"></div>
+        <div id="meta-module-body"><div id="meta-module-content"></div></div>
       </div>
       <div id="estrategia-content"></div>
     </div>
