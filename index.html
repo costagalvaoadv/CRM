@@ -577,18 +577,42 @@ function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
   const log = l.log || [];
   const hist = l.followupHistory || [];
   const nota = (l.currentNote || '').toLowerCase();
+  const status = l.status || 'EM ANDAMENTO';
 
-  // ── Contexto do histórico ──
+  // ── Leitura do histórico ──
   const tentativas = hist.length;
-  const semResposta = log.filter(e => (e.note||'').toLowerCase().includes('sem retorno') || (e.note||'').toLowerCase().includes('sem resposta') || (e.note||'').toLowerCase().includes('não respondeu')).length;
-  const respondeu = log.some(e => (e.note||'').toLowerCase().includes('respondeu') || (e.note||'').toLowerCase().includes('retornou') || (e.note||'').toLowerCase().includes('entrou em contato'));
-  const jaEnviouDocs = nota.includes('document') || nota.includes('enviou') || log.some(e=>(e.note||'').toLowerCase().includes('document'));
-  const travadoAssinatura = l.status === 'AGUARDANDO ASSINATURA';
-  const travadoDocs = l.status === 'AGUARDANDO DOCUMENTOS';
-  const mencionouMarido = nota.includes('marido') || nota.includes('esposo') || nota.includes('companheiro');
-  const mencionouMedo = nota.includes('golpe') || nota.includes('medo') || nota.includes('desconfia') || nota.includes('fraude');
-  const mencionouDinheiro = nota.includes('gru') || nota.includes('taxa') || nota.includes('pagar') || nota.includes('custo') || nota.includes('dinheiro');
-  const jaQualificada = ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status);
+  const semResposta = log.filter(e =>
+    (e.note||'').toLowerCase().includes('sem retorno') ||
+    (e.note||'').toLowerCase().includes('sem resposta') ||
+    (e.note||'').toLowerCase().includes('não respondeu') ||
+    (e.note||'').toLowerCase().includes('não retornou')
+  ).length;
+  const respondeu = log.some(e =>
+    (e.note||'').toLowerCase().includes('respondeu') ||
+    (e.note||'').toLowerCase().includes('retornou') ||
+    (e.note||'').toLowerCase().includes('entrou em contato') ||
+    (e.note||'').toLowerCase().includes('cliente retornou')
+  );
+  const travadoAssinatura = status === 'AGUARDANDO ASSINATURA';
+  const travadoDocs = status === 'AGUARDANDO DOCUMENTOS';
+  const jaQualificada = ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
+  const mencionouMarido = nota.includes('marido') || nota.includes('esposo') || nota.includes('companheiro') || nota.includes('marido não quer');
+  const mencionouMedo = nota.includes('golpe') || nota.includes('medo') || nota.includes('desconfia') || nota.includes('fraude') || nota.includes('não confia');
+  const mencionouDinheiro = nota.includes('gru') || nota.includes('taxa') || nota.includes('pagar') || nota.includes('custo') || nota.includes('dinheiro') || nota.includes('não tem como pagar');
+  const mencionouPensando = nota.includes('vai pensar') || nota.includes('vou pensar') || nota.includes('deixa eu ver') || nota.includes('depois') || nota.includes('semana que vem');
+  const mencionouPrazo = nota.includes('prazo') || nota.includes('venceu') || nota.includes('perdeu');
+
+  // ── Fase exata onde o lead está parado (para registro estratégico) ──
+  const faseMap = {
+    'EM ANDAMENTO': 'qualificação',
+    'SEM RESPOSTA': 'primeiro contato',
+    'QUALIFICADO': 'conversão/proposta',
+    'AGUARDANDO DOCUMENTOS': 'documentação',
+    'AGUARDANDO ASSINATURA': 'assinatura do contrato',
+    'CONTRATO FECHADO': 'pós-venda',
+    'DESQUALIFICADO': 'desqualificação'
+  };
+  const faseAtual = faseMap[status] || 'atendimento';
 
   // ── Data do parto ──
   let diasParto = null;
@@ -596,118 +620,163 @@ function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
   if (l.dataParto) {
     const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
     diasParto = Math.floor((p - new Date()) / (1000*60*60*24));
-    partoStr = diasParto > 0 ? `(parto em ${diasParto} dias)` : '(parto recente)';
+    partoStr = diasParto > 0 ? `parto em ${diasParto} dias` : 'parto recente';
   }
   const partoUrgente = diasParto !== null && diasParto >= 0 && diasParto <= 20;
   const possParto = diasParto !== null && diasParto < 0 && diasParto > -30;
 
-  // ── Última nota útil para referenciar ──
-  const ultimaNota = [...log].reverse().find(e => e.note && e.note.length > 15 && !e.note.includes('FUP') && !e.note.includes('Realizado'));
-  const refNota = ultimaNota ? ultimaNota.note.slice(0, 80) : '';
-
-  // ── Situação geral para o registro ──
-  let situacaoAtual = '';
-  if (travadoAssinatura) situacaoAtual = 'Lead com contrato aguardando assinatura.';
-  else if (travadoDocs) situacaoAtual = 'Lead aguardando envio de documentação.';
-  else if (jaQualificada) situacaoAtual = 'Lead qualificada, em processo de conversão.';
-  else if (semResposta >= 2) situacaoAtual = `Lead sem retorno após ${tentativas} tentativa${tentativas>1?'s':''}.`;
-  else if (respondeu) situacaoAtual = 'Lead com histórico de resposta, mas sem avanço.';
-  else situacaoAtual = 'Lead em atendimento inicial.';
-
-  // ── Geração da mensagem WhatsApp por etapa + contexto ──
   let msg = '';
   let estrategia = '';
   let registro = '';
 
+  // ══════════════════════════════════════════════════
+  // FUP 24h — Primeiro contato: abrir canal, sem pressão
+  // ══════════════════════════════════════════════════
   if (etapaLabel === 'FUP 24h') {
-    estrategia = 'Primeiro contato — leveza e facilidade. Sem pressão, só abertura.';
+    estrategia = 'Abertura de canal. Facilitar o próximo passo sem pressão.';
     if (respondeu) {
-      msg = `Oi ${nome}! Passando para dar sequência à nossa conversa sobre ${area}. Você tem alguma dúvida que eu possa esclarecer? 😊`;
-    } else {
-      msg = `Oi ${nome}! Vi que você demonstrou interesse em saber mais sobre ${area}. Qualquer dúvida que tiver, estou por aqui para te ajudar 😊`;
-    }
-    registro = `Realizado FUP 24h via WhatsApp. ${situacaoAtual} Enviada mensagem de abertura de contato. Aguardando retorno.`;
-  }
-
-  else if (etapaLabel === 'FUP 3d') {
-    estrategia = 'Despertar interesse com oportunidade real. Mostrar que o direito existe e tem prazo.';
-    if (semResposta >= 1) {
-      msg = `Oi ${nome}! Tentei te contatar antes mas talvez não tenha chegado 📩 Queria só te dizer que o ${area} tem um prazo para ser solicitado — vale a pena verificar se você tem direito antes que passe. Posso te ajudar com isso?`;
-    } else {
-      msg = `${nome}, oi! Passando para ver se você teve a chance de pensar sobre o ${area}. Muitas pessoas perdem esse benefício por não saber que têm direito. Me conta: você já verificou a sua situação?`;
-    }
-    registro = `Realizado FUP 3d via WhatsApp. ${situacaoAtual} Abordagem sobre prazo e direito ao benefício. Aguardando retorno.`;
-  }
-
-  else if (etapaLabel === 'FUP 7d') {
-    estrategia = 'Percepção de perda suave. Mostrar que o processo é simples e o tempo corre.';
-    if (mencionouMedo) {
-      msg = `${nome}, oi! Entendo que surgem dúvidas quando o assunto é benefício previdenciário — é normal. Mas posso te garantir que trabalhamos de forma 100% segura e só cobramos se você receber. Quer que eu te explique como funciona?`;
-      estrategia = 'Quebra de objeção de golpe. Tranquilizar antes de vender.';
+      msg = `Oi ${nome} 😊 Passando para dar continuidade ao seu atendimento sobre ${area}. Você teve alguma dúvida desde a nossa última conversa? Estou por aqui!`;
     } else if (partoUrgente) {
-      msg = `Oi ${nome}! Vi que você está com o parto se aproximando ${partoStr} 💙 O ${area} precisa ser solicitado com antecedência — se quiser garantir o seu, a gente pode iniciar agora de forma simples e rápida. Me chama!`;
-      estrategia = 'Urgência real por proximidade do parto. Tom de cuidado, não pressão.';
-    } else if (semResposta >= 2) {
-      msg = `${nome}, tudo bem? Sei que a vida é corrida 😊 Só queria deixar claro que ainda estou por aqui caso você queira verificar o ${area}. É mais simples do que parece — bastam algumas informações e a gente já vê o que é possível.`;
+      msg = `Oi ${nome}! Vi que você entrou em contato sobre ${area} — e com o parto se aproximando (${partoStr}), é importante a gente verificar isso logo. Me chama aqui para a gente resolver juntas! 💙`;
+      estrategia = 'Abertura com urgência real de parto próximo. Tom de cuidado.';
     } else {
-      msg = `${nome}, boa tarde! Questões como ${area} podem parecer complicadas, mas na prática é bem simples de resolver. O que às vezes atrasa é a gente deixar para depois. Ainda posso te ajudar?`;
+      msg = `Oi ${nome}! Vi que você demonstrou interesse em saber mais sobre ${area}. Qualquer dúvida, é só me chamar — estou por aqui para te ajudar 😊`;
     }
-    registro = `Realizado FUP 7d via WhatsApp. ${situacaoAtual} ${mencionouMedo?'Abordagem de quebra de objeção (segurança/golpe).':partoUrgente?'Abordagem com urgência de parto próximo.':'Abordagem sobre simplicidade do processo.'} Aguardando retorno.`;
+    registro = `FUP 24h realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Enviada mensagem de abertura de atendimento.${respondeu?' Lead com histórico de resposta anterior.':''} Status: aguardando retorno para continuidade do atendimento.`;
   }
 
-  else if (etapaLabel === 'FUP 15d') {
-    estrategia = 'Reativação com encerramento implícito. Fazer o lead decidir.';
-    if (travadoDocs) {
-      msg = `Oi ${nome}! Vi aqui que ainda estamos aguardando sua documentação. Qualquer dificuldade para reunir os documentos, me fala — a gente consegue começar com o que você já tiver 😊`;
-      estrategia = 'Reativação focada no gargalo de documentos. Reduzir fricção.';
-    } else if (mencionouMarido) {
-      msg = `${nome}, oi! Só passando para saber se você conseguiu conversar em casa sobre o ${area}. Se precisar que eu explique melhor para tirar dúvidas de vocês dois, fico à disposição 😊`;
-      estrategia = 'Reativação considerando objeção familiar. Incluir o decisor.';
+  // ══════════════════════════════════════════════════
+  // FUP 3d — Despertar: o direito existe e tem prazo
+  // ══════════════════════════════════════════════════
+  else if (etapaLabel === 'FUP 3d') {
+    estrategia = 'Criar consciência do direito e urgência de prazo. Gerar curiosidade.';
+    if (semResposta >= 1) {
+      msg = `Oi ${nome}! Passamos por aqui antes mas talvez não tenha chegado no melhor momento 📩
+
+Queria só te lembrar que o ${area} tem prazo para ser solicitado — e muita gente perde por não verificar a tempo. Me fala: você já sabe se tem direito?`;
+    } else if (mencionouPensando) {
+      msg = `${nome}, oi! Sei que você estava pensando sobre o ${area}. Só queria reforçar que os casos de quem começa mais cedo têm mais chances de aprovação. Posso te dar mais detalhes para facilitar a sua decisão? 😊`;
+      estrategia = 'Reativação após "vou pensar". Reduzir tempo de decisão com informação.';
+    } else {
+      msg = `${nome}, oi! Passando para ver se você teve a chance de pensar sobre o ${area}. Muitas pessoas não sabem, mas esse benefício tem um prazo — e verificar agora não te compromete com nada. Posso checar sua situação?`;
+    }
+    registro = `FUP 3d realizado via WhatsApp. Lead parada na fase de ${faseAtual}.${semResposta>=1?' Sem retorno ao primeiro contato.':''} Enviada abordagem sobre prazo e direito ao ${area}. Status: aguardando retorno para verificação de elegibilidade.`;
+  }
+
+  // ══════════════════════════════════════════════════
+  // FUP 7d — Percepção de perda + quebra de objeção
+  // ══════════════════════════════════════════════════
+  else if (etapaLabel === 'FUP 7d') {
+    estrategia = 'Percepção de perda suave + quebra da objeção específica identificada no histórico.';
+    if (mencionouMedo) {
+      msg = `${nome}, oi! Entendo que quando o assunto é benefício previdenciário surgem muitas dúvidas — é natural. Só queria te garantir que trabalhamos de forma 100% segura, com registro em contrato, e você só paga se receber. Posso te explicar melhor como funciona? 😊`;
+      estrategia = 'Quebra de objeção: medo de golpe. Segurança e modelo por êxito.';
+      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção de segurança/golpe identificada no histórico. Enviada abordagem de quebra de objeção com reforço de segurança e modelo por êxito. Status: aguardando retorno para retomada do atendimento.`;
     } else if (mencionouDinheiro) {
-      msg = `${nome}, oi! Só lembrando que nosso trabalho é por êxito — você só paga se receber o benefício. Então não tem risco para você. Quer que eu te explique como funciona na prática?`;
-      estrategia = 'Quebra de objeção financeira. Reforçar modelo por êxito.';
+      msg = `${nome}, oi! Passando para esclarecer um ponto importante: nosso trabalho é 100% por êxito — você não paga nada antecipado, só se o benefício for aprovado. Então não tem risco financeiro para você. Quer que eu te explique como funciona na prática?`;
+      estrategia = 'Quebra de objeção financeira. Reforçar modelo por êxito sem risco.';
+      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção financeira (custo/pagamento) identificada no histórico. Enviada mensagem de quebra de objeção com explicação do modelo por êxito. Status: aguardando retorno.`;
+    } else if (partoUrgente) {
+      msg = `Oi ${nome}! Vi que o parto está se aproximando (${partoStr}) 💙 O ${area} precisa ser solicitado com antecedência para garantir o benefício. Se quisermos iniciar o processo, o momento é agora — é rápido e eu te guio em cada etapa. Me chama!`;
+      estrategia = 'Urgência real por parto próximo. Tom de cuidado, ação imediata.';
+      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Parto em ${diasParto} dias — urgência real identificada. Enviada mensagem de ativação com urgência de prazo gestacional. Status: aguardando retorno para início imediato do processo.`;
+    } else if (semResposta >= 2) {
+      msg = `${nome}, tudo bem? Sei que a rotina é corrida 😊 Só queria deixar claro que ainda estou por aqui — verificar o ${area} é mais simples do que parece e não te compromete com nada. Quer que eu te explique em 2 minutos como funciona?`;
+      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. ${semResposta} tentativas sem retorno. Enviada abordagem de baixa fricção com oferta de explicação rápida. Status: aguardando retorno.`;
     } else {
-      msg = `Oi ${nome}! Tentei entrar em contato algumas vezes. Vou deixar em aberto aqui — se um dia quiser retomar sobre ${area}, é só me chamar 😊`;
+      msg = `${nome}, boa tarde! Uma coisa que muita gente não sabe: o ${area} tem prazo para pedir, e deixar para depois pode fazer você perder esse direito. O processo em si é simples — a parte difícil é dar o primeiro passo. Ainda posso te ajudar com isso?`;
+      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Enviada abordagem de percepção de perda por prazo. Status: aguardando retorno para retomada do processo.`;
     }
-    registro = `Realizado FUP 15d via WhatsApp. ${situacaoAtual} ${travadoDocs?'Abordagem para destravar documentação.':mencionouMarido?'Abordagem considerando decisão familiar.':mencionouDinheiro?'Quebra de objeção financeira (êxito).':'Mensagem de reativação com encerramento implícito.'} Aguardando retorno.`;
   }
 
+  // ══════════════════════════════════════════════════
+  // FUP 15d — Hibernação com intenção, não abandono
+  // ══════════════════════════════════════════════════
+  else if (etapaLabel === 'FUP 15d') {
+    if (travadoDocs) {
+      estrategia = 'Destravar documentação. Reduzir fricção, começar com o que tem.';
+      msg = `Oi ${nome}! Passando para saber se consigo te ajudar a reunir a documentação. A gente consegue começar com o que você já tiver em mãos — não precisa estar tudo perfeito para iniciar. Me fala o que está faltando? 😊`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Gargalo identificado: documentação pendente. Enviada mensagem para reduzir fricção documental com oferta de início parcial. Status: aguardando retorno para desbloqueio da documentação.`;
+    } else if (travadoAssinatura) {
+      estrategia = 'Reativar contrato em aberto. Manter urgência sem pressão.';
+      msg = `Oi ${nome}! Passando para saber se está tudo bem com o contrato. Estamos aguardando só a sua assinatura para dar início ao processo — é o último passo! Se tiver alguma dúvida sobre o documento, me chama que eu explico 😊`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contrato enviado e aguardando assinatura. Enviada mensagem de reativação focada no último passo. Status: aguardando assinatura para início do processo.`;
+    } else if (mencionouMarido) {
+      estrategia = 'Reativação com objeção familiar. Incluir o decisor no processo.';
+      msg = `${nome}, oi! Passando para saber se você teve a chance de conversar sobre o ${area} aí em casa. Se precisar que eu explique melhor — até para tirar dúvidas do casal — fico à disposição para uma conversa rápida 😊`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção familiar identificada no histórico (decisor externo). Enviada mensagem incluindo o parceiro na decisão. Status: aguardando retorno após decisão familiar.`;
+    } else if (mencionouDinheiro) {
+      estrategia = 'Reforçar modelo por êxito. Eliminar objeção financeira definitivamente.';
+      msg = `${nome}, oi! Só queria reforçar uma coisa importante: você não paga nada antecipado. Nosso honorário só é cobrado se o benefício for aprovado e você receber. Ou seja, não tem risco nenhum para você começar. Quer retomar? 😊`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção financeira recorrente no histórico. Enviada mensagem reforçando modelo por êxito como eliminação de risco. Status: aguardando retorno para retomada.`;
+    } else if (mencionouMedo) {
+      estrategia = 'Reforçar segurança e credibilidade. Reduzir barreira de confiança.';
+      msg = `${nome}, oi! Entendo que é importante ter segurança antes de confiar num processo como esse. Por isso quero te dizer: trabalhamos com contrato registrado, você tem acesso a tudo e só paga se receber. Sua proteção é nossa prioridade. Quer conversar sobre isso? 😊`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção de segurança/confiança persistente no histórico. Enviada mensagem reforçando credibilidade e transparência. Status: aguardando retorno.`;
+    } else {
+      estrategia = 'Hibernação com intenção. Preservar vínculo, reforçar valor, manter porta aberta.';
+      msg = `Oi, ${nome} 😊
+
+Passei por aqui algumas vezes para retomar seu atendimento sobre ${area}, mas acredito que talvez não tenha sido o melhor momento para você.
+
+Vou deixar seu atendimento em aberto por aqui. Se ainda quiser verificar seu direito ou tirar alguma dúvida, é só me chamar.`;
+      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual} após ${tentativas} contato${tentativas!==1?'s':''}. Enviada mensagem de hibernação ativa com manutenção de canal aberto — sem encerramento definitivo. Status: aguardando manifestação do lead para reativação futura.`;
+    }
+  }
+
+  // ══════════════════════════════════════════════════
+  // FUP 30d — Última tentativa com conversão em mente
+  // ══════════════════════════════════════════════════
   else if (etapaLabel === 'FUP 30d') {
-    estrategia = 'Última tentativa. Curta, sem pressão, deixar porta aberta.';
     if (travadoAssinatura) {
-      msg = `${nome}, oi! Só passando para saber se ainda tem interesse em finalizar o contrato do ${area}. Ainda está disponível para você 😊`;
-      estrategia = 'Reativação de contrato aberto. Urgência mínima, porta aberta.';
+      estrategia = 'Reativar contrato em aberto com urgência real. Converter agora ou perder.';
+      msg = `${nome}, oi! Estou passando porque seu contrato de ${area} ainda está em aberto aqui comigo — e seria uma pena perder esse processo depois de tudo que já avançamos. Se tiver qualquer dúvida sobre a assinatura, me chama agora e a gente resolve juntas 😊`;
+      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contrato aberto há mais de 30 dias sem assinatura. Enviada mensagem de urgência para conversão final. Status: última tentativa ativa — aguardando assinatura para encerrar o processo.`;
+    } else if (travadoDocs) {
+      estrategia = 'Última tentativa para destravar documentação. Tom direto e resolutivo.';
+      msg = `${nome}, passando para uma última tentativa 😊 Ainda consigo te ajudar com o ${area} — mas preciso de pelo menos um documento para dar início. Me fala o que você tem disponível agora e a gente vê o que é possível fazer.`;
+      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual} há 30+ dias. Documentação pendente. Enviada última tentativa de desbloqueio com oferta de início mínimo. Status: última tentativa ativa — aguardando resposta sobre documentação disponível.`;
+    } else if (jaQualificada) {
+      estrategia = 'Lead qualificada travada antes do fechamento. Reativar com senso de oportunidade.';
+      msg = `${nome}, oi! Sei que já passamos por aqui algumas vezes, mas queria fazer uma última tentativa porque você já foi qualificada para o ${area} — e seria uma pena perder esse direito por não dar continuidade.
+
+Se ainda tiver interesse, me chama. Estou por aqui 😊`;
+      registro = `FUP 30d realizado via WhatsApp. Lead qualificada parada na fase de ${faseAtual}. Enviada mensagem de última tentativa com reforço do direito já verificado. Status: suspensão ativa do atendimento — aguardando manifestação para reativação.`;
     } else {
-      msg = `${nome}, tudo bem? Última mensagem da minha parte — se precisar verificar ${area} quando quiser, é só me chamar. Boa sorte! 👍`;
+      estrategia = 'Hibernação definitiva com porta aberta. Curta, sem pressão, sem abandono.';
+      msg = `${nome}, tudo bem? Passando para uma última mensagem por agora — mas quero que saiba que seu atendimento sobre ${area} continua em aberto aqui. Quando quiser retomar, é só me chamar 😊`;
+      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual} após ${tentativas} contato${tentativas!==1?'s':''}. Encerramento do ciclo de follow-up com suspensão ativa. Status: atendimento hibernado — aguardando reativação por iniciativa do lead.`;
     }
-    registro = `Realizado FUP 30d via WhatsApp. ${situacaoAtual} Última tentativa de contato do ciclo. ${travadoAssinatura?'Contrato em aberto sinalizado.':'Lead encaminhada para encerramento de ciclo.'} Aguardando retorno.`;
   }
 
+  // ══════════════════════════════════════════════════
+  // Mensal — Gestante: relacionamento, não venda
+  // ══════════════════════════════════════════════════
   else if (etapaLabel === 'Mensal') {
     if (possParto) {
-      estrategia = 'Parto recente — verificar situação e iniciar processo imediatamente.';
-      msg = `Oi ${nome}! Passando para saber como você e o bebê estão 💙 Se já nasceu, o ${area} pode ser solicitado agora — me fala como foi!`;
-      registro = `Realizado FUP Mensal via WhatsApp. Parto recente identificado. Abordagem de verificação e ativação imediata do processo. Aguardando confirmação da situação atual.`;
+      estrategia = 'Parto recente identificado. Verificar e acionar processo imediatamente.';
+      msg = `Oi ${nome}! Passando para saber como você e o bebê estão 💙 Se o bebê já nasceu, o ${area} pode ser solicitado agora — não deixa passar o prazo! Me fala como foi, estamos torcendo por vocês!`;
+      registro = `FUP Mensal realizado via WhatsApp. Parto recente identificado (${Math.abs(diasParto)} dias atrás). Enviada mensagem de verificação e ativação imediata do processo de ${area}. Status: aguardando confirmação para abertura urgente do processo.`;
     } else if (isGestante && diasParto !== null && diasParto <= 30) {
-      estrategia = 'Gestante com parto próximo — relacionamento com urgência suave.';
-      msg = `Oi ${nome}! Passando para saber como você está nessa reta final 🌸 ${partoStr ? partoStr.replace('(','').replace(')','') + ',' : ''} já deu para preparar tudo? Estamos torcendo por você! E quando chegar a hora, me avisa para a gente garantir o ${area} 💙`;
-      registro = `Realizado FUP Mensal Gestante via WhatsApp. ${partoStr} Contato de acompanhamento com reforço sobre o timing do ${area}. Aguardando retorno.`;
+      estrategia = 'Reta final da gestação. Relacionamento com lembrete suave de prazo.';
+      msg = `Oi ${nome}! Passando para saber como você está nessa reta final 🌸 Falta pouco para o grande dia! Estamos torcendo por você e pelo bebê. E quando chegar a hora, me avisa — a gente garante o seu ${area} juntas 💙`;
+      registro = `FUP Mensal Gestante realizado via WhatsApp. Parto em ${diasParto} dias. Contato de acompanhamento com reforço sobre timing do processo. Status: aguardando nascimento para início imediato.`;
     } else if (isGestante) {
-      estrategia = 'Gestante — relacionamento. Não vender. Criar conexão humana.';
+      estrategia = 'Gestante em acompanhamento. Relacionamento humano, sem venda.';
       msg = `Oi ${nome}! Passando só para dar um oi e saber como você está se sentindo 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`;
-      registro = `Realizado FUP Mensal Gestante via WhatsApp. Contato de acompanhamento humanizado. Sem abordagem comercial. Aguardando retorno para manutenção do vínculo.`;
+      registro = `FUP Mensal Gestante realizado via WhatsApp. Contato de relacionamento humanizado — sem abordagem comercial. Status: manutenção de vínculo até proximidade do parto.`;
     } else {
-      estrategia = 'Recontato mensal — manter presença sem pressão.';
+      estrategia = 'Recontato mensal. Presença sem pressão, abertura para retomada.';
       msg = `Oi ${nome}! Passando para saber se surgiu alguma novidade aí e se posso te ajudar com ${area}. Qualquer coisa, estou por aqui 😊`;
-      registro = `Realizado FUP Mensal via WhatsApp. Contato de manutenção. Sem avanço de etapa. Aguardando retorno.`;
+      registro = `FUP Mensal realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contato de manutenção de presença. Status: aguardando abertura do lead para retomada do atendimento.`;
     }
   }
 
-  // Fallback se etapa não mapeada
+  // ── Fallback ──
   if (!msg) {
     estrategia = 'Recontato estratégico baseado no histórico.';
     msg = `Oi ${nome}! Passando para saber se posso te ajudar com ${area}. Qualquer dúvida, estou à disposição 😊`;
-    registro = `Realizado ${etapaLabel} via WhatsApp. ${situacaoAtual} Aguardando retorno.`;
+    registro = `${etapaLabel} realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contato de reengajamento. Status: aguardando retorno.`;
   }
 
   document.getElementById('msg-etapa-result').textContent  = etapaLabel;
@@ -716,7 +785,6 @@ function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
   document.getElementById('msg-registro').value            = registro;
   document.getElementById('msg-loading').style.display  = 'none';
   document.getElementById('msg-resultado').style.display= 'flex';
-  // Activate WhatsApp tab by default
   ativarTabMensagem('wpp');
 }
 
@@ -911,11 +979,23 @@ window.confirmarDecisao=async function(decisao){
 };
 
 // ─── KANBAN ───
+function normStr(s){return(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();}
 function renderKanban(){
-  const kanbanQ=(document.getElementById('kanban-search')?.value||'').trim().toLowerCase();
+  const rawQ=(document.getElementById('kanban-search')?.value||'').trim();
+  const kanbanQ=normStr(rawQ);
+  const kanbanQDigits=rawQ.replace(/\D/g,''); // only digits for phone search
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
   let leadsToRender=allLeads;
-  if(kanbanQ)leadsToRender=allLeads.filter(l=>(l.name||'').toLowerCase().includes(kanbanQ)||(l.phone||'').includes(kanbanQ));
+  if(kanbanQ){
+    leadsToRender=allLeads.filter(l=>{
+      const nameMatch=normStr(l.name).includes(kanbanQ);
+      const phoneRaw=(l.phone||'').replace(/\D/g,'');
+      const phoneMatch=kanbanQDigits.length>=3
+        ? phoneRaw.includes(kanbanQDigits)
+        : (l.phone||'').toLowerCase().includes(kanbanQ);
+      return nameMatch||phoneMatch;
+    });
+  }
   leadsToRender.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
