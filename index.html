@@ -980,8 +980,10 @@ window.confirmarDecisao=async function(decisao){
 
 // ─── KANBAN ───
 function normStr(s){return(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();}
+window.filtrarKanban=function(){renderKanban();};
 function renderKanban(){
-  const rawQ=(document.getElementById('kanban-search')?.value||'').trim();
+  const el=document.getElementById('kanban-search');
+  const rawQ=el?el.value.trim():'';
   const kanbanQ=normStr(rawQ);
   const kanbanQDigits=rawQ.replace(/\D/g,''); // only digits for phone search
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
@@ -2811,7 +2813,7 @@ body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
       <div class="kanban-panel-header">
         <span style="font-size:1rem">📋</span>
         <span class="kanban-panel-title">Kanban de Leads</span>
-        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderKanban()" style="margin-left:.5rem;width:200px;"/>
+        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="filtrarKanban()" onkeyup="filtrarKanban()" onchange="filtrarKanban()" style="margin-left:.5rem;width:200px;"/>
         <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
       </div>
       <div class="kanban-board" id="kanban-board-wrap">
