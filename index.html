@@ -564,6 +564,7 @@ REGISTRO CRM:
 
     document.getElementById('msg-loading').style.display  = 'none';
     document.getElementById('msg-resultado').style.display= 'flex';
+    ativarTabMensagem('wpp');
 
   } catch(err) {
     // Fallback local
@@ -572,57 +573,178 @@ REGISTRO CRM:
 };
 
 function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
-  const nome = (l.name||'').split(' ')[0] || 'olá';
+  const nome = (l.name||'').split(' ')[0] || 'você';
+  const log = l.log || [];
+  const hist = l.followupHistory || [];
+  const nota = (l.currentNote || '').toLowerCase();
 
-  const templates = {
-    'FUP 24h': {
-      estrategia: 'Recuperar contato com leveza. Gatilho: facilidade de dar o próximo passo.',
-      msg: `Oi ${nome}! Tudo bem? Vi que você entrou em contato ontem sobre ${area}. Queria só saber se ficou com alguma dúvida que eu possa te ajudar a esclarecer 😊`,
-      registro: `Realizado FUP 24h via WhatsApp. Enviada mensagem de retorno inicial verificando dúvidas. Aguardando retorno para continuidade do atendimento.`
-    },
-    'FUP 3d': {
-      estrategia: 'Despertar curiosidade sobre o direito. Gatilho: oportunidade ainda disponível.',
-      msg: `Oi ${nome}! Passando para ver se você teve a chance de pensar sobre o ${area}. Muita gente não sabe, mas esse benefício tem um prazo — e vale a pena verificar se você tem direito antes que passe. Posso te ajudar com isso?`,
-      registro: `Realizado FUP 3d via WhatsApp. Abordagem sobre oportunidade e prazo do benefício ${area}. Aguardando retorno para continuidade do atendimento.`
-    },
-    'FUP 7d': {
-      estrategia: 'Percepção de perda por inércia. Gatilho: o tempo corre contra o lead.',
-      msg: `${nome}, boa tarde! Sei que a rotina é corrida, mas queria te lembrar que questões previdenciárias como ${area} podem ser mais simples do que parecem de resolver. Só depende de dar o primeiro passo. Ainda posso te ajudar?`,
-      registro: `Realizado FUP 7d via WhatsApp. Abordagem sobre simplicidade do processo e consequência da inércia. Aguardando retorno para continuidade do atendimento.`
-    },
-    'FUP 15d': {
-      estrategia: 'Reativação com encerramento implícito. Gatilho: fazer o lead decidir.',
-      msg: `Oi ${nome}! Tentei entrar em contato algumas vezes. Vou deixar em aberto aqui caso você queira retomar — se precisar de ajuda com ${area}, é só me chamar. 😊`,
-      registro: `Realizado FUP 15d via WhatsApp. Mensagem de reativação com encerramento implícito. Aguardando retorno para continuidade do atendimento.`
-    },
-    'FUP 30d': {
-      estrategia: 'Última tentativa. Gatilho: fechamento de ciclo.',
-      msg: `${nome}, tudo bem? Última mensagem da minha parte — se um dia precisar verificar seu direito ao ${area}, estaremos aqui. 👍`,
-      registro: `Realizado FUP 30d via WhatsApp. Última tentativa de contato antes do encerramento do ciclo. Aguardando retorno para continuidade do atendimento.`
-    },
-    'Mensal': {
-      estrategia: isGestante ? 'Relacionamento com gestante. Foco na conexão humana, não na venda.' : 'Manutenção de contato mensal.',
-      msg: isGestante
-        ? `Oi ${nome}! Passando para dar um oi e saber como você está se sentindo nessa fase tão especial 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`
-        : `Oi ${nome}! Passando para saber se você ainda tem interesse em verificar seu direito ao ${area}. Qualquer dúvida, estou à disposição 😊`,
-      registro: isGestante
-        ? `Realizado FUP Mensal Gestante via WhatsApp. Contato de acompanhamento humanizado focado na gestação. Aguardando retorno para continuidade do atendimento.`
-        : `Realizado FUP Mensal via WhatsApp. Contato de manutenção e reativação. Aguardando retorno para continuidade do atendimento.`
+  // ── Contexto do histórico ──
+  const tentativas = hist.length;
+  const semResposta = log.filter(e => (e.note||'').toLowerCase().includes('sem retorno') || (e.note||'').toLowerCase().includes('sem resposta') || (e.note||'').toLowerCase().includes('não respondeu')).length;
+  const respondeu = log.some(e => (e.note||'').toLowerCase().includes('respondeu') || (e.note||'').toLowerCase().includes('retornou') || (e.note||'').toLowerCase().includes('entrou em contato'));
+  const jaEnviouDocs = nota.includes('document') || nota.includes('enviou') || log.some(e=>(e.note||'').toLowerCase().includes('document'));
+  const travadoAssinatura = l.status === 'AGUARDANDO ASSINATURA';
+  const travadoDocs = l.status === 'AGUARDANDO DOCUMENTOS';
+  const mencionouMarido = nota.includes('marido') || nota.includes('esposo') || nota.includes('companheiro');
+  const mencionouMedo = nota.includes('golpe') || nota.includes('medo') || nota.includes('desconfia') || nota.includes('fraude');
+  const mencionouDinheiro = nota.includes('gru') || nota.includes('taxa') || nota.includes('pagar') || nota.includes('custo') || nota.includes('dinheiro');
+  const jaQualificada = ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status);
+
+  // ── Data do parto ──
+  let diasParto = null;
+  let partoStr = '';
+  if (l.dataParto) {
+    const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
+    diasParto = Math.floor((p - new Date()) / (1000*60*60*24));
+    partoStr = diasParto > 0 ? `(parto em ${diasParto} dias)` : '(parto recente)';
+  }
+  const partoUrgente = diasParto !== null && diasParto >= 0 && diasParto <= 20;
+  const possParto = diasParto !== null && diasParto < 0 && diasParto > -30;
+
+  // ── Última nota útil para referenciar ──
+  const ultimaNota = [...log].reverse().find(e => e.note && e.note.length > 15 && !e.note.includes('FUP') && !e.note.includes('Realizado'));
+  const refNota = ultimaNota ? ultimaNota.note.slice(0, 80) : '';
+
+  // ── Situação geral para o registro ──
+  let situacaoAtual = '';
+  if (travadoAssinatura) situacaoAtual = 'Lead com contrato aguardando assinatura.';
+  else if (travadoDocs) situacaoAtual = 'Lead aguardando envio de documentação.';
+  else if (jaQualificada) situacaoAtual = 'Lead qualificada, em processo de conversão.';
+  else if (semResposta >= 2) situacaoAtual = `Lead sem retorno após ${tentativas} tentativa${tentativas>1?'s':''}.`;
+  else if (respondeu) situacaoAtual = 'Lead com histórico de resposta, mas sem avanço.';
+  else situacaoAtual = 'Lead em atendimento inicial.';
+
+  // ── Geração da mensagem WhatsApp por etapa + contexto ──
+  let msg = '';
+  let estrategia = '';
+  let registro = '';
+
+  if (etapaLabel === 'FUP 24h') {
+    estrategia = 'Primeiro contato — leveza e facilidade. Sem pressão, só abertura.';
+    if (respondeu) {
+      msg = `Oi ${nome}! Passando para dar sequência à nossa conversa sobre ${area}. Você tem alguma dúvida que eu possa esclarecer? 😊`;
+    } else {
+      msg = `Oi ${nome}! Vi que você demonstrou interesse em saber mais sobre ${area}. Qualquer dúvida que tiver, estou por aqui para te ajudar 😊`;
     }
-  };
+    registro = `Realizado FUP 24h via WhatsApp. ${situacaoAtual} Enviada mensagem de abertura de contato. Aguardando retorno.`;
+  }
 
-  const t = templates[etapaLabel] || templates['FUP 24h'];
+  else if (etapaLabel === 'FUP 3d') {
+    estrategia = 'Despertar interesse com oportunidade real. Mostrar que o direito existe e tem prazo.';
+    if (semResposta >= 1) {
+      msg = `Oi ${nome}! Tentei te contatar antes mas talvez não tenha chegado 📩 Queria só te dizer que o ${area} tem um prazo para ser solicitado — vale a pena verificar se você tem direito antes que passe. Posso te ajudar com isso?`;
+    } else {
+      msg = `${nome}, oi! Passando para ver se você teve a chance de pensar sobre o ${area}. Muitas pessoas perdem esse benefício por não saber que têm direito. Me conta: você já verificou a sua situação?`;
+    }
+    registro = `Realizado FUP 3d via WhatsApp. ${situacaoAtual} Abordagem sobre prazo e direito ao benefício. Aguardando retorno.`;
+  }
+
+  else if (etapaLabel === 'FUP 7d') {
+    estrategia = 'Percepção de perda suave. Mostrar que o processo é simples e o tempo corre.';
+    if (mencionouMedo) {
+      msg = `${nome}, oi! Entendo que surgem dúvidas quando o assunto é benefício previdenciário — é normal. Mas posso te garantir que trabalhamos de forma 100% segura e só cobramos se você receber. Quer que eu te explique como funciona?`;
+      estrategia = 'Quebra de objeção de golpe. Tranquilizar antes de vender.';
+    } else if (partoUrgente) {
+      msg = `Oi ${nome}! Vi que você está com o parto se aproximando ${partoStr} 💙 O ${area} precisa ser solicitado com antecedência — se quiser garantir o seu, a gente pode iniciar agora de forma simples e rápida. Me chama!`;
+      estrategia = 'Urgência real por proximidade do parto. Tom de cuidado, não pressão.';
+    } else if (semResposta >= 2) {
+      msg = `${nome}, tudo bem? Sei que a vida é corrida 😊 Só queria deixar claro que ainda estou por aqui caso você queira verificar o ${area}. É mais simples do que parece — bastam algumas informações e a gente já vê o que é possível.`;
+    } else {
+      msg = `${nome}, boa tarde! Questões como ${area} podem parecer complicadas, mas na prática é bem simples de resolver. O que às vezes atrasa é a gente deixar para depois. Ainda posso te ajudar?`;
+    }
+    registro = `Realizado FUP 7d via WhatsApp. ${situacaoAtual} ${mencionouMedo?'Abordagem de quebra de objeção (segurança/golpe).':partoUrgente?'Abordagem com urgência de parto próximo.':'Abordagem sobre simplicidade do processo.'} Aguardando retorno.`;
+  }
+
+  else if (etapaLabel === 'FUP 15d') {
+    estrategia = 'Reativação com encerramento implícito. Fazer o lead decidir.';
+    if (travadoDocs) {
+      msg = `Oi ${nome}! Vi aqui que ainda estamos aguardando sua documentação. Qualquer dificuldade para reunir os documentos, me fala — a gente consegue começar com o que você já tiver 😊`;
+      estrategia = 'Reativação focada no gargalo de documentos. Reduzir fricção.';
+    } else if (mencionouMarido) {
+      msg = `${nome}, oi! Só passando para saber se você conseguiu conversar em casa sobre o ${area}. Se precisar que eu explique melhor para tirar dúvidas de vocês dois, fico à disposição 😊`;
+      estrategia = 'Reativação considerando objeção familiar. Incluir o decisor.';
+    } else if (mencionouDinheiro) {
+      msg = `${nome}, oi! Só lembrando que nosso trabalho é por êxito — você só paga se receber o benefício. Então não tem risco para você. Quer que eu te explique como funciona na prática?`;
+      estrategia = 'Quebra de objeção financeira. Reforçar modelo por êxito.';
+    } else {
+      msg = `Oi ${nome}! Tentei entrar em contato algumas vezes. Vou deixar em aberto aqui — se um dia quiser retomar sobre ${area}, é só me chamar 😊`;
+    }
+    registro = `Realizado FUP 15d via WhatsApp. ${situacaoAtual} ${travadoDocs?'Abordagem para destravar documentação.':mencionouMarido?'Abordagem considerando decisão familiar.':mencionouDinheiro?'Quebra de objeção financeira (êxito).':'Mensagem de reativação com encerramento implícito.'} Aguardando retorno.`;
+  }
+
+  else if (etapaLabel === 'FUP 30d') {
+    estrategia = 'Última tentativa. Curta, sem pressão, deixar porta aberta.';
+    if (travadoAssinatura) {
+      msg = `${nome}, oi! Só passando para saber se ainda tem interesse em finalizar o contrato do ${area}. Ainda está disponível para você 😊`;
+      estrategia = 'Reativação de contrato aberto. Urgência mínima, porta aberta.';
+    } else {
+      msg = `${nome}, tudo bem? Última mensagem da minha parte — se precisar verificar ${area} quando quiser, é só me chamar. Boa sorte! 👍`;
+    }
+    registro = `Realizado FUP 30d via WhatsApp. ${situacaoAtual} Última tentativa de contato do ciclo. ${travadoAssinatura?'Contrato em aberto sinalizado.':'Lead encaminhada para encerramento de ciclo.'} Aguardando retorno.`;
+  }
+
+  else if (etapaLabel === 'Mensal') {
+    if (possParto) {
+      estrategia = 'Parto recente — verificar situação e iniciar processo imediatamente.';
+      msg = `Oi ${nome}! Passando para saber como você e o bebê estão 💙 Se já nasceu, o ${area} pode ser solicitado agora — me fala como foi!`;
+      registro = `Realizado FUP Mensal via WhatsApp. Parto recente identificado. Abordagem de verificação e ativação imediata do processo. Aguardando confirmação da situação atual.`;
+    } else if (isGestante && diasParto !== null && diasParto <= 30) {
+      estrategia = 'Gestante com parto próximo — relacionamento com urgência suave.';
+      msg = `Oi ${nome}! Passando para saber como você está nessa reta final 🌸 ${partoStr ? partoStr.replace('(','').replace(')','') + ',' : ''} já deu para preparar tudo? Estamos torcendo por você! E quando chegar a hora, me avisa para a gente garantir o ${area} 💙`;
+      registro = `Realizado FUP Mensal Gestante via WhatsApp. ${partoStr} Contato de acompanhamento com reforço sobre o timing do ${area}. Aguardando retorno.`;
+    } else if (isGestante) {
+      estrategia = 'Gestante — relacionamento. Não vender. Criar conexão humana.';
+      msg = `Oi ${nome}! Passando só para dar um oi e saber como você está se sentindo 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`;
+      registro = `Realizado FUP Mensal Gestante via WhatsApp. Contato de acompanhamento humanizado. Sem abordagem comercial. Aguardando retorno para manutenção do vínculo.`;
+    } else {
+      estrategia = 'Recontato mensal — manter presença sem pressão.';
+      msg = `Oi ${nome}! Passando para saber se surgiu alguma novidade aí e se posso te ajudar com ${area}. Qualquer coisa, estou por aqui 😊`;
+      registro = `Realizado FUP Mensal via WhatsApp. Contato de manutenção. Sem avanço de etapa. Aguardando retorno.`;
+    }
+  }
+
+  // Fallback se etapa não mapeada
+  if (!msg) {
+    estrategia = 'Recontato estratégico baseado no histórico.';
+    msg = `Oi ${nome}! Passando para saber se posso te ajudar com ${area}. Qualquer dúvida, estou à disposição 😊`;
+    registro = `Realizado ${etapaLabel} via WhatsApp. ${situacaoAtual} Aguardando retorno.`;
+  }
 
   document.getElementById('msg-etapa-result').textContent  = etapaLabel;
-  document.getElementById('msg-estrat-result').textContent = t.estrategia;
-  document.getElementById('msg-texto').value               = t.msg;
-  document.getElementById('msg-registro').value            = t.registro;
+  document.getElementById('msg-estrat-result').textContent = estrategia;
+  document.getElementById('msg-texto').value               = msg;
+  document.getElementById('msg-registro').value            = registro;
   document.getElementById('msg-loading').style.display  = 'none';
   document.getElementById('msg-resultado').style.display= 'flex';
+  // Activate WhatsApp tab by default
+  ativarTabMensagem('wpp');
 }
 
 window.fecharModalMensagem = () => document.getElementById('modal-mensagem').style.display = 'none';
 
+// ── Tab toggle ──
+let _abaAtiva = 'wpp';
+window.ativarTabMensagem = function(aba) {
+  _abaAtiva = aba;
+  ['wpp','crm'].forEach(a => {
+    document.getElementById('tab-btn-' + a)?.classList.toggle('active', a === aba);
+    document.getElementById('tab-panel-' + a)?.classList.toggle('active', a === aba);
+  });
+  // keep wpp green, crm blue
+  document.getElementById('tab-btn-wpp')?.classList.toggle('wpp', true);
+};
+
+window.copiarAbaAtiva = function() {
+  const txt = _abaAtiva === 'wpp'
+    ? document.getElementById('msg-texto')?.value
+    : document.getElementById('msg-registro')?.value;
+  if (!txt) return;
+  navigator.clipboard.writeText(txt).then(() =>
+    showToast(_abaAtiva === 'wpp' ? '✅ Mensagem WhatsApp copiada!' : '✅ Registro CRM copiado!')
+  );
+};
+
+// legacy — kept for compatibility
 window.copiarMensagem = function() {
   const txt = document.getElementById('msg-texto').value;
   navigator.clipboard.writeText(txt).then(() => showToast('✅ Mensagem copiada!'));
@@ -2519,6 +2641,21 @@ body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme 
   opacity:0;
 }
 
+
+/* ── Modal mensagem: tab toggle ── */
+.msg-tab-bar{display:flex;gap:.4rem;margin-bottom:.85rem;}
+.msg-tab-btn{flex:1;padding:.45rem .6rem;border-radius:8px;border:1px solid #2A2F45;background:#13161F;color:#9CA3AF;font-size:.78rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s;text-align:center;}
+.msg-tab-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
+.msg-tab-btn.active.wpp{background:#1DAA61;border-color:#1DAA61;}
+.msg-tab-panel{display:none;}
+.msg-tab-panel.active{display:flex;flex-direction:column;gap:.5rem;}
+.msg-copy-btn{background:#1DAA61;color:#fff;border:none;border-radius:7px;padding:.4rem .9rem;font-size:.76rem;font-weight:700;cursor:pointer;align-self:flex-start;}
+.msg-copy-btn.crm{background:#4F6EF7;}
+.msg-copy-btn:active{opacity:.8;}
+body.light-theme .msg-tab-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563;}
+body.light-theme .msg-tab-btn.active{background:#4F6EF7;color:#fff;}
+body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
+
 </style>
 </head>
 <body>
@@ -2836,36 +2973,38 @@ body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme 
         <div style="font-size:.82rem;color:#9CA3AF">Analisando histórico e gerando mensagem...</div>
       </div>
       <!-- RESULTADO -->
-      <div id="msg-resultado" style="display:none;flex-direction:column;gap:1rem">
+      <div id="msg-resultado" style="display:none;flex-direction:column;gap:.85rem">
         <!-- Etapa + Estratégia -->
-        <div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:.85rem 1rem">
+        <div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:.75rem 1rem">
           <div style="display:flex;gap:1rem;flex-wrap:wrap">
             <div>
-              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Etapa</div>
-              <div style="font-size:.82rem;font-weight:700;color:#8B5CF6" id="msg-etapa-result"></div>
+              <div style="font-size:.6rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">Etapa</div>
+              <div style="font-size:.8rem;font-weight:700;color:#8B5CF6" id="msg-etapa-result"></div>
             </div>
             <div style="flex:1">
-              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Estratégia</div>
-              <div style="font-size:.78rem;color:#D1D5DB" id="msg-estrat-result"></div>
+              <div style="font-size:.6rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">Estratégia</div>
+              <div style="font-size:.75rem;color:#D1D5DB" id="msg-estrat-result"></div>
             </div>
           </div>
         </div>
-        <!-- Mensagem editável -->
-        <div class="f-group">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
-            <label class="f-label">💬 Mensagem WhatsApp — revise antes de enviar</label>
-            <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:6px;padding:.3rem .75rem;font-size:.72rem;font-weight:600;cursor:pointer">📋 Copiar</button>
-          </div>
+        <!-- Toggle tabs -->
+        <div class="msg-tab-bar">
+          <button class="msg-tab-btn wpp active" id="tab-btn-wpp" onclick="ativarTabMensagem('wpp')">💬 WhatsApp</button>
+          <button class="msg-tab-btn" id="tab-btn-crm" onclick="ativarTabMensagem('crm')">📝 Registro CRM</button>
+        </div>
+        <!-- Painel WhatsApp -->
+        <div class="msg-tab-panel active" id="tab-panel-wpp">
           <textarea id="msg-texto" class="f-textarea" style="min-height:120px;font-size:.85rem;line-height:1.6"></textarea>
+          <button class="msg-copy-btn" onclick="copiarAbaAtiva()">📋 Copiar mensagem</button>
         </div>
-        <!-- Registro CRM editável -->
-        <div class="f-group">
-          <label class="f-label">📝 Registro CRM — será salvo no histórico do lead</label>
-          <textarea id="msg-registro" class="f-textarea" style="min-height:65px;font-size:.8rem"></textarea>
+        <!-- Painel CRM -->
+        <div class="msg-tab-panel" id="tab-panel-crm">
+          <textarea id="msg-registro" class="f-textarea" style="min-height:100px;font-size:.82rem;line-height:1.55"></textarea>
+          <button class="msg-copy-btn crm" onclick="copiarAbaAtiva()">📋 Copiar registro</button>
         </div>
-        <div style="display:flex;gap:.5rem;justify-content:flex-end">
+        <!-- Rodapé -->
+        <div style="display:flex;gap:.5rem;justify-content:flex-end;padding-top:.25rem">
           <button onclick="fecharModalMensagem()" class="btn-cancel">Fechar</button>
-          <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:8px;padding:.5rem 1.1rem;font-size:.82rem;font-weight:700;cursor:pointer">📋 Copiar Mensagem</button>
           <button onclick="salvarRegistroCRM()" class="btn-save">✅ Salvar no CRM</button>
         </div>
       </div>
