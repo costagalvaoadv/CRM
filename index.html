@@ -28,8 +28,7 @@ const auth=getAuth(app);
 
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
-let chartInstances={},fuFilter='TODOS',fuDateFilter='TODOS',estPeriod='mes-atual',relKpiFilter=null;
-let kanbanAtendFilter='TODOS';
+let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
 let activeQuickNotes=new Set(),presenceInterval=null;
 
 const STATUS_META={
@@ -146,7 +145,7 @@ async function startPresence(){
 function startUsersListener(){
   onSnapshot(collection(db,'usuarios'),snap=>{
     allUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderFuFilterBtns();renderKanbanFilterBtns();if(currentTab==='equipe')renderEquipe();
+    renderFuFilterBtns();if(currentTab==='equipe')renderEquipe();
   });
 }
 window.abrirModalEquipe=function(uid){
@@ -232,7 +231,7 @@ function startLeadsListener(){
   onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));renderAll();});
 }
 function renderAll(){
-  renderMetrics();renderFollowups();renderKanbanFilterBtns();
+  renderMetrics();renderFollowups();
   if(currentTab==='kanban')renderKanban();
   else if(currentTab==='table')renderTable();
   else if(currentTab==='equipe')renderEquipe();
@@ -260,35 +259,12 @@ function renderFuFilterBtns(){
 }
 window.renderFollowups=renderFollowups;
 window.setFuFilter=function(f){fuFilter=f;renderFuFilterBtns();renderFollowups();};
-window.toggleFuHoje=function(){
-  fuDateFilter=fuDateFilter==='HOJE'?'TODOS':'HOJE';
-  const btn=document.getElementById('fu-hoje-btn');
-  if(btn)btn.classList.toggle('fu-hoje-active',fuDateFilter==='HOJE');
-  renderFollowups();
-};
 window.toggleKanbanPanel=function(){
   const wrap=document.getElementById('kanban-board-wrap');
   const btn=document.getElementById('kanban-collapse-btn');
   const collapsed=wrap.classList.toggle('kanban-collapsed');
   btn.textContent=collapsed?'▸':'▾';
   localStorage.setItem('cg-kanban-collapsed',collapsed?'1':'0');
-};
-window.toggleTablePanel=function(){
-  const wrap=document.getElementById('table-panel-wrap');
-  const btn=document.getElementById('table-collapse-btn');
-  const collapsed=wrap.classList.toggle('panel-collapsed');
-  btn.textContent=collapsed?'▸':'▾';
-};
-window.toggleRelTable=function(){
-  const wrap=document.getElementById('rel-table-wrap');
-  const btn=document.getElementById('rel-table-collapse-btn');
-  const collapsed=wrap.classList.toggle('panel-collapsed');
-  btn.textContent=collapsed?'▸':'▾';
-};
-window.toggleEstSection=function(id,btn){
-  const el=document.getElementById(id);if(!el)return;
-  const collapsed=el.classList.toggle('panel-collapsed');
-  btn.textContent=collapsed?'▸':'▾';
 };
 (function(){
   if(localStorage.getItem('cg-kanban-collapsed')==='1'){
@@ -343,16 +319,6 @@ function renderFollowups(){
     agendados=agendados.filter(l=>l.assignee===fuFilter);
   }
 
-  // Apply date filter: "Hoje" mostra apenas pendentes com data = hoje (não atrasados, só de hoje)
-  if(fuDateFilter==='HOJE'){
-    pendentes=pendentes.filter(l=>{
-      const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
-      return d>=todayStart && d<=todayEnd;
-    });
-    // No modo Hoje, esconde agendados futuros
-    agendados=[];
-  }
-
   // Apply search filter
   const fuSearchVal=(document.getElementById('fu-search')?.value||'').trim();
   if(fuSearchVal){
@@ -375,13 +341,6 @@ function renderFollowups(){
   const ALL_STAGES=['FUP 24h','FUP 3d','FUP 7d','FUP 15d','FUP 30d','Mensal'];
   const stageMap={};
   ALL_STAGES.forEach(s=>stageMap[s]=[]);
-
-  // Ordenar pendentes: vencidos primeiro (mais antigos primeiro), depois os de hoje
-  pendentes.sort((a,b)=>{
-    const da=a.nextFollowup?.toDate?a.nextFollowup.toDate():new Date(a.nextFollowup);
-    const db=b.nextFollowup?.toDate?b.nextFollowup.toDate():new Date(b.nextFollowup);
-    return da-db;
-  });
 
   pendentes.forEach(l=>{
     const trilhaLabels=getTrilha(l.tipo||'SM');
@@ -738,16 +697,6 @@ async function avancarEtapa(id){
 }
 window.avancarEtapaDoModal = async function() {
   if (!editingLeadId) return;
-  // Salva nota antes de avançar FUP, se houver texto
-  const note = document.getElementById('f-note').value.trim();
-  const assignee = document.getElementById('f-assignee').value;
-  if (note) {
-    await updateDoc(doc(db,'leads',editingLeadId), {
-      currentNote: note,
-      lastContact: serverTimestamp(),
-      log: arrayUnion({user: currentUser?.nome||assignee||'—', note, ts: new Date().toISOString(), statusChange: null})
-    });
-  }
   await avancarEtapa(editingLeadId);
   closeLead();
 };
@@ -838,18 +787,18 @@ window.confirmarDecisao=async function(decisao){
 };
 
 // ─── KANBAN ───
-function renderKanbanFilterBtns(){
-  const cont=document.getElementById('kanban-filter-btns');if(!cont)return;
-  const unique=['TODOS',...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).sort())];
-  cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${kanbanAtendFilter===n?'active':''}" onclick="setKanbanFilter('${n}')">${n==='TODOS'?'Todos':n}</button>`).join('');
-}
-window.setKanbanFilter=function(f){kanbanAtendFilter=f;renderKanbanFilterBtns();renderKanban();};
 function renderKanban(){
-  const isG=currentUser?.role==='gestora';
-  let leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
-  if(kanbanAtendFilter!=='TODOS') leadsBase=leadsBase.filter(l=>l.assignee===kanbanAtendFilter);
+  const kSearch=(document.getElementById('kanban-search')?.value||'').trim();
+  const kQ=kSearch.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const kDigits=kSearch.replace(/\D/g,'');
+  const kFilter=l=>{
+    if(!kSearch)return true;
+    const nameN=(l.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const phoneD=(l.phone||'').replace(/\D/g,'');
+    return nameN.includes(kQ)||(kDigits.length>=3&&phoneD.includes(kDigits));
+  };
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
-  leadsBase.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
+  allLeads.filter(kFilter).forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
     document.getElementById('col-count-'+status).textContent=cols[status].length;
@@ -945,35 +894,23 @@ window.openLead=function(id){
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
-  // Limpa aviso de duplicidade ao abrir o modal
-  const warn=document.getElementById('phone-duplicate-warn');
-  if(warn)warn.style.display='none';
   document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
   document.getElementById('f-tipo').value    =l?.tipo||'SM';
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
-  // Data do primeiro contato: se já existe no lead usa ela, senão default hoje (apenas para novos)
-  const fcEl=document.getElementById('f-first-contact');
-  if(fcEl){
-    if(l?.firstContact){fcEl.value=toDateInput(l.firstContact);}
-    else if(!l){const t=new Date();fcEl.value=t.toISOString().slice(0,10);}
-    else fcEl.value='';
-  }
   togglePartoField();
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
   renderLog(l?.log||[]);
   // Show "FUP Feito" button if lead has pending followup
   const btnFeito = document.getElementById('btn-feito-modal');
   if (btnFeito) {
-    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l?.status||'');
+    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l?.status||'');
     btnFeito.style.display = hasPendingFup ? 'inline-flex' : 'none';
   }
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
-  const hiddenEditId=document.getElementById('editing-lead-id-hidden');if(hiddenEditId)hiddenEditId.value=editingLeadId||'';
-  const btnSave=document.getElementById('btn-save-lead');if(btnSave)btnSave.dataset.leadId=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
 window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
@@ -1060,66 +997,32 @@ window.saveLead=async function(){
   const assignee=document.getElementById('f-assignee').value;
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
-
-  // ID do lead: lê de 3 fontes para máxima confiabilidade
-  const hiddenId = document.getElementById('btn-save-lead')?.dataset?.leadId
-    || document.getElementById('editing-lead-id-hidden')?.value
-    || editingLeadId
-    || '';
-  const isEditing = !!hiddenId;
-
-  // Bloqueio de duplicidade: APENAS ao criar lead novo (nunca ao editar)
-  if(phone && !isEditing){
-    const digits=normalizePhoneDigits(phone);
-    const dup=allLeads.find(l=>normalizePhoneDigits(l.phone)===digits);
-    if(dup){
-      const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-      showToast(`❌ Telefone já cadastrado para "${dup.name||'Sem Nome'}" (${sm.label})`,'error');
-      document.getElementById('f-phone').focus();
-      return;
-    }
-  }
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
-  const fcVal=document.getElementById('f-first-contact').value;
-  const firstContact=fcVal?Timestamp.fromDate(new Date(fcVal+'T12:00:00')):null;
-  if(!isEditing){
+  if(!editingLeadId){
     const trilhaDias=getTrilhaDias(tipo);
-    const baseDate=firstContact?firstContact.toDate():new Date();
-    const d=new Date(baseDate);d.setDate(d.getDate()+trilhaDias[0]);
-    const cAt=firstContact||serverTimestamp();
+    const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
     await addDoc(collection(db,'leads'),{
       name,phone,campaign,status,tipo,assignee,currentNote:note,
-      nextFollowup:Timestamp.fromDate(d),dataParto,firstContact,etapaFollowup:0,
-      followupHistory:[],createdAt:cAt,lastContact:cAt,
-      log:note?[{user:assignee,note,ts:(firstContact?firstContact.toDate():new Date()).toISOString(),statusChange:null}]:[]
+      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
+      followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
     });
     showToast('Lead criado! FUP 24h agendado.');
   }else{
-    const existing=allLeads.find(l=>l.id===hiddenId);
+    const existing=allLeads.find(l=>l.id===editingLeadId);
     const statusChanged=existing?.status&&existing.status!==status;
     const partoChanged=partoVal&&!existing?.dataParto;
     const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
     if(note)upd.currentNote=note;
     if(dataParto)upd.dataParto=dataParto;
-    if(firstContact)upd.firstContact=firstContact;
     if(partoChanged&&tipo==='SM'){
       const etapa=existing?.etapaFollowup||0;
       const trilhaDias=getTrilhaDias('SM');
       if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
     }
-    upd.log=arrayUnion({user:currentUser?.nome||assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
-    await updateDoc(doc(db,'leads',hiddenId),upd);
-    showToast('✅ Lead atualizado!');
-    document.getElementById('f-note').value='';
-    activeQuickNotes.clear();
-    document.querySelectorAll('.qn-btn').forEach(b=>b.classList.remove('qn-active'));
-    const l2=allLeads.find(x=>x.id===hiddenId);
-    const btnFeito2=document.getElementById('btn-feito-modal');
-    if(btnFeito2){
-      const hasPending=l2?.nextFollowup&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
-      btnFeito2.style.display=hasPending?'inline-flex':'none';
-    }
-    return;
+    upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+    await updateDoc(doc(db,'leads',editingLeadId),upd);
+    showToast('Lead atualizado!');
   }
   closeLead();
 };
@@ -1251,56 +1154,11 @@ window.exportarExcel=function(){
 window.imprimirRelatorio=()=>window.print();
 
 // ─── ESTRATÉGIA ───
-window.setEstPeriod=function(btn,period){
-  estPeriod=period;
-  document.querySelectorAll('.est-period-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active');
-  const customRow=document.getElementById('est-custom-dates');
-  if(customRow)customRow.style.display=period==='personalizado'?'flex':'none';
-  renderEstrategia();
-};
-
-function getEstRange(){
-  const now=new Date();
-  let ini,fim,label;
-  if(estPeriod==='mes-atual'){
-    ini=new Date(now.getFullYear(),now.getMonth(),1);
-    fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
-    label=ini.toLocaleString('pt-BR',{month:'long',year:'numeric'}).replace(/^\w/,c=>c.toUpperCase());
-  } else if(estPeriod==='mes-anterior'){
-    ini=new Date(now.getFullYear(),now.getMonth()-1,1);
-    fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);
-    label=ini.toLocaleString('pt-BR',{month:'long',year:'numeric'}).replace(/^\w/,c=>c.toUpperCase());
-  } else if(estPeriod==='ultimos-3'){
-    ini=new Date(now.getFullYear(),now.getMonth()-2,1);
-    fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
-    label='Últimos 3 meses';
-  } else if(estPeriod==='ultimos-6'){
-    ini=new Date(now.getFullYear(),now.getMonth()-5,1);
-    fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
-    label='Últimos 6 meses';
-  } else if(estPeriod==='este-ano'){
-    ini=new Date(now.getFullYear(),0,1);
-    fim=new Date(now.getFullYear(),11,31,23,59,59);
-    label='Ano '+now.getFullYear();
-  } else if(estPeriod==='personalizado'){
-    const vi=document.getElementById('est-date-ini')?.value;
-    const vf=document.getElementById('est-date-fim')?.value;
-    ini=vi?new Date(vi+'T00:00:00'):new Date(now.getFullYear(),now.getMonth(),1);
-    fim=vf?new Date(vf+'T23:59:59'):new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
-    const fmt=d=>d.toLocaleDateString('pt-BR');
-    label=`${fmt(ini)} → ${fmt(fim)}`;
-  }
-  return {ini,fim,label};
-}
-
 window.renderEstrategia=function(){
   const now=new Date();
   const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
-  const {ini,fim,label}=getEstRange();
-  // Mostra label do período
-  const periodLabelEl=document.getElementById('est-period-label');
-  if(periodLabelEl)periodLabelEl.textContent=`📅 Período: ${label}`;
+  const ini=new Date(now.getFullYear(),now.getMonth(),1);
+  const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
   const isG=currentUser?.role==='gestora';
   const tituloEl=document.getElementById('est-titulo');
   const subEl=document.getElementById('est-subtitulo');
@@ -1342,8 +1200,7 @@ window.renderEstrategia=function(){
   const qualif=qualifLeads.length;
   const contratos=contratosLeads.length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
-  const totalFunil=mesLeads.length;
-  const taxaConv=totalFunil?Math.round(contratos/totalFunil*100*10)/10:0;
+  const taxaConv=qualif?Math.round(contratos/qualif*100):0;
   const campStats={};
   mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
   const equipeStats={};
@@ -1360,7 +1217,7 @@ window.renderEstrategia=function(){
     </div>
   </div>
   <div class="est-section">
-    <div class="est-section-title">📊 Pipeline — ${label}</div>
+    <div class="est-section-title">📊 Pipeline do Mês</div>
     <div class="est-pipeline-grid">
       <div class="est-pipe-card ${mesLeads.length?'clickable-card':''}" onclick="${mesLeads.length?`abrirListaLeads(${JSON.stringify(mesLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Leads entrados no mês')`:''}"><div class="est-pipe-num" style="color:#4F6EF7">${mesLeads.length}</div><div class="est-pipe-label">Leads entrados</div></div>
       <div class="est-pipe-arrow">→</div>
@@ -1368,16 +1225,12 @@ window.renderEstrategia=function(){
       <div class="est-pipe-arrow">→</div>
       <div class="est-pipe-card ${contratosLeads.length?'clickable-card':''}" onclick="${contratosLeads.length?`abrirListaLeads(${JSON.stringify(contratosLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Contratos fechados no mês')`:''}"><div class="est-pipe-num" style="color:#8B5CF6">${contratos}</div><div class="est-pipe-label">Contratos</div></div>
       <div class="est-pipe-arrow">→</div>
-      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Conversão geral</div></div>
+      <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
     <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
-    <div class="est-section-title" style="display:flex;align-items:center;justify-content:space-between">
-      <span>📢 Eficiência por Campanha</span>
-      <button class="fu-collapse-btn" onclick="toggleEstSection('est-camp-body',this)" title="Minimizar/Maximizar">▾</button>
-    </div>
-    <div id="est-camp-body">
+    <div class="est-section-title">📢 Eficiência por Campanha</div>
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa</th><th>Diagnóstico</th></tr></thead>
       <tbody>${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
@@ -1390,14 +1243,9 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${dc}">${diag}</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
-    </div>
   </div>
   <div class="est-section">
-    <div class="est-section-title" style="display:flex;align-items:center;justify-content:space-between">
-      <span>👥 Desempenho da Equipe</span>
-      <button class="fu-collapse-btn" onclick="toggleEstSection('est-equipe-body',this)" title="Minimizar/Maximizar">▾</button>
-    </div>
-    <div id="est-equipe-body">
+    <div class="est-section-title">👥 Desempenho da Equipe</div>
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
       <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
@@ -1405,7 +1253,6 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
-    </div>
   </div>
   ${(partoProximo.length||qualifParados.length||esfriando.length)?`
   <div class="est-section">
@@ -1425,8 +1272,6 @@ window.switchTab=function(tab){
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
-  // Rola para o topo para o conteúdo aparecer logo abaixo do menu
-  window.scrollTo({top:0,behavior:'smooth'});
   if(tab==='relatorios')setTimeout(renderRelatorios,100);
   else if(tab==='estrategia')setTimeout(renderEstrategia,100);
   else renderAll();
@@ -1502,11 +1347,6 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fu-badge{background:#F5A623;color:#0B0D14;font-size:.65rem;font-weight:800;border-radius:999px;padding:.15rem .5rem;display:none}
 .fu-filter-btns{display:flex;gap:.3rem;margin-left:auto;overflow-x:auto;scrollbar-width:none;max-width:45%;padding-bottom:1px;flex-shrink:0}
 .fu-filter-btns::-webkit-scrollbar{display:none}
-.fu-hoje-btn{padding:.25rem .75rem;border-radius:5px;border:1px solid #F5A623;background:transparent;color:#F5A623;font-size:.7rem;font-weight:700;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
-.fu-hoje-btn:hover{background:rgba(245,166,35,.15)}
-.fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#0B0D14}
-body.light-theme .fu-hoje-btn{border-color:#D97706;color:#D97706}
-body.light-theme .fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#fff;border-color:#F5A623}
 .fu-filter-btn{padding:.25rem .7rem;border-radius:5px;border:1px solid #1E2235;background:#0B0D14;color:#6B7280;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;flex-shrink:0}
 .fu-filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .fu-panel-header{padding:.75rem 1rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.5rem;min-width:0}
@@ -1519,20 +1359,12 @@ body.light-theme .fu-hoje-btn.fu-hoje-active{background:#F5A623;color:#fff;borde
 /* FU STAGE KANBAN */
 .fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
-.panel-collapsed{max-height:0!important;opacity:0!important;overflow:hidden!important;padding:0!important;margin:0!important;transition:max-height .3s ease,opacity .3s ease;}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
-.kanban-panel-header{background:#13161F;border:1px solid #1E2235;border-radius:12px 12px 0 0;padding:.85rem 1.25rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:0}
+.kanban-panel-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem;flex-wrap:wrap}
 .kanban-panel-title{font-size:.88rem;font-weight:700}
 .kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
-#kanban-board-wrap{border:1px solid #1E2235;border-top:none;border-radius:0 0 12px 12px;padding:.75rem;margin-bottom:1.25rem;background:#0F1118}
-body.light-theme #kanban-board-wrap{background:#F4F5FB;border-color:#E2E5EE}
-#table-panel-wrap,#rel-table-wrap{border:1px solid #1E2235;border-top:none;border-radius:0 0 12px 12px;padding:.75rem 1rem;margin-bottom:1.25rem;overflow:hidden;transition:max-height .3s ease,opacity .3s ease}
-body.light-theme #table-panel-wrap,body.light-theme #rel-table-wrap{background:#FFFFFF;border-color:#E2E5EE}
-#view-equipe .kanban-panel-header{border-radius:12px;margin-bottom:.75rem}
-#view-relatorios .kanban-panel-header,#view-estrategia .kanban-panel-header{border-radius:12px;margin-bottom:.75rem}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
-body.light-theme .kanban-panel-header{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
@@ -1568,7 +1400,6 @@ body.light-theme .kanban-panel-title{color:#1A1D2E}
 .psbh-steps{display:flex;align-items:flex-start;justify-content:space-between;position:relative;z-index:1}
 .psbh-track{position:absolute;top:13px;left:calc(.5rem + 13px);right:calc(.5rem + 13px);height:2px;background:#2A2F45;z-index:0;border-radius:99px}
 .progress-step-h{display:flex;flex-direction:column;align-items:center;gap:.2rem;flex:1;z-index:1;cursor:default}
-#progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem;position:relative;z-index:1}
 .psh-circle{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:700;border:2px solid #2A2F45;background:#13161F;flex-shrink:0;transition:all .2s}
 .psh-label{font-size:.62rem;font-weight:700;text-align:center;white-space:nowrap}
 .psh-done-info{font-size:.55rem;color:#10B981;text-align:center;line-height:1.3;margin-top:.05rem}
@@ -1671,17 +1502,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .chart-container{height:200px;position:relative}
 /* ESTRATÉGIA */
 #estrategia-content{display:flex;flex-direction:column;gap:1.25rem}
-.est-header-bar{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:.75rem;gap:1rem;flex-wrap:wrap}
-.est-period-bar{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;justify-content:flex-end}
-.est-period-btn{padding:.28rem .75rem;border-radius:6px;border:1px solid #2A2F45;background:#1E2235;color:#9CA3AF;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
-.est-period-btn:hover{border-color:#4F6EF7;color:#F1F3F9}
-.est-period-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
-.est-custom-row{display:flex}
-.est-period-label{font-size:.72rem;font-weight:700;color:#4F6EF7;margin-bottom:.6rem;padding:.3rem .7rem;background:rgba(79,110,247,.1);border-radius:6px;display:inline-block;width:fit-content}
-body.light-theme .est-period-btn{background:#F4F5F8;border-color:#E2E5EE;color:#6B7280}
-body.light-theme .est-period-btn:hover{border-color:#4F6EF7;color:#1A1D2E}
-body.light-theme .est-period-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
-body.light-theme .est-period-label{background:rgba(79,110,247,.08);color:#4F6EF7}
 .est-section{background:#13161F;border:1px solid #1E2235;border-radius:12px;padding:1.25rem}
 .est-section-title{font-size:.82rem;font-weight:700;color:#F1F3F9;margin-bottom:1rem}
 .est-alerts-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem}
@@ -1773,7 +1593,7 @@ body.light-theme .est-period-label{background:rgba(79,110,247,.08);color:#4F6EF7
 .progress-section{display:flex;flex-direction:column;gap:.6rem}
 .progress-section-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 #progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem}
-.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F;z-index:10}
+.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
 .btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
 .btn-delete:hover{background:rgba(239,68,68,.1)}
 .btn-save{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem 1.35rem;font-size:.82rem;font-weight:700;cursor:pointer}
@@ -1785,13 +1605,6 @@ body.light-theme .est-period-label{background:rgba(79,110,247,.08);color:#4F6EF7
 .toast.error{border-left-color:#EF4444}
 .msg-spinner{width:36px;height:36px;border:3px solid #2A2F45;border-top-color:#8B5CF6;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-.phone-dup-warn{margin-top:.3rem;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.35);border-radius:6px;padding:.4rem .65rem;font-size:.72rem;color:#EF4444;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;line-height:1.4}
-.phone-dup-warn strong{color:#F87171}
-.dup-ver-btn{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.4);border-radius:4px;color:#F87171;font-size:.68rem;font-weight:700;padding:.18rem .55rem;cursor:pointer;white-space:nowrap;transition:all .15s}
-.dup-ver-btn:hover{background:rgba(239,68,68,.3)}
-body.light-theme .phone-dup-warn{background:rgba(239,68,68,.07);border-color:rgba(239,68,68,.3);color:#DC2626}
-body.light-theme .phone-dup-warn strong{color:#DC2626}
-body.light-theme .dup-ver-btn{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:#DC2626}
 .hidden{display:none!important}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-track{background:#13161F}
@@ -1861,7 +1674,6 @@ body.light-theme .filter-btn{background:#FFFFFF;border-color:#E2E5EE;color:#8B92
 body.light-theme .filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .rel-kpi{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
-body.light-theme .rel-select option{background:#FFFFFF;color:#1A1D2E}
 body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
 body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .est-section-title{color:#1A1D2E}
@@ -1887,8 +1699,6 @@ body.light-theme .modal-close{color:#8B92A8}
 body.light-theme .modal-foot{background:#FFFFFF;border-top-color:#E2E5EE}
 body.light-theme .f-label{color:#8B92A8}
 body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
-body.light-theme .f-select option{background:#FFFFFF;color:#1A1D2E}
-body.light-theme select option{background:#FFFFFF;color:#1A1D2E}
 body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
 body.light-theme .qn-btn:hover{background:#EDEFF5}
 body.light-theme #progress-container{background:#F8F9FC;border-color:#E2E5EE}
@@ -1906,11 +1716,8 @@ body.light-theme .auth-box{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .auth-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .auth-sub{color:#8B92A8}
 body.light-theme ::-webkit-scrollbar-track{background:#E8EAF0}
-body.light-theme ::-webkit-scrollbar-thumb{background:#C0C4D0;border:2px solid #E8EAF0}
+body.light-theme ::-webkit-scrollbar-thumb{background:#B0B6C5;border:2px solid #E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
-body.light-theme .fu-stage-body{scrollbar-color:#C0C4D0 #E8EAF0}
-body.light-theme .fu-stages-wrap{scrollbar-color:#C0C4D0 #E8EAF0}
-body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
 </style>
 </head>
 <body>
@@ -1975,7 +1782,6 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <span class="fu-panel-title">Follow-ups</span>
         <button class="fu-collapse-btn" onclick="toggleFuPanel()" id="fu-collapse-btn" title="Encolher/Expandir painel">▾</button>
         <span class="fu-badge" id="fu-badge">0</span>
-        <button id="fu-hoje-btn" class="fu-hoje-btn" onclick="toggleFuHoje()" title="Mostrar apenas follow-ups de hoje">📅 Hoje</button>
         <input type="text" id="fu-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="window.renderFollowups()"/>
         <div class="fu-filter-btns" id="fu-filter-btns"></div>
       </div>
@@ -1988,7 +1794,7 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <span style="font-size:1rem">📋</span>
         <span class="kanban-panel-title">Kanban de Leads</span>
         <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
-        <div class="fu-filter-btns" id="kanban-filter-btns" style="margin-left:.5rem"></div>
+        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderKanban()" style="margin-left:.5rem"/>
       </div>
       <div class="kanban-board" id="kanban-board-wrap">
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
@@ -2001,12 +1807,6 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       </div>
     </div>
     <div id="view-table" class="hidden">
-      <div class="kanban-panel-header">
-        <span style="font-size:1rem">📋</span>
-        <span class="kanban-panel-title">Tabela de Leads</span>
-        <button class="fu-collapse-btn" onclick="toggleTablePanel()" id="table-collapse-btn" title="Encolher/Expandir">▾</button>
-      </div>
-      <div id="table-panel-wrap">
       <div class="table-controls">
         <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
         <div class="filter-btns">
@@ -2021,13 +1821,8 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         </div>
       </div>
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
-      </div>
     </div>
     <div id="view-relatorios" class="hidden">
-      <div class="kanban-panel-header">
-        <span style="font-size:1rem">📊</span>
-        <span class="kanban-panel-title">Relatórios</span>
-      </div>
       <div class="rel-controls">
         <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
         <div class="rel-group" id="rel-data-range" style="display:none;gap:.4rem;flex-direction:row;align-items:flex-end">
@@ -2050,49 +1845,17 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
       </div>
-      <div class="kanban-panel-header" style="margin-top:1rem">
-        <span style="font-size:.9rem">📋</span>
-        <span class="kanban-panel-title">Lista de Leads</span>
-        <button class="fu-collapse-btn" onclick="toggleRelTable()" id="rel-table-collapse-btn" title="Encolher/Expandir">▾</button>
-      </div>
-      <div id="rel-table-wrap">
       <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
-      </div>
     </div>
     <div id="view-estrategia" class="hidden">
-      <div class="kanban-panel-header">
-        <span style="font-size:1rem">🎯</span>
-        <span class="kanban-panel-title">Painel Estratégico</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <div><div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
+        <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
       </div>
-      <div class="est-header-bar">
-        <div>
-          <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div>
-        </div>
-        <div class="est-period-bar">
-          <button class="est-period-btn active" data-period="mes-atual" onclick="setEstPeriod(this,'mes-atual')">Mês Atual</button>
-          <button class="est-period-btn" data-period="mes-anterior" onclick="setEstPeriod(this,'mes-anterior')">Mês Anterior</button>
-          <button class="est-period-btn" data-period="ultimos-3" onclick="setEstPeriod(this,'ultimos-3')">Últimos 3 meses</button>
-          <button class="est-period-btn" data-period="ultimos-6" onclick="setEstPeriod(this,'ultimos-6')">Últimos 6 meses</button>
-          <button class="est-period-btn" data-period="este-ano" onclick="setEstPeriod(this,'este-ano')">Este ano</button>
-          <button class="est-period-btn" data-period="personalizado" onclick="setEstPeriod(this,'personalizado')">Personalizado</button>
-          <button class="btn-hdr" onclick="renderEstrategia()">↻</button>
-        </div>
-      </div>
-      <div id="est-custom-dates" style="display:none;gap:.5rem;align-items:center;margin-bottom:.75rem;flex-wrap:wrap" class="est-custom-row">
-        <label style="font-size:.72rem;color:#9CA3AF;font-weight:700">DE</label>
-        <input type="date" id="est-date-ini" class="f-input" style="width:auto;max-width:155px" onchange="renderEstrategia()"/>
-        <label style="font-size:.72rem;color:#9CA3AF;font-weight:700">ATÉ</label>
-        <input type="date" id="est-date-fim" class="f-input" style="width:auto;max-width:155px" onchange="renderEstrategia()"/>
-      </div>
-      <div id="est-period-label" class="est-period-label"></div>
       <div id="estrategia-content"></div>
     </div>
     <div id="view-equipe" class="hidden">
-      <div class="kanban-panel-header">
-        <span style="font-size:1rem">👥</span>
-        <span class="kanban-panel-title">Gestão de Equipe</span>
-        <button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)" style="margin-left:auto">+ Nova Colaboradora</button>
-      </div>
+      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
       <div id="equipe-lista"></div>
     </div>
   </main>
@@ -2104,16 +1867,11 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
     <div class="modal-body">
       <div class="form-grid">
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
-        <div class="f-group">
-          <label class="f-label">Telefone / WhatsApp</label>
-          <input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/>
-          <div id="phone-duplicate-warn" class="phone-dup-warn" style="display:none"></div>
-        </div>
+        <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
-        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="SEM RESPOSTA">Sem Resposta</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
-        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-first-contact" class="f-input" type="date" title="Quando o lead entrou em contato pela primeira vez"/></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
@@ -2159,12 +1917,11 @@ body.light-theme .modal-box{scrollbar-color:#C0C4D0 #FFFFFF}
       </div>
     </div>
     <div class="modal-foot">
-      <input type="hidden" id="editing-lead-id-hidden" value=""/>
       <button id="btn-delete-lead" class="btn-delete" onclick="deleteLead()" style="display:none">Excluir</button>
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
         <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
-        <button class="btn-save" id="btn-save-lead" onclick="saveLead()" data-lead-id="">Salvar</button>
+        <button class="btn-save" onclick="saveLead()">Salvar</button>
       </div>
     </div>
   </div>
@@ -2317,29 +2074,6 @@ function maskPhone(el){
   if(v.length<=10)v=v.replace(/^(\d{0,2})(\d{0,4})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
   else v=v.replace(/^(\d{0,2})(\d{0,5})(\d{0,4})$/,(_,a,b,c)=>!a?'':!b?'('+a:!c?'('+a+') '+b:'('+a+') '+b+'-'+c);
   el.value=v;
-  // Verificação de duplicidade em tempo real
-  checkPhoneDuplicate(v);
-}
-
-function normalizePhoneDigits(p){return (p||'').replace(/\D/g,'');}
-
-function checkPhoneDuplicate(phoneRaw){
-  const digits=normalizePhoneDigits(phoneRaw);
-  const warn=document.getElementById('phone-duplicate-warn');
-  if(!warn)return;
-  if(digits.length<10){warn.style.display='none';return;}
-  const currentId=document.getElementById('editing-lead-id-hidden')?.value||editingLeadId||'';
-  const dup=allLeads.find(l=>{
-    if(currentId && l.id===currentId) return false;
-    return normalizePhoneDigits(l.phone)===digits;
-  });
-  if(dup){
-    const sm=STATUS_META[dup.status]||STATUS_META['EM ANDAMENTO'];
-    warn.innerHTML=`⚠️ Telefone já cadastrado: <strong>${dup.name||'Sem Nome'}</strong> · <span style="color:${sm.color}">${sm.label}</span> · ${dup.assignee||'—'} &nbsp;<button class="dup-ver-btn" onclick="closeLead();openLead('${dup.id}')">Ver lead →</button>`;
-    warn.style.display='flex';
-  }else{
-    warn.style.display='none';
-  }
 }
 </script>
 </body>
