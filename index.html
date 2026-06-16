@@ -788,17 +788,11 @@ window.confirmarDecisao=async function(decisao){
 
 // ─── KANBAN ───
 function renderKanban(){
-  const kSearch=(document.getElementById('kanban-search')?.value||'').trim();
-  const kQ=kSearch.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  const kDigits=kSearch.replace(/\D/g,'');
-  const kFilter=l=>{
-    if(!kSearch)return true;
-    const nameN=(l.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const phoneD=(l.phone||'').replace(/\D/g,'');
-    return nameN.includes(kQ)||(kDigits.length>=3&&phoneD.includes(kDigits));
-  };
+  const kanbanQ=(document.getElementById('kanban-search')?.value||'').trim().toLowerCase();
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
-  allLeads.filter(kFilter).forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
+  let leadsToRender=allLeads;
+  if(kanbanQ)leadsToRender=allLeads.filter(l=>(l.name||'').toLowerCase().includes(kanbanQ)||(l.phone||'').includes(kanbanQ));
+  leadsToRender.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
     document.getElementById('col-count-'+status).textContent=cols[status].length;
@@ -1361,7 +1355,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
-.kanban-panel-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem;flex-wrap:wrap}
+.kanban-panel-header{display:flex;align-items:center;gap:.5rem;margin-bottom:.85rem}
 .kanban-panel-title{font-size:.88rem;font-weight:700}
 .kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
@@ -1793,8 +1787,8 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
       <div class="kanban-panel-header">
         <span style="font-size:1rem">📋</span>
         <span class="kanban-panel-title">Kanban de Leads</span>
+        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderKanban()" style="margin-left:.5rem;width:200px;"/>
         <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
-        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="renderKanban()" style="margin-left:.5rem"/>
       </div>
       <div class="kanban-board" id="kanban-board-wrap">
         <div class="k-col"><div class="k-col-header" style="border-top:2px solid #4F6EF7"><span class="k-col-title" style="color:#4F6EF7">Em Andamento</span><span class="k-col-count" id="col-count-EM ANDAMENTO">0</span></div><div class="k-col-body" id="col-EM ANDAMENTO"></div></div>
