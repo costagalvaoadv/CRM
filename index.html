@@ -11,7 +11,7 @@
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyC2Jc8KUg9QBlGwuqwlN3tQ6C_B1zZi7QU",
@@ -125,7 +125,7 @@ window.fazerLogin=async function(){
   const email=document.getElementById('login-email').value.trim();
   const senha=document.getElementById('login-senha').value;
   if(!email||!senha)return showToast('Preencha e-mail e senha','error');
-  try{setBtnLoading('btn-login',true);await signInWithEmailAndPassword(auth,email,senha);}
+  try{setBtnLoading('btn-login',true);await setPersistence(auth,browserLocalPersistence);await signInWithEmailAndPassword(auth,email,senha);}
   catch(e){showToast(fbErr(e.code),'error');}
   finally{setBtnLoading('btn-login',false);}
 };
@@ -1240,9 +1240,14 @@ window.addQuickNote=function(note,btn){
 };
 
 window.saveLead=async function(){
-  const btn=document.querySelector('#modal-lead .btn-save');
+  // Find save button robustly
+  const btn=document.getElementById('btn-salvar-lead');
   if(btn&&btn.disabled)return;
   if(btn){btn.disabled=true;btn.textContent='Salvando...';}
+  // Safety: always re-enable after 8s no matter what
+  const safetyTimer=setTimeout(()=>{
+    if(btn&&btn.disabled){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+  },8000);
   const name    =document.getElementById('f-name').value.trim()||'Sem Nome';
   const phone   =document.getElementById('f-phone').value.trim();
   const campaign=document.getElementById('f-campaign').value;
@@ -1264,6 +1269,7 @@ window.saveLead=async function(){
         followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
         log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
       });
+      clearTimeout(safetyTimer);
       showToast('Lead criado! FUP 24h agendado.');
       closeLead();
     }else{
@@ -1282,19 +1288,20 @@ window.saveLead=async function(){
       }
       upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
       await updateDoc(doc(db,'leads',editingLeadId),upd);
+      clearTimeout(safetyTimer);
       showToast('✅ Salvo!');
-      // Feedback visual no botão — NÃO fecha o modal
       if(btn){btn.textContent='✅ Salvo!';btn.style.background='#10B981';btn.style.borderColor='#10B981';}
       document.getElementById('f-note').value='';
-      // Auto-refresh indicacao panel if open
       if(currentTab==='indicacao') setTimeout(renderIndicacao, 300);
       setTimeout(()=>{
         if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
       },2500);
     }
   }catch(e){
-    showToast('Erro ao salvar. Tente novamente.','error');
-    if(btn){btn.disabled=false;btn.textContent='Salvar';}
+    clearTimeout(safetyTimer);
+    console.error('saveLead error:',e);
+    showToast('Erro ao salvar: '+( e?.message||'verifique sua conexão'),'error');
+    if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
   }
 };
 window.deleteLead=async function(){
@@ -4094,7 +4101,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
         <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
-        <button class="btn-save" onclick="saveLead()">Salvar</button>
+        <button class="btn-save" id="btn-salvar-lead" onclick="saveLead()">Salvar</button>
       </div>
     </div>
   </div>
