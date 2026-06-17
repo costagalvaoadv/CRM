@@ -1641,15 +1641,72 @@ async function carregarCampanhas() {
 }
 
 async function adicionarNovaCampanha() {
-  const nome = prompt('Nome da nova campanha:');
-  if (!nome || !nome.trim()) return;
-  const n = nome.trim();
+  // Remove existing modal if open
+  document.getElementById('modal-camp')?.remove();
+
+  const html2 = `<div class="modal-camp-overlay" id="modal-camp">
+    <div class="modal-camp-box">
+      <div class="modal-camp-head">
+        <span class="modal-camp-title">📢 Gerenciar Campanhas</span>
+        <button class="modal-close" onclick="document.getElementById('modal-camp').remove()">✕</button>
+      </div>
+      <div class="modal-camp-body">
+        <div class="modal-camp-input-row">
+          <input class="modal-camp-input" id="camp-nova-input" placeholder="Nome da nova campanha..." onkeydown="if(event.key==='Enter')salvarNovaCampanha()"/>
+          <button class="btn-meta btn-meta-primary" onclick="salvarNovaCampanha()">+ Adicionar</button>
+        </div>
+        <div style="font-size:.68rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Campanhas cadastradas</div>
+        <div class="modal-camp-list" id="camp-list-modal"></div>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html2);
+  renderCampList();
+  setTimeout(()=>document.getElementById('camp-nova-input')?.focus(), 80);
+}
+
+function renderCampList() {
+  const el = document.getElementById('camp-list-modal');
+  if (!el) return;
+  if (campanhasDinamicas.length === 0) {
+    el.innerHTML = '<div class="modal-camp-empty">Nenhuma campanha cadastrada</div>';
+    return;
+  }
+  el.innerHTML = campanhasDinamicas.map((c,i) => `
+    <div class="modal-camp-item">
+      <span class="modal-camp-item-name">📢 ${c}</span>
+      <button class="modal-camp-item-del" onclick="excluirCampanha(${i})" title="Remover campanha">✕</button>
+    </div>`).join('');
+}
+
+window.salvarNovaCampanha = async function() {
+  const input = document.getElementById('camp-nova-input');
+  const n = (input?.value||'').trim();
+  if (!n) { input?.focus(); return; }
   if (campanhasDinamicas.includes(n)) { showToast('Campanha já existe'); return; }
   campanhasDinamicas.push(n);
   try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
   atualizarSelectCampanha();
+  if (input) input.value = '';
+  renderCampList();
   showToast('Campanha "' + n + '" adicionada!');
-}
+  input?.focus();
+};
+
+window.excluirCampanha = async function(idx) {
+  const nome = campanhasDinamicas[idx];
+  if (!nome) return;
+  const emUso = allLeads.some(l => l.campaign === nome);
+  if (emUso) {
+    showToast(`"${nome}" está em uso em leads — não pode excluir`);
+    return;
+  }
+  campanhasDinamicas.splice(idx, 1);
+  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
+  atualizarSelectCampanha();
+  renderCampList();
+  showToast('Campanha removida');
+};
 
 function atualizarSelectCampanha() {
   const sel = document.getElementById('f-campaign');
@@ -3129,6 +3186,27 @@ body.light-theme .period-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B55
 body.light-theme .period-date-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E;}
 body.light-theme .fin-panel{background:#fff;border-color:#E2E5EE;}
 body.light-theme .fin-kpi,.fin-month,.fin-roi-bar,.fin-sim,.fin-sim-res-item{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
+
+
+/* ── Modal de campanhas ── */
+.modal-camp-overlay{position:fixed;inset:0;background:#000000cc;z-index:1100;display:flex;align-items:center;justify-content:center;padding:1rem;}
+.modal-camp-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:420px;max-height:85vh;overflow-y:auto;}
+.modal-camp-head{display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;border-bottom:1px solid #1E2235;}
+.modal-camp-title{font-size:.88rem;font-weight:700;color:#F1F3F9;}
+.modal-camp-body{padding:1rem 1.1rem;}
+.modal-camp-input-row{display:flex;gap:.5rem;margin-bottom:1rem;}
+.modal-camp-input{flex:1;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;color:#F1F3F9;font-size:.82rem;outline:none;}
+.modal-camp-input:focus{border-color:#4F6EF7;}
+.modal-camp-list{display:flex;flex-direction:column;gap:.35rem;max-height:280px;overflow-y:auto;}
+.modal-camp-item{display:flex;align-items:center;justify-content:space-between;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;}
+.modal-camp-item-name{font-size:.8rem;color:#C4C9D8;}
+.modal-camp-item-del{background:none;border:none;color:#EF444466;font-size:.85rem;cursor:pointer;padding:.1rem .3rem;border-radius:4px;transition:color .15s;}
+.modal-camp-item-del:hover{color:#EF4444;}
+.modal-camp-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.75rem;}
+body.light-theme .modal-camp-box{background:#fff;border-color:#E2E5EE;}
+body.light-theme .modal-camp-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E;}
+body.light-theme .modal-camp-item{background:#F4F5F8;border-color:#E2E5EE;}
+body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 
 </style>
 </head>
