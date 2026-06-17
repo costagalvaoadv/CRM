@@ -1286,6 +1286,8 @@ window.saveLead=async function(){
       // Feedback visual no botão — NÃO fecha o modal
       if(btn){btn.textContent='✅ Salvo!';btn.style.background='#10B981';btn.style.borderColor='#10B981';}
       document.getElementById('f-note').value='';
+      // Auto-refresh indicacao panel if open
+      if(currentTab==='indicacao') setTimeout(renderIndicacao, 300);
       setTimeout(()=>{
         if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
       },2500);
@@ -2644,20 +2646,66 @@ function renderIndCard(l) {
   const faseAtual = cadencia[faseIdx];
   const hist = l.indHistorico || [];
 
-  const statusLabel = {pendente:'Pendente',aguardando:'Aguardando resp.',recebido:'Indicação recebida',concluido:'Concluído'}[status]||status;
+  const statusLabel = {pendente:'Pendente',aguardando:'Aguardando resp.',recebido:'🎉 Indicação recebida',concluido:'✓ Concluído'}[status]||status;
   const msg = getMsgIndicacao(l, faseAtual?.fase || 'Indicacao', faseIdx + 1);
 
-  const tentativasHTML = cadencia.map((t, i) => {
-    const feita = hist[i]?.enviado;
-    const atual = i === faseIdx && status !== 'concluido';
-    const dataStr = hist[i]?.data ? new Date(hist[i].data).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}) : '';
-    return `<div class="ind-tent">
-      <div class="ind-tent-num ${feita?'feita':atual?'atual':''}">${feita?'✓':i+1}</div>
-      <div class="ind-tent-label">${t.label}</div>
-      <div class="ind-tent-label" style="color:#6B7280;font-size:.58rem">${t.objetivo}</div>
-      ${dataStr?`<div class="ind-tent-data">${dataStr}</div>`:''}
-    </div>`;
-  }).join('');
+  // ── Calcular data do próximo passo ──
+  // Base: data da última ação feita, ou data de criação do lead
+  let baseData = null;
+  const ultimaAcao = [...hist].filter(h=>h.data).pop();
+  if (ultimaAcao) baseData = new Date(ultimaAcao.data);
+  else if (l.lastContact?.toDate) baseData = l.lastContact.toDate();
+  else if (l.createdAt?.toDate) baseData = l.createdAt.toDate();
+  else baseData = new Date();
+
+  // ── Barra de progresso SEMPRE VISÍVEL ──
+  const progressHTML = (() => {
+    const steps = cadencia.map((t, i) => {
+      const feita = !!hist[i]?.enviado;
+      const eAtual = i === faseIdx && status !== 'concluido' && status !== 'recebido';
+      const sFutura = !feita && !eAtual;
+      const cls = feita ? 's-feita' : eAtual ? 's-atual' : 's-futura';
+
+      // Data: se feita → data real; se atual → "Hoje/Em X dias"; se futura → prevista
+      let dataLabel = '';
+      let dataCls = 'futura';
+      if (feita && hist[i]?.data) {
+        dataLabel = new Date(hist[i].data).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
+        dataCls = 'feita';
+      } else if (eAtual) {
+        // Next step: baseData + dias da cadência
+        const prevDate = new Date(baseData);
+        prevDate.setDate(prevDate.getDate() + (t.dia||0));
+        const hoje = new Date(); hoje.setHours(0,0,0,0);
+        prevDate.setHours(0,0,0,0);
+        const diff = Math.round((prevDate - hoje) / (1000*60*60*24));
+        dataLabel = diff <= 0 ? '⚡ Hoje' : diff === 1 ? 'Amanhã' : `${diff}d`;
+        dataCls = 'proxima';
+      }
+
+      const connector = i < cadencia.length - 1
+        ? `<div class="ind-step-connector ${feita?'feita':'pendente'}"></div>`
+        : '';
+
+      return `<div class="ind-step-wrap">
+        <div class="ind-step">
+          <div class="ind-step-circle ${cls}">${feita?'✓':eAtual?i+1:i+1}</div>
+          <div class="ind-step-text">
+            <div class="ind-step-label ${cls}">${t.label}</div>
+            <div class="ind-step-sublabel">${t.objetivo}</div>
+            <div class="ind-step-date ${dataCls}">${dataLabel||'—'}</div>
+          </div>
+        </div>
+        ${connector}
+      </div>`;
+    });
+
+    // If concluido or recebido, show final state
+    if (status === 'recebido') steps.push(`<div class="ind-step"><div class="ind-step-circle s-feita">🎉</div><div class="ind-step-text"><div class="ind-step-label s-feita">Recebida!</div></div></div>`);
+    if (status === 'concluido') steps.push(`<div class="ind-step"><div class="ind-step-circle" style="background:#6B7280;color:#fff;border:none">✓</div><div class="ind-step-text"><div class="ind-step-label" style="color:#6B7280">Encerrado</div></div></div>`);
+
+    return steps.join('');
+  })();
 
   const respostasHTML = (msg.comoResponder||[]).map(r =>
     `<div class="ind-resp-item"><span class="ind-resp-trigger">↳ ${r.trigger}:</span> ${r.resp}</div>`
@@ -2665,7 +2713,8 @@ function renderIndCard(l) {
 
   const wa = formatPhone ? formatPhone(l.phone) : (l.phone||'').replace(/\D/g,'');
 
-  return `<div class="ind-card" id="ind-card-${l.id}">
+  return `<div class="ind-card status-${status}" id="ind-card-${l.id}">
+    <!-- LINHA PRINCIPAL — sempre visível -->
     <div class="ind-card-header" onclick="toggleIndCard('${l.id}')">
       <div class="ind-card-avatar grupo-${grupo.toLowerCase()}">${grupo}</div>
       <div class="ind-card-info">
@@ -2674,16 +2723,14 @@ function renderIndCard(l) {
       </div>
       <div class="ind-card-badges">
         <span class="ind-badge-grupo ${grupo.toLowerCase()}">Grupo ${grupo}</span>
-        <span class="ind-badge-fase">${faseAtual?.objetivo||'—'}</span>
         <span class="ind-badge-status ${status}">${statusLabel}</span>
-        <button onclick="event.stopPropagation();openLead('${l.id}')" style="background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.62rem;padding:.15rem .5rem;border-radius:5px;cursor:pointer;margin-left:.25rem;" title="Abrir ficha do lead">📋 Ver ficha</button>
+        <button onclick="event.stopPropagation();openLead('${l.id}')" style="background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.62rem;padding:.15rem .5rem;border-radius:5px;cursor:pointer;" title="Abrir ficha do lead">📋 Ver ficha</button>
+        <span class="ind-card-toggle" id="ind-toggle-${l.id}">▾</span>
       </div>
-      <span class="ind-card-toggle" id="ind-toggle-${l.id}">▾</span>
     </div>
+    <!-- BARRA DE PROGRESSO SEMPRE VISÍVEL -->
+    <div class="ind-card-progress">${progressHTML}</div>
     <div class="ind-card-body" id="ind-body-${l.id}">
-      <!-- Cadência -->
-      <div style="font-size:.67rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Cadência de contatos</div>
-      <div class="ind-cadencia">${tentativasHTML}</div>
       <!-- Tabs mensagem -->
       <div class="ind-msg-tabs">
         <button class="ind-msg-tab active" id="ind-tab-wpp-${l.id}" onclick="indAtivarTab('${l.id}','wpp')">💬 WhatsApp</button>
@@ -3659,6 +3706,78 @@ body.light-theme .ind-card-info *{color:#1A1D2E;}
 body.light-theme .ind-stat{background:#fff;border-color:#E2E5EE;}
 body.light-theme .ind-msg-box,.ind-respostas{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
 body.light-theme .ind-msg-box{color:#374151 !important;}
+
+
+/* ── Inline cadência flow ── */
+.ind-flow{display:flex;align-items:center;gap:.25rem;flex-shrink:0;}
+.ind-flow-step{display:flex;flex-direction:column;align-items:center;gap:.2rem;position:relative;}
+.ind-flow-dot{width:22px;height:22px;border-radius:50%;border:2px solid #2A2F45;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700;color:#6B7280;flex-shrink:0;transition:all .2s;}
+.ind-flow-dot.feita{background:#10B981;border-color:#10B981;color:#fff;}
+.ind-flow-dot.atual{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 3px rgba(79,110,247,.25);animation:pulse-ind 2s infinite;}
+.ind-flow-dot.futura{background:transparent;border-color:#2A2F45;color:#2A2F45;}
+.ind-flow-label{font-size:.52rem;color:#6B7280;text-align:center;max-width:44px;line-height:1.2;}
+.ind-flow-label.atual{color:#4F6EF7;font-weight:700;}
+.ind-flow-label.feita{color:#10B981;}
+.ind-flow-sep{width:18px;height:2px;background:#2A2F45;flex-shrink:0;margin-bottom:10px;}
+.ind-flow-sep.feita{background:#10B981;}
+@keyframes pulse-ind{0%,100%{box-shadow:0 0 0 3px rgba(79,110,247,.25);}50%{box-shadow:0 0 0 5px rgba(79,110,247,.1);}}
+
+/* ── Card state visual differentiation ── */
+.ind-card.status-aguardando{border-color:#4F6EF755;background:#0F1420;}
+.ind-card.status-aguardando .ind-card-name{color:#F1F3F9 !important;}
+.ind-card.status-recebido{border-color:#10B98155;background:#0A1A12;}
+.ind-card.status-recebido .ind-card-name{color:#10B981 !important;}
+.ind-card.status-concluido{opacity:.6;border-color:#1E2235;}
+.ind-card.status-pendente{border-color:#1E2235;}
+
+/* Next step pill */
+.ind-next-pill{font-size:.58rem;font-weight:700;padding:.15rem .55rem;border-radius:10px;background:rgba(79,110,247,.15);color:#4F6EF7;border:1px solid rgba(79,110,247,.3);white-space:nowrap;flex-shrink:0;}
+.ind-next-pill.urgente{background:rgba(245,166,35,.15);color:#F5A623;border-color:rgba(245,166,35,.3);}
+.ind-next-pill.concluido{background:rgba(107,114,128,.1);color:#6B7280;border-color:#2A2F45;}
+.ind-next-pill.recebido{background:rgba(16,185,129,.15);color:#10B981;border-color:rgba(16,185,129,.3);}
+
+/* Light theme */
+body.light-theme .ind-flow-dot{border-color:#E2E5EE;color:#9CA3AF;}
+body.light-theme .ind-flow-sep{background:#E2E5EE;}
+body.light-theme .ind-card.status-recebido{background:#F0FDF4;border-color:#10B98155;}
+body.light-theme .ind-card.status-aguardando{background:#EFF6FF;border-color:#4F6EF755;}
+
+
+/* ── Linha de progresso SEMPRE VISÍVEL no card ── */
+.ind-card-progress{padding:.55rem 1.1rem .65rem;border-top:1px solid #1A1D2E;display:flex;align-items:center;gap:0;}
+.ind-step-wrap{display:flex;align-items:center;flex:1;}
+.ind-step{display:flex;flex-direction:column;align-items:center;gap:.25rem;flex-shrink:0;position:relative;min-width:80px;}
+.ind-step-circle{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:800;flex-shrink:0;transition:all .2s;}
+.ind-step-circle.s-feita{background:#10B981;color:#fff;border:none;}
+.ind-step-circle.s-atual{background:#4F6EF7;color:#fff;border:none;box-shadow:0 0 0 4px rgba(79,110,247,.2);animation:pulse-ind 2s infinite;}
+.ind-step-circle.s-futura{background:transparent;color:#3A3F55;border:2px solid #2A2F45;}
+.ind-step-text{text-align:center;}
+.ind-step-label{font-size:.62rem;font-weight:600;line-height:1.2;}
+.ind-step-label.s-feita{color:#10B981;}
+.ind-step-label.s-atual{color:#4F6EF7;}
+.ind-step-label.s-futura{color:#3A3F55;}
+.ind-step-sublabel{font-size:.57rem;color:#6B7280;margin-top:.1rem;line-height:1.2;}
+.ind-step-date{font-size:.58rem;font-weight:700;margin-top:.15rem;line-height:1;}
+.ind-step-date.feita{color:#10B981;}
+.ind-step-date.proxima{color:#F5A623;}
+.ind-step-date.futura{color:transparent;}
+.ind-step-connector{flex:1;height:2px;margin:0 .15rem;margin-bottom:18px;transition:background .2s;}
+.ind-step-connector.feita{background:#10B981;}
+.ind-step-connector.pendente{background:#2A2F45;}
+
+/* Card estados visuais — borda esquerda colorida */
+.ind-card.status-pendente{border-left:4px solid #2A2F45;}
+.ind-card.status-aguardando{border-left:4px solid #4F6EF7;background:#0C0F1C;}
+.ind-card.status-recebido{border-left:4px solid #10B981;background:#091510;}
+.ind-card.status-concluido{border-left:4px solid #2A2F45;opacity:.55;}
+
+/* Light theme */
+body.light-theme .ind-card-progress{border-top-color:#F0F2F7;background:#FAFBFF;}
+body.light-theme .ind-step-circle.s-futura{border-color:#D1D5DB;color:#9CA3AF;}
+body.light-theme .ind-step-sublabel{color:#9CA3AF;}
+body.light-theme .ind-step-connector.pendente{background:#E2E5EE;}
+body.light-theme .ind-card.status-aguardando{background:#EFF6FF;}
+body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
 
 </style>
 </head>
