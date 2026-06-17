@@ -1646,7 +1646,7 @@ async function carregarCampanhas() {
   atualizarSelectCampanha();
 }
 
-async function adicionarNovaCampanha() {
+window.adicionarNovaCampanha = async function() {
   // Remove existing modal if open
   document.getElementById('modal-camp')?.remove();
 
@@ -1671,7 +1671,7 @@ async function adicionarNovaCampanha() {
   setTimeout(()=>document.getElementById('camp-nova-input')?.focus(), 80);
 }
 
-function renderCampList() {
+window.renderCampList = function() {
   const el = document.getElementById('camp-list-modal');
   if (!el) return;
   if (campanhasDinamicas.length === 0) {
@@ -2574,7 +2574,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px;}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
-.fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:visible;display:flex;flex-direction:column}
+.fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
 .fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F;border-radius:10px 10px 0 0;}
 .fu-stage-title{font-size:.75rem;font-weight:700;color:#4F6EF7;flex:1}
 .fu-stage-count{font-size:.65rem;font-weight:700;background:rgba(79,110,247,.15);color:#4F6EF7;border-radius:999px;padding:.1rem .45rem}
@@ -3135,10 +3135,7 @@ body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
 .fu-stages::-webkit-scrollbar-track{background:transparent;}
 .fu-stages::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
 .fu-stages::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
-.fu-stage-col{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;}
-.fu-stage-col::-webkit-scrollbar{width:5px;}
-.fu-stage-col::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
-.fu-stage-col::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+/* fu-stage-col scrollbar handled by fu-stage-body */
 
 /* ── Collapse button reutilizável ── */
 .section-collapse-btn{background:none;border:none;color:#6B7280;font-size:.75rem;cursor:pointer;padding:.1rem .35rem;border-radius:5px;line-height:1;transition:color .15s;}
