@@ -1189,6 +1189,9 @@ window.addQuickNote=function(note,btn){
 };
 
 window.saveLead=async function(){
+  const btn=document.querySelector('#modal-lead .btn-save');
+  if(btn&&btn.disabled)return;
+  if(btn){btn.disabled=true;btn.textContent='Salvando...';}
   const name    =document.getElementById('f-name').value.trim()||'Sem Nome';
   const phone   =document.getElementById('f-phone').value.trim();
   const campaign=document.getElementById('f-campaign').value;
@@ -1198,33 +1201,44 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
-  if(!editingLeadId){
-    const trilhaDias=getTrilhaDias(tipo);
-    const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
-    await addDoc(collection(db,'leads'),{
-      name,phone,campaign,status,tipo,assignee,currentNote:note,
-      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
-      followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
-      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
-    });
-    showToast('Lead criado! FUP 24h agendado.');
-  }else{
-    const existing=allLeads.find(l=>l.id===editingLeadId);
-    const statusChanged=existing?.status&&existing.status!==status;
-    const partoChanged=partoVal&&!existing?.dataParto;
-    const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
-    if(note)upd.currentNote=note;
-    if(dataParto)upd.dataParto=dataParto;
-    if(partoChanged&&tipo==='SM'){
-      const etapa=existing?.etapaFollowup||0;
-      const trilhaDias=getTrilhaDias('SM');
-      if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
+  try{
+    if(!editingLeadId){
+      const trilhaDias=getTrilhaDias(tipo);
+      const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
+      await addDoc(collection(db,'leads'),{
+        name,phone,campaign,status,tipo,assignee,currentNote:note,
+        nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
+        followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+        log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+      });
+      showToast('Lead criado! FUP 24h agendado.');
+      closeLead();
+    }else{
+      const existing=allLeads.find(l=>l.id===editingLeadId);
+      const statusChanged=existing?.status&&existing.status!==status;
+      const partoChanged=partoVal&&!existing?.dataParto;
+      const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
+      if(note)upd.currentNote=note;
+      if(dataParto)upd.dataParto=dataParto;
+      if(partoChanged&&tipo==='SM'){
+        const etapa=existing?.etapaFollowup||0;
+        const trilhaDias=getTrilhaDias('SM');
+        if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
+      }
+      upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+      await updateDoc(doc(db,'leads',editingLeadId),upd);
+      showToast('✅ Salvo!');
+      // Feedback visual no botão — NÃO fecha o modal
+      if(btn){btn.textContent='✅ Salvo!';btn.style.background='#10B981';btn.style.borderColor='#10B981';}
+      document.getElementById('f-note').value='';
+      setTimeout(()=>{
+        if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+      },2500);
     }
-    upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
-    await updateDoc(doc(db,'leads',editingLeadId),upd);
-    showToast('Lead atualizado!');
+  }catch(e){
+    showToast('Erro ao salvar. Tente novamente.','error');
+    if(btn){btn.disabled=false;btn.textContent='Salvar';}
   }
-  closeLead();
 };
 window.deleteLead=async function(){
   if(!editingLeadId||!confirm('Excluir este lead?'))return;
@@ -1456,7 +1470,8 @@ window.renderEstrategia=function(){
     <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
-    <div class="est-section-title">📢 Eficiência por Campanha</div>
+    <div class="section-header-row"><div class="est-section-title">📢 Eficiência por Campanha</div><button class="section-collapse-btn" onclick="toggleSection('est-efic-body',this)" title="Minimizar/Maximizar">▾</button></div>
+    <div id="est-efic-body" class="section-collapsible">
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa</th><th>Diagnóstico</th></tr></thead>
       <tbody>${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
@@ -1469,9 +1484,11 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${dc}">${diag}</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
+    </div>
   </div>
   <div class="est-section">
-    <div class="est-section-title">👥 Desempenho da Equipe</div>
+    <div class="section-header-row"><div class="est-section-title">👥 Desempenho da Equipe</div><button class="section-collapse-btn" onclick="toggleSection('est-equipe-body',this)" title="Minimizar/Maximizar">▾</button></div>
+    <div id="est-equipe-body" class="section-collapsible">
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
       <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
@@ -1479,6 +1496,7 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
+    </div>
   </div>
   ${(partoProximo.length||qualifParados.length||esfriando.length)?`
   <div class="est-section">
@@ -2093,6 +2111,15 @@ window.toggleMetaModule = function() {
   if (btn) btn.textContent = collapsed ? '▸' : '▾';
 };
 
+window.toggleSection=function(id, btn){
+  const el=document.getElementById(id);
+  if(!el)return;
+  const collapsed=el.classList.toggle('collapsed');
+  // btn can be element or string id
+  const b=typeof btn==='string'?document.getElementById(btn):btn;
+  if(b)b.textContent=collapsed?'▸':'▾';
+};
+
 window.trocarPlano=function(id){
   planoSelecionado=planosAtivos.find(x=>x.id===id)||null;
   renderPlanejamento();
@@ -2189,7 +2216,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fua-dias{font-size:.65rem;font-weight:700;color:#4F6EF7;background:rgba(79,110,247,.12);border-radius:4px;padding:.1rem .35rem;white-space:nowrap}
 .fua-data{font-size:.68rem;color:#6B7280}
 /* FU STAGE KANBAN */
-.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
+.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
@@ -2198,15 +2225,19 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
-.fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
+.fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px;}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
-.fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
-.fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F}
+.fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:visible;display:flex;flex-direction:column}
+.fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F;border-radius:10px 10px 0 0;}
 .fu-stage-title{font-size:.75rem;font-weight:700;color:#4F6EF7;flex:1}
 .fu-stage-count{font-size:.65rem;font-weight:700;background:rgba(79,110,247,.15);color:#4F6EF7;border-radius:999px;padding:.1rem .45rem}
 .fu-stage-late{font-size:.65rem;font-weight:700;color:#EF4444}
 .fu-stage-empty{font-size:.75rem;color:#2A2F45;text-align:center;padding:1rem .5rem;font-style:italic}
-.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;height:340px;overflow-y:scroll;scrollbar-width:auto;scrollbar-color:#2A2F45 #13161F}
+.fu-stage-body::-webkit-scrollbar{width:4px;}
+.fu-stage-body::-webkit-scrollbar-track{background:transparent;}
+.fu-stage-body::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:4px;}
+.fu-stage-body::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;}
 /* FU CARD */
 .fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.8rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
 .fu-card2:hover{border-color:#4F6EF7;transform:translateY(-1px)}
@@ -2530,7 +2561,13 @@ body.light-theme .modal-title{color:#1A1D2E}
 body.light-theme .modal-close{color:#8B92A8}
 body.light-theme .modal-foot{background:#FFFFFF;border-top-color:#E2E5EE}
 body.light-theme .f-label{color:#8B92A8}
-body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea,body.light-theme .f-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .f-select option,body.light-theme select option{background:#ffffff;color:#1A1D2E}
+body.light-theme .modal-box{background:#ffffff;color:#1A1D2E}
+body.light-theme .modal-head{background:#ffffff;border-bottom-color:#E2E5EE}
+body.light-theme .modal-title{color:#1A1D2E}
+body.light-theme .f-label{color:#4B5563}
+body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563}
 body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
 body.light-theme .qn-btn:hover{background:#EDEFF5}
 body.light-theme #progress-container{background:#F8F9FC;border-color:#E2E5EE}
@@ -2738,6 +2775,39 @@ body.light-theme .msg-tab-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5
 body.light-theme .msg-tab-btn.active{background:#4F6EF7;color:#fff;}
 body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
 
+
+/* ── Scrollbar global — mais larga e visível ── */
+::-webkit-scrollbar{width:8px;height:8px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
+::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+* { scrollbar-width:thin; scrollbar-color:#2A2F45 transparent; }
+
+/* ── Follow-up panel scrollbar — igual ao kanban ── */
+.fu-stages::-webkit-scrollbar{width:6px;height:6px;}
+.fu-stages::-webkit-scrollbar-track{background:transparent;}
+.fu-stages::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
+.fu-stages::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+.fu-stage-col{overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;}
+.fu-stage-col::-webkit-scrollbar{width:5px;}
+.fu-stage-col::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
+.fu-stage-col::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+
+/* ── Collapse button reutilizável ── */
+.section-collapse-btn{background:none;border:none;color:#6B7280;font-size:.75rem;cursor:pointer;padding:.1rem .35rem;border-radius:5px;line-height:1;transition:color .15s;}
+.section-collapse-btn:hover{color:#F1F3F9;}
+.section-collapsible{transition:max-height .3s ease,opacity .2s ease;overflow:hidden;max-height:3000px;opacity:1;}
+.section-collapsible.collapsed{max-height:0;opacity:0;}
+
+/* ── Section header com collapse ── */
+.section-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;}
+.section-header-row .est-section-title{margin-bottom:0;}
+
+/* ── Light theme scrollbar ── */
+body.light-theme ::-webkit-scrollbar-thumb{background:#C4C9D8;}
+body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
+body.light-theme *{scrollbar-color:#C4C9D8 transparent;}
+
 </style>
 </head>
 <body>
@@ -2840,7 +2910,13 @@ body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
           <button id="filter-DESQUALIFICADO"   class="filter-btn"        onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
         </div>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:.75rem 0 .4rem">
+        <span style="font-size:.75rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em">📋 Lista de leads</span>
+        <button class="section-collapse-btn" id="btn-collapse-tabela" onclick="toggleSection('tabela-body','btn-collapse-tabela')" title="Minimizar/Maximizar">▾</button>
+      </div>
+      <div id="tabela-body" class="section-collapsible">
+        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
+      </div>
     </div>
     <div id="view-relatorios" class="hidden">
       <div class="rel-controls">
@@ -2865,7 +2941,13 @@ body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
       </div>
-      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .4rem">
+        <span style="font-size:.75rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em">📋 Lista de contatos</span>
+        <button class="section-collapse-btn" id="btn-collapse-rel-lista" onclick="toggleSection('rel-lista-body','btn-collapse-rel-lista')" title="Minimizar/Maximizar">▾</button>
+      </div>
+      <div id="rel-lista-body" class="section-collapsible collapsed">
+        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
+      </div>
     </div>
     <div id="view-estrategia" class="hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
