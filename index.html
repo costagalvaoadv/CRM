@@ -971,16 +971,19 @@ window.fecharListaLeads = () => document.getElementById('modal-lead-list').style
 
 // Abrir lista a partir dos cards de métricas do dashboard (filtra pelo mês atual)
 window.abrirMetricaLeads = function(status) {
-  const now = new Date();
-  const m = now.getMonth(), y = now.getFullYear();
+  const {ini,fim} = getDateRange(dashPeriodo, dashDataIni, dashDataFim);
+  const periodoLabel = {
+    'mes-atual':'Mês Atual','mes-anterior':'Mês Anterior',
+    '3-meses':'Últimos 3 Meses','6-meses':'Últimos 6 Meses','especifica':'Período Selecionado'
+  }[dashPeriodo]||'Período';
   let leads = allLeads.filter(l => {
     const d = l.createdAt?.toDate?.();
-    return d && d.getMonth() === m && d.getFullYear() === y;
+    return d && d >= ini && d <= fim;
   });
-  let titulo = 'Leads no Mês';
+  let titulo = `Todos os Leads — ${periodoLabel}`;
   if (status !== 'TODOS') {
     leads = leads.filter(l => l.status === status);
-    titulo = STATUS_META[status]?.label || status;
+    titulo = `${STATUS_META[status]?.label || status} — ${periodoLabel}`;
   }
   abrirListaLeads(leads.map(l => l.id), titulo);
 };
@@ -1487,6 +1490,9 @@ window.renderEstrategia=function(){
   const qualif=qualifLeads.length;
   const contratos=contratosLeads.length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
+  const podmVirar=mesLeads.filter(l=>['EM ANDAMENTO','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status));
+  // Store for clickable alerts
+  window._estAlerts={partoProximo,qualifParados,esfriando,fuAtrasados,mesLeads,qualifLeads,contratosLeads,podmVirar};
   const taxaConv=qualif?Math.round(contratos/qualif*100):0;
   const campStats={};
   mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
@@ -1503,10 +1509,10 @@ window.renderEstrategia=function(){
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     <div class="est-alerts-grid">
-      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" onclick="${partoProximo.length?`abrirListaLeads(${JSON.stringify(partoProximo.map(l=>l.id)).replace(/\"/g,'&quot;')},'SM com parto em até 60 dias')`:''}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
-      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" onclick="${qualifParados.length?`abrirListaLeads(${JSON.stringify(qualifParados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados parados +7 dias')`:''}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
-      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" onclick="${esfriando.length?`abrirListaLeads(${JSON.stringify(esfriando.map(l=>l.id)).replace(/\"/g,'&quot;')},'Esfriando +15 dias sem contato')`:''}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
-      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" onclick="${fuAtrasados.length?`abrirListaLeads(${JSON.stringify(fuAtrasados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Follow-ups em atraso')`:''}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
+      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" style="${partoProximo.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('partoProximo')"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
+      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" style="${qualifParados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('qualifParados')"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
+      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" style="${esfriando.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('esfriando')"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
+      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" style="${fuAtrasados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('fuAtrasados')"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
     </div>
   </div>
   <div class="est-section">
@@ -1520,7 +1526,7 @@ window.renderEstrategia=function(){
       <div class="est-pipe-arrow">→</div>
       <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
-    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
+    <div class="est-insight" style="cursor:pointer" onclick="abrirAlertaEstrategia('podmVirar')">💡 <span style="color:#F5A623;font-weight:800;font-size:1rem">${podmVirar.length}</span> <strong>leads</strong> ainda podem virar contrato neste período — <span style="color:#4F6EF7;text-decoration:underline;font-size:.78rem">clique para ver</span></div>
   </div>
   <div class="est-section">
     <div class="section-header-row"><div class="est-section-title">📢 Eficiência por Campanha</div><button class="section-collapse-btn" onclick="toggleSection('est-efic-body',this)" title="Minimizar/Maximizar">▾</button></div>
@@ -2262,10 +2268,20 @@ window.renderFinanceiro=function(){
       <div class="fin-kpi-label">ROI estimado</div>
       <div class="fin-kpi-sub">${investTotal>0?'vs. R$'+investTotal.toLocaleString('pt-BR'):'Configure o investimento no plano'}</div>
     </div>
-    <div class="fin-kpi">
-      <div class="fin-kpi-val" style="color:#8B5CF6">R$${contratos.length>0?(totalHonor/contratos.length).toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0}):'—'}</div>
-      <div class="fin-kpi-label">Ticket médio</div>
-      <div class="fin-kpi-sub">Por contrato fechado</div>
+    <div class="fin-kpi clickable" onclick="abrirAlertaEstrategia('contratosAll')" title="Ver contratos por tipo" style="cursor:pointer">
+      <div style="display:flex;justify-content:center;gap:1rem;align-items:baseline">
+        <div>
+          <div class="fin-kpi-val" style="color:#4F6EF7;font-size:1.1rem">${contratos.filter(l=>l.tipo==='SM').length}</div>
+          <div style="font-size:.6rem;color:#6B7280;margin-top:.15rem">SM</div>
+        </div>
+        <div style="color:#2A2F45;font-size:.9rem">/</div>
+        <div>
+          <div class="fin-kpi-val" style="color:#10B981;font-size:1.1rem">${contratos.filter(l=>l.tipo!=='SM').length}</div>
+          <div style="font-size:.6rem;color:#6B7280;margin-top:.15rem">Outros</div>
+        </div>
+      </div>
+      <div class="fin-kpi-label">Contratos por Tipo</div>
+      <div class="fin-kpi-sub">SM / Outros benefícios</div>
     </div>
   </div>
 
@@ -2327,6 +2343,27 @@ window.simularROI=function(){
   if(el_c)el_c.textContent=contratos;
   if(el_h)el_h.textContent='R$'+honor.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0});
   if(el_r){el_r.textContent=roi.toFixed(0)+'%';el_r.style.color=roi>=200?'#10B981':roi>=100?'#F5A623':'#EF4444';}
+};
+
+window.abrirAlertaEstrategia = function(tipo) {
+  const a = window._estAlerts || {};
+  const mapa = {
+    partoProximo:  { leads: a.partoProximo,    titulo: 'SM com parto em até 60 dias' },
+    qualifParados: { leads: a.qualifParados,   titulo: 'Qualificados parados +7 dias' },
+    esfriando:     { leads: a.esfriando,       titulo: 'Leads esfriando (+15 dias sem contato)' },
+    fuAtrasados:   { leads: a.fuAtrasados,     titulo: 'Follow-ups em atraso' },
+    mesLeads:      { leads: a.mesLeads,        titulo: 'Leads do período' },
+    qualifLeads:   { leads: a.qualifLeads,     titulo: 'Qualificados do período' },
+    contratosLeads:{ leads: a.contratosLeads,  titulo: 'Contratos fechados no período' },
+    podmVirar:     { leads: a.podmVirar,       titulo: 'Leads que podem virar contrato' },
+    contratosAll:  { leads: a.contratosLeads,  titulo: 'Contratos fechados — por tipo' },
+  };
+  const item = mapa[tipo];
+  if (!item || !item.leads || item.leads.length === 0) {
+    showToast('Nenhum lead nesta categoria');
+    return;
+  }
+  abrirListaLeads(item.leads.map(l => l.id), item.titulo);
 };
 
 window.toggleMetaModule = function() {
