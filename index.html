@@ -1423,14 +1423,14 @@ window.imprimirRelatorio=()=>window.print();
 window.renderEstrategia=function(){
   const now=new Date();
   const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
-  const{ini,fim:fimPer}=getDateRange(estPeriodo,estDataIni,estDataFim);
-  // Keep ini for backward compat (used in queries below)
-  const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
+  const{ini,fim}=getDateRange(estPeriodo,estDataIni,estDataFim);
+  // fim now correctly reflects selected period
   const isG=currentUser?.role==='gestora';
   const tituloEl=document.getElementById('est-titulo');
   const subEl=document.getElementById('est-subtitulo');
   if(tituloEl) tituloEl.textContent='🎯 Painel Estratégico'+(isG?'':' — '+(currentUser?.nome||''));
-  if(subEl) subEl.textContent=isG?'Visão completa do escritório':'Visão dos seus leads';
+  const _pLabel={'mes-atual':'Mês Atual','mes-anterior':'Mês Anterior','3-meses':'Últimos 3 Meses','6-meses':'Últimos 6 Meses','especifica':'Período Específico'};
+  if(subEl) subEl.textContent=(isG?'Visão completa':'Visão dos seus leads')+' — '+(_pLabel[estPeriodo]||'Mês Atual');
 
   // Show/populate planning module for gestora
   const metaWrap=document.getElementById('meta-module-wrap');
@@ -3003,12 +3003,13 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 /* Alertas estratégicos */
 .meta-alertas{display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem;}
 .meta-alerta{display:flex;align-items:flex-start;gap:.7rem;background:#13161F;border-radius:9px;padding:.65rem .85rem;border-left:3px solid #4F6EF7;}
-.meta-alerta.alerta-red{border-left-color:#EF4444;}
-.meta-alerta.alerta-orange{border-left-color:#F5A623;}
-.meta-alerta.alerta-green{border-left-color:#10B981;}
+.meta-alerta.alerta-red{border-left-color:#EF4444;background:#1F1215;}
+.meta-alerta.alerta-orange{border-left-color:#F5A623;background:#1A160D;}
+.meta-alerta.alerta-green{border-left-color:#10B981;background:#0D1A14;}
+.meta-alerta-texto{font-size:.73rem;color:#E5E7EB !important;line-height:1.5;}
+.meta-alerta-texto strong{color:#FFFFFF !important;}
 .meta-alerta-icon{font-size:1rem;flex-shrink:0;}
-.meta-alerta-texto{font-size:.73rem;color:#C4C9D8;line-height:1.45;}
-.meta-alerta-texto strong{color:#F1F3F9;}
+/* meta-alerta-texto defined above with alerts */
 
 /* Modal planejamento */
 .modal-plan-overlay{position:fixed;inset:0;background:#000000cc;z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;}
@@ -3048,7 +3049,13 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 
 /* Light theme overrides */
 body.light-theme .meta-module{background:#fff;border-color:#E2E5EE;}
-body.light-theme .meta-kpi,body.light-theme .meta-semana,body.light-theme .meta-funil-etapa,body.light-theme .meta-grafico-box,body.light-theme .meta-alerta{background:#F4F5F8;border-color:#E2E5EE;}
+body.light-theme .meta-kpi,body.light-theme .meta-semana,body.light-theme .meta-funil-etapa,body.light-theme .meta-grafico-box{background:#F4F5F8;border-color:#E2E5EE;}
+body.light-theme .meta-alerta{background:#F8F9FC;border-color:#E2E5EE;}
+body.light-theme .meta-alerta.alerta-orange{background:#FFFBF0;}
+body.light-theme .meta-alerta.alerta-red{background:#FFF5F5;}
+body.light-theme .meta-alerta.alerta-green{background:#F0FDF4;}
+body.light-theme .meta-alerta-texto{color:#374151 !important;}
+body.light-theme .meta-alerta-texto strong{color:#111827 !important;}
 body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme .meta-funil-num{color:#1A1D2E;}
 
 
