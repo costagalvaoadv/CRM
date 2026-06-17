@@ -1142,12 +1142,15 @@ window.openLead=function(id){
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
+  // Default first contact date to today for new leads
+  if(!l) document.getElementById('f-data-contato').value=new Date().toISOString().slice(0,10);
   document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
   document.getElementById('f-tipo').value    =l?.tipo||'SM';
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
+  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):'');
   document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
   document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
   togglePartoField();
@@ -1259,13 +1262,15 @@ window.saveLead=async function(){
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
   const valorHonorarios=parseFloat(document.getElementById('f-honorarios')?.value)||null;
   const beneficioConcedido=document.getElementById('f-beneficio')?.value||null;
+  const dataContatoVal=document.getElementById('f-data-contato')?.value;
+  const dataPrimeiroContato=dataContatoVal?Timestamp.fromDate(new Date(dataContatoVal+'T12:00:00')):null;
   try{
     if(!editingLeadId){
       const trilhaDias=getTrilhaDias(tipo);
       const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
       await addDoc(collection(db,'leads'),{
         name,phone,campaign,status,tipo,assignee,currentNote:note,
-        nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,valorHonorarios,
+        nextFollowup:Timestamp.fromDate(d),dataParto,dataPrimeiroContato,etapaFollowup:0,valorHonorarios,
         followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
         log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
       });
@@ -1281,6 +1286,7 @@ window.saveLead=async function(){
       if(dataParto)upd.dataParto=dataParto;
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
       if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
+      if(dataPrimeiroContato)upd.dataPrimeiroContato=dataPrimeiroContato;
       if(partoChanged&&tipo==='SM'){
         const etapa=existing?.etapaFollowup||0;
         const trilhaDias=getTrilhaDias('SM');
@@ -4039,6 +4045,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
         <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="toggleHonorariosField()"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
+        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-data-contato" class="f-input" type="date" title="Data em que o lead chegou ou entrou em contato"/></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
         <div class="f-group" id="honorarios-row">
           <label class="f-label">💰 Valor dos Honorários (R$)</label>
