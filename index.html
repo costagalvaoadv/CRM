@@ -3644,8 +3644,8 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 .ind-card-avatar.grupo-a{background:rgba(16,185,129,.15);color:#10B981;}
 .ind-card-avatar.grupo-b{background:rgba(139,92,246,.15);color:#8B5CF6;}
 .ind-card-info{flex:1;min-width:120px;overflow:hidden;}
-.ind-card-name{font-size:.88rem;font-weight:700;color:#F1F3F9 !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;width:100%;}
-.ind-card-sub{font-size:.68rem;color:#9CA3AF;margin-top:.1rem;}
+.ind-card-name{font-size:.88rem;font-weight:700;color:#FFFFFF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;width:100%;}
+.ind-card-sub{font-size:.68rem;color:#9CA3AF;margin-top:.1rem;display:block;}
 .ind-card-badges{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;}
 .ind-badge-grupo{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
 .ind-badge-grupo.a{background:rgba(16,185,129,.15);color:#10B981;}
@@ -3700,9 +3700,11 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 /* Light theme */
 body.light-theme .ind-card{background:#fff;border-color:#E2E5EE;}
 body.light-theme .ind-card:hover{border-color:#4F6EF7;box-shadow:0 4px 16px rgba(79,110,247,.15);transform:translateY(-1px);}
-body.light-theme .ind-card-name{color:#1A1D2E !important;}
+body.light-theme .ind-card .ind-card-name{color:#111827;}
+body.light-theme .ind-card.status-recebido .ind-card-name{color:#059669;}
+body.light-theme .ind-card.status-concluido .ind-card-name{color:#6B7280;}
 body.light-theme .ind-card-sub{color:#4B5563 !important;}
-body.light-theme .ind-card-info *{color:#1A1D2E;}
+/* wildcard removed */
 body.light-theme .ind-stat{background:#fff;border-color:#E2E5EE;}
 body.light-theme .ind-msg-box,.ind-respostas{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
 body.light-theme .ind-msg-box{color:#374151 !important;}
@@ -3763,10 +3765,9 @@ body.light-theme .ind-card.status-aguardando{background:#EFF6FF;border-color:#4F
 /* Card estados visuais — borda esquerda colorida */
 .ind-card.status-pendente{border-left:4px solid #2A2F45;}
 .ind-card.status-aguardando{border-left:4px solid #4F6EF7;background:#0C0F1C;}
-.ind-card.status-aguardando .ind-card-name{color:#F1F3F9 !important;}
-.ind-card.status-pendente .ind-card-name{color:#F1F3F9 !important;}
-.ind-card.status-recebido .ind-card-name{color:#10B981 !important;}
-.ind-card.status-concluido .ind-card-name{color:#6B7280 !important;}
+.ind-card .ind-card-name{color:#FFFFFF;}
+.ind-card.status-recebido .ind-card-name{color:#10B981;}
+.ind-card.status-concluido .ind-card-name{color:#9CA3AF;}
 .ind-card.status-recebido{border-left:4px solid #10B981;background:#091510;}
 .ind-card.status-concluido{border-left:4px solid #2A2F45;opacity:.55;}
 
