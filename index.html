@@ -1602,6 +1602,11 @@ async function carregarPlanos() {
     const snap = await getDoc(doc(db, 'config', 'planos_meta'));
     if (snap.exists()) {
       planosAtivos = snap.data().planos || [];
+      // If Firestore has no plans yet, seed with default
+      if (planosAtivos.length === 0) {
+        planosAtivos = [PLAN_DEFAULT];
+        await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
+      }
     } else {
       // First time: save default plan
       planosAtivos = [PLAN_DEFAULT];
@@ -1611,8 +1616,9 @@ async function carregarPlanos() {
       planoSelecionado = planosAtivos[0];
     }
   } catch(e) {
-    planosAtivos = [PLAN_DEFAULT];
-    planoSelecionado = PLAN_DEFAULT;
+    console.error('Erro ao carregar planos:', e);
+    if (planosAtivos.length === 0) planosAtivos = [PLAN_DEFAULT];
+    if (!planoSelecionado) planoSelecionado = planosAtivos[0];
   }
 }
 
@@ -2106,7 +2112,10 @@ function desenharGraficos(p, c) {
 
 // ── Modal: criar/editar plano ──
 window.abrirModalPlano = function(planoId) {
-  const p = planoId ? planosAtivos.find(x=>x.id===planoId) : null;
+  // Remove any existing modal first
+  document.getElementById('modal-plan')?.remove();
+  // Find plan: check planosAtivos first, then fall back to planoSelecionado itself
+  let p = planoId ? (planosAtivos.find(x=>x.id===planoId) || (planoSelecionado?.id===planoId ? planoSelecionado : null)) : null;
   const isEdit = !!p;
   const camps = (p?.campanhas || campanhasDinamicas).join(', ');
 
@@ -2199,8 +2208,22 @@ window.salvarPlanoForm = async function(idExistente) {
   planoSelecionado = novoPlan;
   await salvarPlanos();
   document.getElementById('modal-plan')?.remove();
+  // Update select dropdown with all plans
+  const sel = document.getElementById('select-plano');
+  if (sel) {
+    sel.innerHTML = planosAtivos.map(p =>
+      `<option value="${p.id}" ${p.id===novoPlan.id?'selected':''}>${p.nome}</option>`
+    ).join('');
+  }
+  // Update badge
+  const badge = document.getElementById('meta-badge-status');
+  if (badge) {
+    const now2=new Date(); const fim2=new Date(novoPlan.fim+'T23:59:59');
+    badge.textContent = now2<=fim2?'ATIVA':'ENCERRADA';
+    badge.className = now2<=fim2?'meta-badge-ativa':'meta-badge-atrasada';
+  }
   renderPlanejamento();
-  showToast('Planejamento salvo!');
+  showToast('✅ Planejamento salvo!');
 };
 
 window.excluirPlano = async function(id) {
@@ -2442,7 +2465,11 @@ window.toggleSection=function(id, btn){
 
 window.trocarPlano=function(id){
   planoSelecionado=planosAtivos.find(x=>x.id===id)||null;
+  if(!planoSelecionado&&planosAtivos.length>0)planoSelecionado=planosAtivos[0];
   renderPlanejamento();
+  // Also refresh financial panel if visible
+  const finWrap=document.getElementById('fin-panel-wrap');
+  if(finWrap&&finWrap.style.display!=='none')renderFinanceiro();
 };
 
 window.switchTab=function(tab){
