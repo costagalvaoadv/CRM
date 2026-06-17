@@ -1149,6 +1149,7 @@ window.openLead=function(id){
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
   document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
+  document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
   togglePartoField();
   toggleHonorariosField();
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
@@ -1252,6 +1253,7 @@ window.saveLead=async function(){
   const partoVal=document.getElementById('f-parto').value;
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
   const valorHonorarios=parseFloat(document.getElementById('f-honorarios')?.value)||null;
+  const beneficioConcedido=document.getElementById('f-beneficio')?.value||null;
   try{
     if(!editingLeadId){
       const trilhaDias=getTrilhaDias(tipo);
@@ -1272,6 +1274,7 @@ window.saveLead=async function(){
       if(note)upd.currentNote=note;
       if(dataParto)upd.dataParto=dataParto;
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
+      if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
       if(partoChanged&&tipo==='SM'){
         const etapa=existing?.etapaFollowup||0;
         const trilhaDias=getTrilhaDias('SM');
@@ -2291,7 +2294,10 @@ window.calcHonorarios=function(){
 window.toggleHonorariosField=function(){
   const status=document.getElementById('f-status')?.value;
   const row=document.getElementById('honorarios-row');
-  if(row)row.style.display=status==='CONTRATO FECHADO'?'flex':'none';
+  const rowB=document.getElementById('beneficio-row');
+  const isClosed=status==='CONTRATO FECHADO';
+  if(row)row.style.display=isClosed?'flex':'none';
+  if(rowB)rowB.style.display=isClosed?'flex':'none';
   calcHonorarios();
 };
 
@@ -2455,6 +2461,308 @@ window.toggleMetaModule = function() {
   if (btn) btn.textContent = collapsed ? '▸' : '▾';
 };
 
+
+// ═══════════════════════════════════════════════════════
+// MÓDULO OPERAÇÃO DE INDICAÇÃO ATIVA
+// ═══════════════════════════════════════════════════════
+
+const GOOGLE_REVIEW_URL = 'https://g.page/r/Cdbsuq49wWMlEBM/review';
+let indFiltroAtivo = 'todos';
+
+// ── Classificar lead em grupo A ou B ──
+function classifIndGrupo(l) {
+  // Grupo A: benefício já concedido OU parto já passou (mais de 30 dias)
+  if (l.beneficioConcedido === 'sim') return 'A';
+  if (l.dataParto) {
+    const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
+    const dias = Math.floor((new Date() - p) / (1000*60*60*24));
+    if (dias > 30) return 'A'; // parto passado há mais de 30 dias
+  }
+  if (!l.dataParto && l.tipo !== 'SM') return 'A'; // sem parto (outros benefícios) → A
+  return 'B'; // ainda grávida aguardando
+}
+
+// ── Cadência por grupo ──
+const IND_CADENCIA = {
+  A: [
+    { dia: 1,  fase: 'Google',    label: 'D+1',  objetivo: 'Avaliação Google' },
+    { dia: 5,  fase: 'Indicacao', label: 'D+5',  objetivo: 'Pedido de indicação' },
+    { dia: 12, fase: 'Reforco',   label: 'D+12', objetivo: 'Reforço indicação' },
+  ],
+  B: [
+    { dia: 1,  fase: 'Google',    label: 'D+1',  objetivo: 'Avaliação Google (agora)' },
+    { dia: 0,  fase: 'PosNasc',   label: 'Pós-nascimento', objetivo: 'Indicação após concessão' },
+  ]
+};
+
+// ── Mensagens por fase ──
+function getMsgIndicacao(l, fase, tentativa) {
+  const nome = (l.name||'').split(' ')[0] || 'você';
+  const beneficio = l.tipo === 'SM' ? 'salário-maternidade' : 'benefício previdenciário';
+  const msgs = {
+    Google: {
+      wpp: `💙 ${nome}, a sua experiência pode ajudar outras pessoas!
+
+Muitas mulheres deixam de buscar o ${beneficio} por medo de ser tudo online, de não conhecer o escritório pessoalmente ou por acharem que não têm direito. Por isso, peço que me ajude com a sua avaliação.
+
+Se você puder, ao fazer sua avaliação, inclua um comentário contando:
+• Que o atendimento foi 100% online, mesmo você estando em outro Estado, e mesmo sem nos conhecer deu tudo certo
+• Que conseguimos o ${beneficio} para você${l.tipo==='SM'?' e seu bebê':''}
+• O que achou do nosso atendimento
+
+👉 A avaliação leva menos de 1 minuto:
+${GOOGLE_REVIEW_URL}
+
+Sua avaliação ajuda outras pessoas a não desistirem de um direito que é delas 🌸`,
+      crm: `D+1 Operação Indicação: enviada mensagem de solicitação de avaliação Google Meu Negócio. Aguardando retorno.`,
+      comoResponder: [
+        { trigger: 'Avaliou', resp: 'Agradecer com mensagem calorosa. Após 3 dias enviar mensagem de indicação (D+5).' },
+        { trigger: 'Disse que vai avaliar', resp: 'Confirmar que está aguardando. Reforçar após 2 dias se não aparecer.' },
+        { trigger: 'Não respondeu', resp: 'Aguardar até D+5 e reforçar junto com o pedido de indicação.' },
+        { trigger: 'Pediu o link de novo', resp: `Reenviar: ${GOOGLE_REVIEW_URL}` },
+      ]
+    },
+    Indicacao: {
+      wpp: `${nome}, oi! 😊
+
+Passei aqui para te agradecer mais uma vez por ter confiado no nosso trabalho${l.tipo==='SM'?' para garantir o salário-maternidade da sua família':` para conseguir seu ${beneficio}`}.
+
+Se você conhece alguma ${l.tipo==='SM'?'mãe ou gestante':'pessoa'} que pode precisar de ajuda com algum benefício previdenciário, pode indicar para mim? Atendo com o mesmo cuidado que tive com você — 100% online, sem burocracia.
+
+É só me passar o contato ou pedir para ela me chamar diretamente. Você me ajuda muito com isso! 💙`,
+      crm: `D+5 Operação Indicação: enviada mensagem de pedido de indicação ativa. Aguardando retorno.`,
+      comoResponder: [
+        { trigger: 'Indicou alguém', resp: 'Agradecer imediatamente. Registrar o lead indicado e abrir atendimento com urgência. Informar a cliente quando o processo avançar.' },
+        { trigger: 'Disse que vai pensar', resp: 'Agradecer a boa vontade. Não insistir. Retornar em D+12 com mensagem de reforço leve.' },
+        { trigger: 'Não conhece ninguém', resp: 'Agradecer pela honestidade. Encerrar ciclo de indicação mantendo vínculo.' },
+        { trigger: 'Não respondeu', resp: 'Aguardar até D+12 para tentativa final.' },
+      ]
+    },
+    Reforco: {
+      wpp: `${nome}, oi! Passando para saber se você conseguiu pensar em alguém que eu possa ajudar com algum benefício previdenciário 😊 Não precisa ser agora — sempre que lembrar de alguém, pode me mandar o contato. Fico muito grata pela indicação! 💙`,
+      crm: `D+12 Operação Indicação: enviada mensagem de reforço final. Após esta tentativa, encerrar ciclo de indicação.`,
+      comoResponder: [
+        { trigger: 'Indicou', resp: 'Agradecer e abrir atendimento imediatamente para o lead indicado.' },
+        { trigger: 'Não respondeu ou não tem indicação', resp: 'Encerrar o ciclo. Registrar como "concluído sem indicação". Manter vínculo para futuro.' },
+      ]
+    },
+    PosNasc: {
+      wpp: `${nome}, oi! 🍼 Passando para parabenizar pelo nascimento${l.tipo==='SM'?' do bebê':''} e para saber como vocês estão!
+
+Agora que o benefício foi concedido, se você conhecer alguma ${l.tipo==='SM'?'mãe ou gestante':'pessoa'} que pode ter direito a algum benefício previdenciário, pode me indicar? Seu relato vai dar mais segurança para quem ainda tem dúvida de confiar num atendimento online 💙`,
+      crm: `Pós-nascimento Operação Indicação: enviada mensagem de felicitações e pedido de indicação. Aguardando retorno.`,
+      comoResponder: [
+        { trigger: 'Indicou alguém', resp: 'Agradecer e abrir atendimento com urgência para o lead indicado.' },
+        { trigger: 'Ainda aguardando concessão', resp: 'Registrar. Aguardar concessão e retornar.' },
+        { trigger: 'Não respondeu', resp: 'Tentar novamente em 7 dias. Após 2 tentativas, encerrar ciclo.' },
+      ]
+    }
+  };
+  return msgs[fase] || msgs.Indicacao;
+}
+
+// ── Status da operação de indicação ──
+function getIndStatus(l) {
+  const hist = l.indHistorico || [];
+  if (hist.some(h => h.resultado === 'indicacao_recebida')) return 'recebido';
+  if (hist.some(h => h.resultado === 'concluido')) return 'concluido';
+  if (hist.length > 0) return 'aguardando';
+  return 'pendente';
+}
+
+function getIndFaseAtual(l) {
+  const grupo = classifIndGrupo(l);
+  const cadencia = IND_CADENCIA[grupo];
+  const hist = l.indHistorico || [];
+  const feitasOk = hist.filter(h => h.enviado).length;
+  return Math.min(feitasOk, cadencia.length - 1);
+}
+
+// ── Main render ──
+window.renderIndicacao = function() {
+  if (currentTab !== 'indicacao') return;
+  const lista = document.getElementById('ind-lista');
+  const statsEl = document.getElementById('ind-stats-bar');
+  if (!lista) return;
+
+  // Todos os contratos fechados
+  let leads = allLeads.filter(l => l.status === 'CONTRATO FECHADO');
+
+  // Stats
+  const grpA = leads.filter(l => classifIndGrupo(l) === 'A');
+  const grpB = leads.filter(l => classifIndGrupo(l) === 'B');
+  const pendentes = leads.filter(l => getIndStatus(l) === 'pendente');
+  const recebidos = leads.filter(l => getIndStatus(l) === 'recebido');
+
+  if (statsEl) statsEl.innerHTML = `
+    <div class="ind-stat"><div class="ind-stat-val" style="color:#4F6EF7">${leads.length}</div><div class="ind-stat-label">Total contratos</div></div>
+    <div class="ind-stat"><div class="ind-stat-val" style="color:#10B981">${grpA.length}</div><div class="ind-stat-label">Grupo A — Indicação</div></div>
+    <div class="ind-stat"><div class="ind-stat-val" style="color:#8B5CF6">${grpB.length}</div><div class="ind-stat-label">Grupo B — Aguardando</div></div>
+    <div class="ind-stat"><div class="ind-stat-val" style="color:#F5A623">${recebidos.length}</div><div class="ind-stat-label">Indicações recebidas</div></div>
+  `;
+
+  // Filter
+  if (indFiltroAtivo === 'A') leads = grpA;
+  else if (indFiltroAtivo === 'B') leads = grpB;
+  else if (indFiltroAtivo === 'pendente') leads = pendentes;
+  else if (indFiltroAtivo === 'concluido') leads = leads.filter(l => getIndStatus(l) === 'concluido');
+
+  if (leads.length === 0) {
+    lista.innerHTML = '<div style="text-align:center;color:#6B7280;padding:2rem;font-size:.85rem">Nenhum lead nesta categoria</div>';
+    return;
+  }
+
+  lista.innerHTML = leads.map(l => renderIndCard(l)).join('');
+};
+
+function renderIndCard(l) {
+  const grupo = classifIndGrupo(l);
+  const status = getIndStatus(l);
+  const faseIdx = getIndFaseAtual(l);
+  const cadencia = IND_CADENCIA[grupo];
+  const faseAtual = cadencia[faseIdx];
+  const hist = l.indHistorico || [];
+
+  const statusLabel = {pendente:'Pendente',aguardando:'Aguardando resp.',recebido:'Indicação recebida',concluido:'Concluído'}[status]||status;
+  const msg = getMsgIndicacao(l, faseAtual?.fase || 'Indicacao', faseIdx + 1);
+
+  const tentativasHTML = cadencia.map((t, i) => {
+    const feita = hist[i]?.enviado;
+    const atual = i === faseIdx && status !== 'concluido';
+    const dataStr = hist[i]?.data ? new Date(hist[i].data).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'}) : '';
+    return `<div class="ind-tent">
+      <div class="ind-tent-num ${feita?'feita':atual?'atual':''}">${feita?'✓':i+1}</div>
+      <div class="ind-tent-label">${t.label}</div>
+      <div class="ind-tent-label" style="color:#6B7280;font-size:.58rem">${t.objetivo}</div>
+      ${dataStr?`<div class="ind-tent-data">${dataStr}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const respostasHTML = (msg.comoResponder||[]).map(r =>
+    `<div class="ind-resp-item"><span class="ind-resp-trigger">↳ ${r.trigger}:</span> ${r.resp}</div>`
+  ).join('');
+
+  const wa = formatPhone ? formatPhone(l.phone) : (l.phone||'').replace(/\D/g,'');
+
+  return `<div class="ind-card" id="ind-card-${l.id}">
+    <div class="ind-card-header" onclick="toggleIndCard('${l.id}')">
+      <div class="ind-card-avatar grupo-${grupo.toLowerCase()}">${grupo}</div>
+      <div class="ind-card-info">
+        <div class="ind-card-name">${l.name||'Sem Nome'}</div>
+        <div class="ind-card-sub">${l.assignee||'—'} · ${l.campaign||'—'} · ${l.tipo||'—'}</div>
+      </div>
+      <div class="ind-card-badges">
+        <span class="ind-badge-grupo ${grupo.toLowerCase()}">Grupo ${grupo}</span>
+        <span class="ind-badge-fase">${faseAtual?.objetivo||'—'}</span>
+        <span class="ind-badge-status ${status}">${statusLabel}</span>
+      </div>
+      <span class="ind-card-toggle" id="ind-toggle-${l.id}">▾</span>
+    </div>
+    <div class="ind-card-body" id="ind-body-${l.id}">
+      <!-- Cadência -->
+      <div style="font-size:.67rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem">Cadência de contatos</div>
+      <div class="ind-cadencia">${tentativasHTML}</div>
+      <!-- Tabs mensagem -->
+      <div class="ind-msg-tabs">
+        <button class="ind-msg-tab active" id="ind-tab-wpp-${l.id}" onclick="indAtivarTab('${l.id}','wpp')">💬 WhatsApp</button>
+        <button class="ind-msg-tab" id="ind-tab-crm-${l.id}" onclick="indAtivarTab('${l.id}','crm')">📝 Registro CRM</button>
+      </div>
+      <div class="ind-msg-box wpp" id="ind-msg-wpp-${l.id}">${msg.wpp}</div>
+      <div class="ind-msg-box crm" id="ind-msg-crm-${l.id}" style="display:none">${msg.crm}</div>
+      <!-- Como responder -->
+      <div class="ind-respostas">
+        <div class="ind-resp-title">💡 Como responder</div>
+        ${respostasHTML}
+      </div>
+      <!-- Ações -->
+      <div class="ind-acoes">
+        <button class="ind-btn-feito" onclick="marcarIndFeito('${l.id}','enviado')">✓ Mensagem enviada</button>
+        <button class="ind-btn-copy" onclick="copiarIndMsg('${l.id}')">📋 Copiar mensagem</button>
+        ${wa?`<a href="https://wa.me/${wa}?text=${encodeURIComponent(msg.wpp)}" target="_blank" class="ind-btn-indicacao" style="text-decoration:none;display:inline-flex;align-items:center">WhatsApp ↗</a>`:''}
+        <button class="ind-btn-indicacao" onclick="marcarIndFeito('${l.id}','indicacao_recebida')" style="background:#10B981">🎉 Indicação recebida!</button>
+        <button class="ind-btn-pular" onclick="marcarIndFeito('${l.id}','concluido')">Encerrar ciclo</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Toggle card expand ──
+window.toggleIndCard = function(id) {
+  const body = document.getElementById('ind-body-'+id);
+  const toggle = document.getElementById('ind-toggle-'+id);
+  if (!body) return;
+  const open = body.classList.toggle('open');
+  if (toggle) toggle.classList.toggle('open', open);
+};
+
+// ── Tab toggle msg ──
+window.indAtivarTab = function(id, aba) {
+  const wpp = document.getElementById('ind-msg-wpp-'+id);
+  const crm = document.getElementById('ind-msg-crm-'+id);
+  const btnW = document.getElementById('ind-tab-wpp-'+id);
+  const btnC = document.getElementById('ind-tab-crm-'+id);
+  if (wpp) wpp.style.display = aba==='wpp'?'block':'none';
+  if (crm) crm.style.display = aba==='crm'?'block':'none';
+  if (btnW) btnW.classList.toggle('active', aba==='wpp');
+  if (btnC) btnC.classList.toggle('active', aba==='crm');
+};
+
+// ── Copiar mensagem ativa ──
+window.copiarIndMsg = function(id) {
+  const wpp = document.getElementById('ind-msg-wpp-'+id);
+  const crm = document.getElementById('ind-msg-crm-'+id);
+  const txt = (wpp?.style.display!=='none' ? wpp?.textContent : crm?.textContent)||'';
+  navigator.clipboard.writeText(txt).then(()=>showToast('✅ Mensagem copiada!'));
+};
+
+// ── Marcar ação e avançar cadência ──
+window.marcarIndFeito = async function(id, resultado) {
+  const l = allLeads.find(x=>x.id===id);
+  if (!l) return;
+  const hist = [...(l.indHistorico||[])];
+  const faseIdx = getIndFaseAtual(l);
+  const grupo = classifIndGrupo(l);
+  const cadencia = IND_CADENCIA[grupo];
+  const fase = cadencia[faseIdx];
+
+  // Record this attempt
+  if (hist[faseIdx]) hist[faseIdx] = {...hist[faseIdx], enviado:true, resultado, data: new Date().toISOString()};
+  else hist.push({fase:fase?.fase, enviado:true, resultado, data: new Date().toISOString()});
+
+  // Also log in lead's main log
+  const logEntry = {
+    user: currentUser?.nome||'Sistema',
+    note: `Operação Indicação — ${fase?.objetivo||'contato'}: ${resultado==='enviado'?'mensagem enviada':resultado==='indicacao_recebida'?'🎉 indicação recebida!':'ciclo encerrado'}`,
+    ts: new Date().toISOString(),
+    statusChange: null
+  };
+
+  try {
+    await updateDoc(doc(db,'leads',id), {
+      indHistorico: hist,
+      log: arrayUnion(logEntry),
+      lastContact: serverTimestamp()
+    });
+    showToast(resultado==='indicacao_recebida'?'🎉 Indicação registrada!':resultado==='concluido'?'Ciclo encerrado':'✅ Registrado!');
+    if (resultado==='indicacao_recebida') {
+      // Show prompt to open new lead
+      setTimeout(()=>{
+        if(confirm('Deseja abrir um novo lead para o indicado?')) openLead(null);
+      }, 500);
+    }
+  } catch(e) {
+    showToast('Erro ao salvar. Tente novamente.');
+  }
+};
+
+// ── Filter ──
+window.setIndFiltro = function(filtro, btn) {
+  indFiltroAtivo = filtro;
+  document.querySelectorAll('.ind-filter-btn').forEach(b=>b.classList.remove('ind-filter-active'));
+  if(btn) btn.classList.add('ind-filter-active');
+  renderIndicacao();
+};
+
 window.toggleSection=function(id, btn){
   const el=document.getElementById(id);
   if(!el)return;
@@ -2475,12 +2783,14 @@ window.trocarPlano=function(id){
 
 window.switchTab=function(tab){
   currentTab=tab;
-  ['kanban','table','equipe','relatorios','estrategia'].forEach(t=>{
+  window.scrollTo({top:0,behavior:'smooth'});
+  ['kanban','table','equipe','relatorios','estrategia','indicacao'].forEach(t=>{
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
   if(tab==='relatorios')setTimeout(renderRelatorios,100);
   else if(tab==='estrategia')setTimeout(renderEstrategia,100);
+  else if(tab==='indicacao')setTimeout(renderIndicacao,100);
   else renderAll();
 };
 window.setFilter=function(s){filterStatus=s;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));document.getElementById('filter-'+s)?.classList.add('active');renderTable();};
@@ -3240,6 +3550,87 @@ body.light-theme .modal-camp-input{background:#F4F5F8;border-color:#E2E5EE;color
 body.light-theme .modal-camp-item{background:#F4F5F8;border-color:#E2E5EE;}
 body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 
+
+/* ═══ MÓDULO INDICAÇÃO ATIVA ═══ */
+.ind-filter-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.72rem;padding:.3rem .75rem;border-radius:7px;cursor:pointer;transition:all .15s;white-space:nowrap;}
+.ind-filter-btn:hover{background:#2A2F45;color:#F1F3F9;}
+.ind-filter-active{background:#4F6EF7 !important;border-color:#4F6EF7 !important;color:#fff !important;font-weight:600;}
+.ind-grupo-badge{font-size:.7rem;font-weight:600;padding:.3rem .75rem;border-radius:20px;}
+.ind-badge-a{background:rgba(16,185,129,.12);color:#10B981;border:1px solid rgba(16,185,129,.25);}
+.ind-badge-b{background:rgba(139,92,246,.12);color:#8B5CF6;border:1px solid rgba(139,92,246,.25);}
+.ind-stats-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;}
+@media(max-width:600px){.ind-stats-bar{grid-template-columns:1fr 1fr;}}
+.ind-stat{background:#0F1420;border:1px solid #1E2235;border-radius:10px;padding:.7rem 1rem;text-align:center;}
+.ind-stat-val{font-size:1.4rem;font-weight:800;}
+.ind-stat-label{font-size:.64rem;color:#6B7280;margin-top:.2rem;}
+
+/* Card de indicação */
+.ind-card{background:#0F1420;border:1px solid #1E2235;border-radius:12px;overflow:hidden;transition:border-color .15s;}
+.ind-card:hover{border-color:#2A2F45;}
+.ind-card-header{display:flex;align-items:center;gap:.85rem;padding:.85rem 1.1rem;cursor:pointer;}
+.ind-card-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:800;flex-shrink:0;}
+.ind-card-avatar.grupo-a{background:rgba(16,185,129,.15);color:#10B981;}
+.ind-card-avatar.grupo-b{background:rgba(139,92,246,.15);color:#8B5CF6;}
+.ind-card-info{flex:1;min-width:0;}
+.ind-card-name{font-size:.88rem;font-weight:700;color:#F1F3F9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ind-card-sub{font-size:.68rem;color:#9CA3AF;margin-top:.1rem;}
+.ind-card-badges{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;}
+.ind-badge-grupo{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
+.ind-badge-grupo.a{background:rgba(16,185,129,.15);color:#10B981;}
+.ind-badge-grupo.b{background:rgba(139,92,246,.15);color:#8B5CF6;}
+.ind-badge-fase{font-size:.6rem;padding:.15rem .5rem;border-radius:10px;background:#1E2235;color:#9CA3AF;}
+.ind-badge-status{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
+.ind-badge-status.pendente{background:rgba(245,166,35,.15);color:#F5A623;}
+.ind-badge-status.aguardando{background:rgba(79,110,247,.15);color:#4F6EF7;}
+.ind-badge-status.recebido{background:rgba(16,185,129,.15);color:#10B981;}
+.ind-badge-status.concluido{background:rgba(107,114,128,.15);color:#6B7280;}
+.ind-card-toggle{color:#6B7280;font-size:.8rem;transition:transform .2s;}
+.ind-card-toggle.open{transform:rotate(180deg);}
+
+/* Card body — expandível */
+.ind-card-body{display:none;border-top:1px solid #1E2235;padding:1rem 1.1rem;}
+.ind-card-body.open{display:block;}
+
+/* Cadência de tentativas */
+.ind-cadencia{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;}
+.ind-tent{text-align:center;flex:1;min-width:70px;}
+.ind-tent-num{width:28px;height:28px;border-radius:50%;border:2px solid #2A2F45;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;margin:0 auto .25rem;color:#6B7280;}
+.ind-tent-num.feita{background:#10B981;border-color:#10B981;color:#fff;}
+.ind-tent-num.atual{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 3px rgba(79,110,247,.2);}
+.ind-tent-label{font-size:.6rem;color:#6B7280;}
+.ind-tent-data{font-size:.58rem;color:#9CA3AF;margin-top:.1rem;}
+
+/* Mensagem */
+.ind-msg-tabs{display:flex;gap:.4rem;margin-bottom:.6rem;}
+.ind-msg-tab{font-size:.7rem;padding:.3rem .7rem;border-radius:6px;border:1px solid #2A2F45;background:#13161F;color:#9CA3AF;cursor:pointer;}
+.ind-msg-tab.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
+.ind-msg-box{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.85rem;font-size:.8rem;color:#C4C9D8;line-height:1.65;white-space:pre-wrap;margin-bottom:.75rem;max-height:200px;overflow-y:auto;}
+.ind-msg-box.wpp{border-left:3px solid #1DAA61;}
+.ind-msg-box.crm{border-left:3px solid #4F6EF7;}
+
+/* Como responder */
+.ind-respostas{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.75rem;margin-bottom:.75rem;}
+.ind-resp-title{font-size:.67rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;}
+.ind-resp-item{display:flex;gap:.5rem;margin-bottom:.45rem;font-size:.75rem;color:#C4C9D8;line-height:1.45;}
+.ind-resp-trigger{font-weight:700;color:#F1F3F9;flex-shrink:0;}
+
+/* Ações */
+.ind-acoes{display:flex;gap:.5rem;flex-wrap:wrap;}
+.ind-btn-feito{background:#10B981;color:#fff;border:none;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;font-weight:700;cursor:pointer;}
+.ind-btn-feito:hover{background:#059669;}
+.ind-btn-copy{background:#1E2235;color:#C4C9D8;border:1px solid #2A2F45;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;cursor:pointer;}
+.ind-btn-copy:hover{background:#2A2F45;}
+.ind-btn-indicacao{background:#8B5CF6;color:#fff;border:none;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;font-weight:700;cursor:pointer;}
+.ind-btn-indicacao:hover{background:#7c3aed;}
+.ind-btn-pular{background:transparent;color:#6B7280;border:1px solid #2A2F45;border-radius:8px;padding:.45rem .75rem;font-size:.75rem;cursor:pointer;}
+.ind-btn-pular:hover{color:#9CA3AF;}
+
+/* Light theme */
+body.light-theme .ind-card{background:#fff;border-color:#E2E5EE;}
+body.light-theme .ind-stat{background:#fff;border-color:#E2E5EE;}
+body.light-theme .ind-msg-box,.ind-respostas{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
+body.light-theme .ind-msg-box{color:#374151 !important;}
+
 </style>
 </head>
 <body>
@@ -3287,6 +3678,7 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
         <button id="tab-relatorios" class="tab-btn"            onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
         <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
         <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
+        <button id="tab-indicacao"  class="tab-btn"            onclick="switchTab('indicacao')">🤝 Indicação</button>
       </div>
     </div>
     <div class="period-bar" id="dash-period-bar">
@@ -3448,6 +3840,32 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
       <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
       <div id="equipe-lista"></div>
     </div>
+    <!-- INDICAÇÃO VIEW -->
+    <div id="view-indicacao" class="hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+        <div>
+          <div style="font-size:.95rem;font-weight:700">🤝 Operação de Indicação Ativa</div>
+          <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Clientes com contrato fechado — transforme cada contrato em novas indicações</div>
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="ind-filter-btn ind-filter-active" id="ind-f-todos" onclick="setIndFiltro('todos',this)">Todos</button>
+          <button class="ind-filter-btn" id="ind-f-a" onclick="setIndFiltro('A',this)">Grupo A</button>
+          <button class="ind-filter-btn" id="ind-f-b" onclick="setIndFiltro('B',this)">Grupo B</button>
+          <button class="ind-filter-btn" id="ind-f-pendente" onclick="setIndFiltro('pendente',this)">Pendentes</button>
+          <button class="ind-filter-btn" id="ind-f-concluido" onclick="setIndFiltro('concluido',this)">Concluídos</button>
+          <button class="btn-hdr" onclick="renderIndicacao()">↻ Atualizar</button>
+        </div>
+      </div>
+      <!-- Legenda grupos -->
+      <div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap">
+        <div class="ind-grupo-badge ind-badge-a">🏆 Grupo A — Benefício já recebido → Indicação ativa</div>
+        <div class="ind-grupo-badge ind-badge-b">🌸 Grupo B — Aguardando nascimento → Avaliação Google primeiro</div>
+      </div>
+      <!-- Stats bar -->
+      <div class="ind-stats-bar" id="ind-stats-bar"></div>
+      <!-- Cards -->
+      <div id="ind-lista" style="display:flex;flex-direction:column;gap:.75rem;margin-top:1rem"></div>
+    </div>
   </main>
 </div>
 <!-- MODAL LEAD -->
@@ -3467,6 +3885,14 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
           <label class="f-label">💰 Valor dos Honorários (R$)</label>
           <input id="f-honorarios" class="f-input" type="number" placeholder="Ex: 1600" step="0.01" min="0" oninput="calcHonorarios()"/>
           <div class="honor-calc" id="honor-calc-preview"></div>
+        </div>
+        <div class="f-group" id="beneficio-row" style="display:none">
+          <label class="f-label">✅ Benefício concedido pelo INSS?</label>
+          <select id="f-beneficio" class="f-select">
+            <option value="">Aguardando concessão</option>
+            <option value="sim">Sim — benefício já concedido</option>
+            <option value="nao">Não — indeferido/cancelado</option>
+          </select>
         </div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
