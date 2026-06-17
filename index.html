@@ -2114,6 +2114,16 @@ function desenharGraficos(p, c) {
 }
 
 // ── Modal: criar/editar plano ──
+window.editarPlanoAtivo = function() {
+  // Always edit the currently selected plan
+  if (!planoSelecionado) { showToast('Nenhum plano selecionado'); return; }
+  // Ensure it's in planosAtivos
+  if (!planosAtivos.find(x=>x.id===planoSelecionado.id)) {
+    planosAtivos.unshift(planoSelecionado);
+  }
+  abrirModalPlano(planoSelecionado.id);
+};
+
 window.abrirModalPlano = function(planoId) {
   // Remove any existing modal first
   document.getElementById('modal-plan')?.remove();
@@ -2583,14 +2593,21 @@ function getIndFaseAtual(l) {
 }
 
 // ── Main render ──
+window.filtrarIndicacao = function() {
+  renderIndicacao();
+};
+
 window.renderIndicacao = function() {
   if (currentTab !== 'indicacao') return;
   const lista = document.getElementById('ind-lista');
   const statsEl = document.getElementById('ind-stats-bar');
   if (!lista) return;
+  const searchQ = normStr(document.getElementById('ind-search')?.value||'');
 
   // Todos os contratos fechados
   let leads = allLeads.filter(l => l.status === 'CONTRATO FECHADO');
+  // Apply search
+  if (searchQ) leads = leads.filter(l => normStr(l.name||'').includes(searchQ));
 
   // Stats
   const grpA = leads.filter(l => classifIndGrupo(l) === 'A');
@@ -2659,6 +2676,7 @@ function renderIndCard(l) {
         <span class="ind-badge-grupo ${grupo.toLowerCase()}">Grupo ${grupo}</span>
         <span class="ind-badge-fase">${faseAtual?.objetivo||'—'}</span>
         <span class="ind-badge-status ${status}">${statusLabel}</span>
+        <button onclick="event.stopPropagation();openLead('${l.id}')" style="background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.62rem;padding:.15rem .5rem;border-radius:5px;cursor:pointer;margin-left:.25rem;" title="Abrir ficha do lead">📋 Ver ficha</button>
       </div>
       <span class="ind-card-toggle" id="ind-toggle-${l.id}">▾</span>
     </div>
@@ -3572,14 +3590,14 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 .ind-stat-label{font-size:.64rem;color:#6B7280;margin-top:.2rem;}
 
 /* Card de indicação */
-.ind-card{background:#0F1420;border:1px solid #1E2235;border-radius:12px;overflow:hidden;transition:border-color .15s;}
-.ind-card:hover{border-color:#2A2F45;}
+.ind-card{background:#0F1420;border:1px solid #1E2235;border-radius:12px;overflow:hidden;transition:border-color .15s,box-shadow .15s,transform .15s;cursor:pointer;}
+.ind-card:hover{border-color:#4F6EF7;box-shadow:0 4px 16px rgba(79,110,247,.2);transform:translateY(-1px);}
 .ind-card-header{display:flex;align-items:center;gap:.85rem;padding:.85rem 1.1rem;cursor:pointer;}
 .ind-card-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:800;flex-shrink:0;}
 .ind-card-avatar.grupo-a{background:rgba(16,185,129,.15);color:#10B981;}
 .ind-card-avatar.grupo-b{background:rgba(139,92,246,.15);color:#8B5CF6;}
 .ind-card-info{flex:1;min-width:0;}
-.ind-card-name{font-size:.88rem;font-weight:700;color:#F1F3F9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ind-card-name{font-size:.88rem;font-weight:700;color:#F1F3F9 !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .ind-card-sub{font-size:.68rem;color:#9CA3AF;margin-top:.1rem;}
 .ind-card-badges{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;}
 .ind-badge-grupo{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
@@ -3634,6 +3652,10 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
 
 /* Light theme */
 body.light-theme .ind-card{background:#fff;border-color:#E2E5EE;}
+body.light-theme .ind-card:hover{border-color:#4F6EF7;box-shadow:0 4px 16px rgba(79,110,247,.15);transform:translateY(-1px);}
+body.light-theme .ind-card-name{color:#1A1D2E !important;}
+body.light-theme .ind-card-sub{color:#4B5563 !important;}
+body.light-theme .ind-card-info *{color:#1A1D2E;}
 body.light-theme .ind-stat{background:#fff;border-color:#E2E5EE;}
 body.light-theme .ind-msg-box,.ind-respostas{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
 body.light-theme .ind-msg-box{color:#374151 !important;}
@@ -3824,7 +3846,7 @@ body.light-theme .ind-msg-box{color:#374151 !important;}
           <div class="meta-module-actions">
             <select id="select-plano" class="fu-search-input" style="width:auto;padding:.3rem .65rem" onchange="trocarPlano(this.value)"></select>
             <button class="btn-meta btn-meta-primary" onclick="abrirModalPlano('')">+ Nova Meta</button>
-            <button class="btn-meta" onclick="abrirModalPlano(planoSelecionado&&planoSelecionado.id?planoSelecionado.id:null)">✏️ Editar</button>
+            <button class="btn-meta" onclick="editarPlanoAtivo()">✏️ Editar</button>
             <button class="btn-meta-collapse" id="meta-collapse-btn" onclick="toggleMetaModule()" title="Minimizar/Maximizar">▾</button>
           </div>
         </div>
@@ -3864,9 +3886,13 @@ body.light-theme .ind-msg-box{color:#374151 !important;}
         </div>
       </div>
       <!-- Legenda grupos -->
-      <div style="display:flex;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap">
+      <div style="display:flex;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap">
         <div class="ind-grupo-badge ind-badge-a">🏆 Grupo A — Benefício já recebido → Indicação ativa</div>
         <div class="ind-grupo-badge ind-badge-b">🌸 Grupo B — Aguardando nascimento → Avaliação Google primeiro</div>
+      </div>
+      <!-- Search bar -->
+      <div style="margin-bottom:.85rem;">
+        <input type="text" id="ind-search" class="fu-search-input" placeholder="Buscar por nome..." oninput="filtrarIndicacao()" onkeyup="filtrarIndicacao()" style="width:100%;max-width:320px;" />
       </div>
       <!-- Stats bar -->
       <div class="ind-stats-bar" id="ind-stats-bar"></div>
