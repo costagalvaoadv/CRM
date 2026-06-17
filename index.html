@@ -2114,8 +2114,9 @@ function desenharGraficos(p, c) {
 window.abrirModalPlano = function(planoId) {
   // Remove any existing modal first
   document.getElementById('modal-plan')?.remove();
-  // Find plan: check planosAtivos first, then fall back to planoSelecionado itself
-  let p = planoId ? (planosAtivos.find(x=>x.id===planoId) || (planoSelecionado?.id===planoId ? planoSelecionado : null)) : null;
+  // If no planoId passed but we have a selected plan, edit it
+  const idToEdit = planoId || (planoSelecionado?.id) || null;
+  let p = idToEdit ? (planosAtivos.find(x=>x.id===idToEdit) || (planoSelecionado?.id===idToEdit ? planoSelecionado : null)) : null;
   const isEdit = !!p;
   const camps = (p?.campanhas || campanhasDinamicas).join(', ');
 
@@ -2780,12 +2781,12 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .urgent-fu{color:#F5A623;font-weight:600}
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;display:none;align-items:center;justify-content:center;padding:1rem}
-.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:720px;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column}
+.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:720px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column}
 .modal-head{padding:1.1rem 1.4rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#13161F;z-index:2}
 .modal-title{font-size:.95rem;font-weight:700}
 .modal-close{background:none;border:none;color:#6B7280;font-size:1.2rem;cursor:pointer;transition:color .2s}
 .modal-close:hover{color:#F1F3F9}
-.modal-body{padding:1.4rem;display:flex;flex-direction:column;gap:1.1rem}
+.modal-body{padding:1.4rem 1.4rem 0 1.4rem;display:flex;flex-direction:column;gap:1.1rem;flex:1;overflow-y:auto;}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
 .f-group{display:flex;flex-direction:column;gap:.35rem}
 .f-group.full{grid-column:1/-1}
@@ -2803,7 +2804,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .progress-section{display:flex;flex-direction:column;gap:.6rem}
 .progress-section-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 #progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem}
-.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
+.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;background:#13161F;z-index:10;}
 .btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
 .btn-delete:hover{background:rgba(239,68,68,.1)}
 .btn-save{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem 1.35rem;font-size:.82rem;font-weight:700;cursor:pointer}
@@ -3424,7 +3425,7 @@ body.light-theme .modal-camp-item-name{color:#1A1D2E;}
           <div class="meta-module-actions">
             <select id="select-plano" class="fu-search-input" style="width:auto;padding:.3rem .65rem" onchange="trocarPlano(this.value)"></select>
             <button class="btn-meta btn-meta-primary" onclick="abrirModalPlano(null)">+ Nova Meta</button>
-            <button class="btn-meta" onclick="abrirModalPlano(planoSelecionado?.id)">✏️ Editar</button>
+            <button class="btn-meta" onclick="abrirModalPlano(planoSelecionado&&planoSelecionado.id?planoSelecionado.id:null)">✏️ Editar</button>
             <button class="btn-meta-collapse" id="meta-collapse-btn" onclick="toggleMetaModule()" title="Minimizar/Maximizar">▾</button>
           </div>
         </div>
