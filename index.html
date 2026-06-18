@@ -1135,6 +1135,10 @@ function renderTable(){
 
 // ─── LEAD MODAL ───
 window.openLead=function(id){
+  // Always reset save button and cancel pending timers when opening any lead
+  const btnR=document.getElementById('btn-salvar-lead');
+  if(btnR){btnR.disabled=false;btnR.textContent='Salvar';btnR.style.background='';btnR.style.borderColor='';}
+  if(window._saveTimer){clearTimeout(window._saveTimer);window._saveTimer=null;}
   const l=id==='new'?null:allLeads.find(x=>x.id===id);
   editingLeadId=id==='new'?null:id;
   activeQuickNotes.clear();
@@ -1167,7 +1171,13 @@ window.openLead=function(id){
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
-window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
+window.closeLead=()=>{
+  document.getElementById('modal-lead').style.display='none';
+  editingLeadId=null;
+  // Always reset save button state
+  const btn=document.getElementById('btn-salvar-lead');
+  if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+};
 window.togglePartoField=()=>{document.getElementById('parto-row').style.display=document.getElementById('f-tipo').value==='SM'?'flex':'none';};
 
 // ─── PROGRESS BAR ───
@@ -1248,7 +1258,8 @@ window.saveLead=async function(){
   if(btn&&btn.disabled)return;
   if(btn){btn.disabled=true;btn.textContent='Salvando...';}
   // Safety: always re-enable after 8s no matter what
-  const safetyTimer=setTimeout(()=>{
+  if(window._saveTimer)clearTimeout(window._saveTimer);
+  const safetyTimer=window._saveTimer=setTimeout(()=>{
     if(btn&&btn.disabled){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
   },8000);
   const name    =document.getElementById('f-name').value.trim()||'Sem Nome';
@@ -1274,7 +1285,7 @@ window.saveLead=async function(){
         followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
         log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
       });
-      clearTimeout(safetyTimer);
+      clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
       showToast('Lead criado! FUP 24h agendado.');
       closeLead();
     }else{
@@ -1294,7 +1305,7 @@ window.saveLead=async function(){
       }
       upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
       await updateDoc(doc(db,'leads',editingLeadId),upd);
-      clearTimeout(safetyTimer);
+      clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
       showToast('✅ Salvo!');
       if(btn){btn.textContent='✅ Salvo!';btn.style.background='#10B981';btn.style.borderColor='#10B981';}
       document.getElementById('f-note').value='';
@@ -1304,7 +1315,7 @@ window.saveLead=async function(){
       },2500);
     }
   }catch(e){
-    clearTimeout(safetyTimer);
+    clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
     console.error('saveLead error:',e);
     showToast('Erro ao salvar: '+( e?.message||'verifique sua conexão'),'error');
     if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
