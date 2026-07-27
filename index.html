@@ -296,6 +296,12 @@ function renderMetrics(){
   document.getElementById('m-agass').textContent=mo.filter(l=>l.status==='AGUARDANDO ASSINATURA').length;
   document.getElementById('m-semresp').textContent =mo.filter(l=>l.status==='SEM RESPOSTA').length;
   document.getElementById('m-desq').textContent =mo.filter(l=>l.status==='DESQUALIFICADO').length;
+  const totalPeriodo=mo.length;
+  const pct=n=>totalPeriodo?Math.round(n/totalPeriodo*100)+'% do total':'';
+  document.getElementById('m-qualif-pct').textContent  =pct(mo.filter(l=>l.status==='QUALIFICADO').length);
+  document.getElementById('m-contrato-pct').textContent=pct(mo.filter(l=>l.status==='CONTRATO FECHADO').length);
+  document.getElementById('m-semresp-pct').textContent =pct(mo.filter(l=>l.status==='SEM RESPOSTA').length);
+  document.getElementById('m-desq-pct').textContent    =pct(mo.filter(l=>l.status==='DESQUALIFICADO').length);
 }
 
 // ─── FOLLOW-UP em colunas por estágio ───
@@ -1417,6 +1423,20 @@ window.renderRelatorios=function(){
   document.getElementById('rel-contrato').textContent=leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length;
   document.getElementById('rel-desq').textContent    =leadsAll.filter(l=>l.status==='DESQUALIFICADO').length;
   document.getElementById('rel-taxa').textContent    =taxa+'%';
+  const totalRel=leadsAll.length;
+  const pctRel=n=>totalRel?Math.round(n/totalRel*100)+'% do total':'';
+  document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>l.status==='QUALIFICADO').length);
+  document.getElementById('rel-contrato-pct').textContent=pctRel(leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length);
+  document.getElementById('rel-desq-pct').textContent    =pctRel(leadsAll.filter(l=>l.status==='DESQUALIFICADO').length);
+  const fechados=leadsAll.filter(l=>l.status==='CONTRATO FECHADO'&&l.createdAt?.toDate);
+  const dias=fechados.map(l=>{
+    const ini_=l.createdAt.toDate();
+    let fimD=null;
+    if(l.log&&l.log.length>0){const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');if(lc.length>0)fimD=new Date(lc[lc.length-1].ts);}
+    if(!fimD)return null;
+    return Math.max(0,Math.round((fimD-ini_)/(1000*60*60*24)));
+  }).filter(d=>d!==null);
+  document.getElementById('rel-maturacao').textContent=dias.length?Math.round(dias.reduce((a,b)=>a+b,0)/dias.length)+' dias':'—';
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
   if(relKpiFilter){const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};const el=document.getElementById(map[relKpiFilter]||'');if(el)el.classList.add('kpi-active');}
   const sc={};Object.keys(STATUS_META).forEach(s=>sc[s]=0);leadsAll.forEach(l=>{if(sc[l.status]!==undefined)sc[l.status]++;});
@@ -2947,6 +2967,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .mc-amber2{border-top:2px solid #F59E0B}.mc-amber2 .metric-value{color:#F59E0B}
 .mc-cyan{border-top:2px solid #06B6D4}.mc-cyan .metric-value{color:#06B6D4}
 .mc-slate{border-top:2px solid #6B7280}.mc-slate .metric-value{color:#6B7280}
+.metric-pct{font-size:.68rem;color:#6B7280;font-weight:700;margin-top:.15rem}
 /* FOLLOW-UP */
 .fu-panel{background:#13161F;border:1px solid #1E2235;border-radius:12px;margin-bottom:1.25rem;overflow:hidden}
 @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
@@ -3110,6 +3131,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .rel-kpi.kpi-active{border-color:#4F6EF7;background:#171B2E;box-shadow:0 0 0 2px rgba(79,110,247,.25)}
 .rel-kpi-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem}
 .rel-kpi-val{font-size:1.5rem;font-weight:800}
+.rel-kpi-pct{font-size:.68rem;color:#6B7280;font-weight:700;margin-top:.1rem}
 .kpi-ver-btn{font-size:.65rem;color:#4F6EF7;margin-top:.35rem;background:rgba(79,110,247,.1);border:1px solid rgba(79,110,247,.25);border-radius:5px;padding:.15rem .55rem;cursor:pointer;transition:all .15s}
 .kpi-ver-btn:hover{background:#4F6EF7;color:#fff;border-color:#4F6EF7}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin-bottom:1rem}
@@ -3871,12 +3893,12 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div class="metrics-grid">
       <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Período</div>  <div class="metric-value" id="m-total">—</div></div>
       <div class="metric-card mc-amber clickable-card" onclick="abrirMetricaLeads('EM ANDAMENTO')"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
-      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
+      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div><div class="metric-pct" id="m-qualif-pct"></div></div>
       <div class="metric-card mc-amber2 clickable-card" onclick="abrirMetricaLeads('AGUARDANDO DOCUMENTOS')"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
       <div class="metric-card mc-cyan clickable-card" onclick="abrirMetricaLeads('AGUARDANDO ASSINATURA')"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
-      <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
-      <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
-      <div class="metric-card mc-slate clickable-card" onclick="abrirMetricaLeads('DESQUALIFICADO')"><div class="metric-label">Desqualificados</div><div class="metric-value" id="m-desq">—</div></div>
+      <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div><div class="metric-pct" id="m-contrato-pct"></div></div>
+      <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div><div class="metric-pct" id="m-semresp-pct"></div></div>
+      <div class="metric-card mc-slate clickable-card" onclick="abrirMetricaLeads('DESQUALIFICADO')"><div class="metric-label">Desqualificados</div><div class="metric-value" id="m-desq">—</div><div class="metric-pct" id="m-desq-pct"></div></div>
     </div>
     <div class="fu-panel" id="fu-panel">
       <div class="fu-panel-header">
@@ -3942,10 +3964,11 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="rel-kpis">
         <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="rel-kpi-pct" id="rel-desq-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
+        <div class="rel-kpi" id="kpi-maturacao" title="Média de dias entre a entrada do lead e o fechamento do contrato"><div class="rel-kpi-label">Tempo Médio até Fechar</div><div class="rel-kpi-val" id="rel-maturacao" style="color:#F5A623">—</div></div>
       </div>
       <div class="charts-grid">
         <div class="chart-card"><div class="chart-title">Distribuição por Status</div><div class="chart-container"><canvas id="chart-status"></canvas></div></div>
