@@ -11,7 +11,7 @@
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyC2Jc8KUg9QBlGwuqwlN3tQ6C_B1zZi7QU",
@@ -30,12 +30,6 @@ let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
 let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
 let activeQuickNotes=new Set(),presenceInterval=null;
-let dashPeriodo='mes-atual',dashDataIni='',dashDataFim='',estPeriodo='mes-atual',estDataIni='',estDataFim='';
-
-// ── Honorários médios por tipo (fallback para contratos sem valor) ──
-const HONOR_MEDIO={SM:1600,GERAL:10000};
-const HONOR_PARCELAS={SM:4,GERAL:1};
-const HONOR_PRAZO_MESES={SM:4,GERAL:9}; // meses até 1ª parcela
 
 const STATUS_META={
   'EM ANDAMENTO':         {color:'#4F6EF7',bg:'rgba(79,110,247,0.12)',  label:'Em Andamento'},
@@ -99,8 +93,6 @@ function showApp(){
   if(tabEst)tabEst.style.display='inline-block';
   startLeadsListener();startPresence();
   if(isG)startUsersListener();
-  carregarCampanhas();
-  if(isG)carregarPlanos().then(()=>{ if(currentTab==='estrategia')renderEstrategia(); });
 }
 
 // ─── SETUP / LOGIN ───
@@ -125,7 +117,7 @@ window.fazerLogin=async function(){
   const email=document.getElementById('login-email').value.trim();
   const senha=document.getElementById('login-senha').value;
   if(!email||!senha)return showToast('Preencha e-mail e senha','error');
-  try{setBtnLoading('btn-login',true);await setPersistence(auth,browserLocalPersistence);await signInWithEmailAndPassword(auth,email,senha);}
+  try{setBtnLoading('btn-login',true);await signInWithEmailAndPassword(auth,email,senha);}
   catch(e){showToast(fbErr(e.code),'error');}
   finally{setBtnLoading('btn-login',false);}
 };
@@ -154,7 +146,15 @@ function startUsersListener(){
   onSnapshot(collection(db,'usuarios'),snap=>{
     allUsers=snap.docs.map(d=>({id:d.id,...d.data()}));
     renderFuFilterBtns();if(currentTab==='equipe')renderEquipe();
+    renderAssigneeOptions();
   });
+}
+function renderAssigneeOptions(){
+  const sel=document.getElementById('f-assignee');if(!sel)return;
+  const valorAtual=sel.value;
+  const nomes=[...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).filter(Boolean))];
+  sel.innerHTML=nomes.map(n=>`<option>${n}</option>`).join('');
+  if(nomes.includes(valorAtual))sel.value=valorAtual;
 }
 window.abrirModalEquipe=function(uid){
   const u=uid?allUsers.find(x=>x.id===uid):null;
@@ -246,48 +246,9 @@ function renderAll(){
   else if(currentTab==='relatorios')renderRelatorios();
   else if(currentTab==='estrategia')renderEstrategia();
 }
-function getDateRange(periodo, dataIni, dataFim){
-  const now=new Date();
-  let ini,fim=new Date(now);fim.setHours(23,59,59,999);
-  if(periodo==='mes-atual'){ini=new Date(now.getFullYear(),now.getMonth(),1);}
-  else if(periodo==='mes-anterior'){ini=new Date(now.getFullYear(),now.getMonth()-1,1);fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);}
-  else if(periodo==='3-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-3);ini.setDate(1);}
-  else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);}
-  else if(periodo==='especifica'&&dataIni&&dataFim){ini=new Date(dataIni+'T00:00:00');fim=new Date(dataFim+'T23:59:59');}
-  else{ini=new Date(now.getFullYear(),now.getMonth(),1);}
-  return{ini,fim};
-}
-
-function filterLeadsByPeriodo(periodo,dataIni,dataFim){
-  const{ini,fim}=getDateRange(periodo,dataIni,dataFim);
-  return allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
-}
-
-// ── Honorário de um lead ──
-function getHonorario(l){
-  if(l.valorHonorarios) return parseFloat(l.valorHonorarios)||0;
-  return l.tipo==='SM'?HONOR_MEDIO.SM:HONOR_MEDIO.GERAL;
-}
-
-function getParcelas(l){
-  const total=getHonorario(l);
-  const n=l.tipo==='SM'?HONOR_PARCELAS.SM:HONOR_PARCELAS.GERAL;
-  const prazo=l.tipo==='SM'?HONOR_PRAZO_MESES.SM:HONOR_PRAZO_MESES.GERAL;
-  // Data base: quando o contrato foi fechado
-  let base=new Date();
-  if(l.log&&l.log.length>0){const lc=l.log.filter(x=>x.statusChange==='CONTRATO FECHADO');if(lc.length>0)base=new Date(lc[lc.length-1].ts);}
-  else if(l.lastContact?.toDate) base=l.lastContact.toDate();
-  const parcelas=[];
-  for(let i=0;i<n;i++){
-    const d=new Date(base);d.setMonth(d.getMonth()+prazo+i);
-    parcelas.push({data:d,valor:total/n});
-  }
-  return parcelas;
-}
-
 function renderMetrics(){
-  const{ini,fim}=getDateRange(dashPeriodo,dashDataIni,dashDataFim);
-  const mo=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
+  const now=new Date();const m=now.getMonth(),y=now.getFullYear();
+  const mo=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d.getMonth()===m&&d.getFullYear()===y;});
   document.getElementById('m-total').textContent   =mo.length;
   document.getElementById('m-andamento').textContent=mo.filter(l=>l.status==='EM ANDAMENTO').length;
   document.getElementById('m-qualif').textContent  =mo.filter(l=>l.status==='QUALIFICADO').length;
@@ -295,13 +256,6 @@ function renderMetrics(){
   document.getElementById('m-agdocs').textContent=mo.filter(l=>l.status==='AGUARDANDO DOCUMENTOS').length;
   document.getElementById('m-agass').textContent=mo.filter(l=>l.status==='AGUARDANDO ASSINATURA').length;
   document.getElementById('m-semresp').textContent =mo.filter(l=>l.status==='SEM RESPOSTA').length;
-  document.getElementById('m-desq').textContent =mo.filter(l=>l.status==='DESQUALIFICADO').length;
-  const totalPeriodo=mo.length;
-  const pct=n=>totalPeriodo?Math.round(n/totalPeriodo*100)+'% do total':'';
-  document.getElementById('m-qualif-pct').textContent  =pct(mo.filter(l=>l.status==='QUALIFICADO').length);
-  document.getElementById('m-contrato-pct').textContent=pct(mo.filter(l=>l.status==='CONTRATO FECHADO').length);
-  document.getElementById('m-semresp-pct').textContent =pct(mo.filter(l=>l.status==='SEM RESPOSTA').length);
-  document.getElementById('m-desq-pct').textContent    =pct(mo.filter(l=>l.status==='DESQUALIFICADO').length);
 }
 
 // ─── FOLLOW-UP em colunas por estágio ───
@@ -616,7 +570,6 @@ REGISTRO CRM:
 
     document.getElementById('msg-loading').style.display  = 'none';
     document.getElementById('msg-resultado').style.display= 'flex';
-    ativarTabMensagem('wpp');
 
   } catch(err) {
     // Fallback local
@@ -625,246 +578,57 @@ REGISTRO CRM:
 };
 
 function gerarMensagemLocal(l, etapaLabel, area, isGestante, ultimas) {
-  const nome = (l.name||'').split(' ')[0] || 'você';
-  const log = l.log || [];
-  const hist = l.followupHistory || [];
-  const nota = (l.currentNote || '').toLowerCase();
-  const status = l.status || 'EM ANDAMENTO';
+  const nome = (l.name||'').split(' ')[0] || 'olá';
 
-  // ── Leitura do histórico ──
-  const tentativas = hist.length;
-  const semResposta = log.filter(e =>
-    (e.note||'').toLowerCase().includes('sem retorno') ||
-    (e.note||'').toLowerCase().includes('sem resposta') ||
-    (e.note||'').toLowerCase().includes('não respondeu') ||
-    (e.note||'').toLowerCase().includes('não retornou')
-  ).length;
-  const respondeu = log.some(e =>
-    (e.note||'').toLowerCase().includes('respondeu') ||
-    (e.note||'').toLowerCase().includes('retornou') ||
-    (e.note||'').toLowerCase().includes('entrou em contato') ||
-    (e.note||'').toLowerCase().includes('cliente retornou')
-  );
-  const travadoAssinatura = status === 'AGUARDANDO ASSINATURA';
-  const travadoDocs = status === 'AGUARDANDO DOCUMENTOS';
-  const jaQualificada = ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
-  const mencionouMarido = nota.includes('marido') || nota.includes('esposo') || nota.includes('companheiro') || nota.includes('marido não quer');
-  const mencionouMedo = nota.includes('golpe') || nota.includes('medo') || nota.includes('desconfia') || nota.includes('fraude') || nota.includes('não confia');
-  const mencionouDinheiro = nota.includes('gru') || nota.includes('taxa') || nota.includes('pagar') || nota.includes('custo') || nota.includes('dinheiro') || nota.includes('não tem como pagar');
-  const mencionouPensando = nota.includes('vai pensar') || nota.includes('vou pensar') || nota.includes('deixa eu ver') || nota.includes('depois') || nota.includes('semana que vem');
-  const mencionouPrazo = nota.includes('prazo') || nota.includes('venceu') || nota.includes('perdeu');
-
-  // ── Fase exata onde o lead está parado (para registro estratégico) ──
-  const faseMap = {
-    'EM ANDAMENTO': 'qualificação',
-    'SEM RESPOSTA': 'primeiro contato',
-    'QUALIFICADO': 'conversão/proposta',
-    'AGUARDANDO DOCUMENTOS': 'documentação',
-    'AGUARDANDO ASSINATURA': 'assinatura do contrato',
-    'CONTRATO FECHADO': 'pós-venda',
-    'DESQUALIFICADO': 'desqualificação'
+  const templates = {
+    'FUP 24h': {
+      estrategia: 'Recuperar contato com leveza. Gatilho: facilidade de dar o próximo passo.',
+      msg: `Oi ${nome}! Tudo bem? Vi que você entrou em contato ontem sobre ${area}. Queria só saber se ficou com alguma dúvida que eu possa te ajudar a esclarecer 😊`,
+      registro: `Realizado FUP 24h via WhatsApp. Enviada mensagem de retorno inicial verificando dúvidas. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 3d': {
+      estrategia: 'Despertar curiosidade sobre o direito. Gatilho: oportunidade ainda disponível.',
+      msg: `Oi ${nome}! Passando para ver se você teve a chance de pensar sobre o ${area}. Muita gente não sabe, mas esse benefício tem um prazo — e vale a pena verificar se você tem direito antes que passe. Posso te ajudar com isso?`,
+      registro: `Realizado FUP 3d via WhatsApp. Abordagem sobre oportunidade e prazo do benefício ${area}. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 7d': {
+      estrategia: 'Percepção de perda por inércia. Gatilho: o tempo corre contra o lead.',
+      msg: `${nome}, boa tarde! Sei que a rotina é corrida, mas queria te lembrar que questões previdenciárias como ${area} podem ser mais simples do que parecem de resolver. Só depende de dar o primeiro passo. Ainda posso te ajudar?`,
+      registro: `Realizado FUP 7d via WhatsApp. Abordagem sobre simplicidade do processo e consequência da inércia. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 15d': {
+      estrategia: 'Reativação com encerramento implícito. Gatilho: fazer o lead decidir.',
+      msg: `Oi ${nome}! Tentei entrar em contato algumas vezes. Vou deixar em aberto aqui caso você queira retomar — se precisar de ajuda com ${area}, é só me chamar. 😊`,
+      registro: `Realizado FUP 15d via WhatsApp. Mensagem de reativação com encerramento implícito. Aguardando retorno para continuidade do atendimento.`
+    },
+    'FUP 30d': {
+      estrategia: 'Última tentativa. Gatilho: fechamento de ciclo.',
+      msg: `${nome}, tudo bem? Última mensagem da minha parte — se um dia precisar verificar seu direito ao ${area}, estaremos aqui. 👍`,
+      registro: `Realizado FUP 30d via WhatsApp. Última tentativa de contato antes do encerramento do ciclo. Aguardando retorno para continuidade do atendimento.`
+    },
+    'Mensal': {
+      estrategia: isGestante ? 'Relacionamento com gestante. Foco na conexão humana, não na venda.' : 'Manutenção de contato mensal.',
+      msg: isGestante
+        ? `Oi ${nome}! Passando para dar um oi e saber como você está se sentindo nessa fase tão especial 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`
+        : `Oi ${nome}! Passando para saber se você ainda tem interesse em verificar seu direito ao ${area}. Qualquer dúvida, estou à disposição 😊`,
+      registro: isGestante
+        ? `Realizado FUP Mensal Gestante via WhatsApp. Contato de acompanhamento humanizado focado na gestação. Aguardando retorno para continuidade do atendimento.`
+        : `Realizado FUP Mensal via WhatsApp. Contato de manutenção e reativação. Aguardando retorno para continuidade do atendimento.`
+    }
   };
-  const faseAtual = faseMap[status] || 'atendimento';
 
-  // ── Data do parto ──
-  let diasParto = null;
-  let partoStr = '';
-  if (l.dataParto) {
-    const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
-    diasParto = Math.floor((p - new Date()) / (1000*60*60*24));
-    partoStr = diasParto > 0 ? `parto em ${diasParto} dias` : 'parto recente';
-  }
-  const partoUrgente = diasParto !== null && diasParto >= 0 && diasParto <= 20;
-  const possParto = diasParto !== null && diasParto < 0 && diasParto > -30;
-
-  let msg = '';
-  let estrategia = '';
-  let registro = '';
-
-  // ══════════════════════════════════════════════════
-  // FUP 24h — Primeiro contato: abrir canal, sem pressão
-  // ══════════════════════════════════════════════════
-  if (etapaLabel === 'FUP 24h') {
-    estrategia = 'Abertura de canal. Facilitar o próximo passo sem pressão.';
-    if (respondeu) {
-      msg = `Oi ${nome} 😊 Passando para dar continuidade ao seu atendimento sobre ${area}. Você teve alguma dúvida desde a nossa última conversa? Estou por aqui!`;
-    } else if (partoUrgente) {
-      msg = `Oi ${nome}! Vi que você entrou em contato sobre ${area} — e com o parto se aproximando (${partoStr}), é importante a gente verificar isso logo. Me chama aqui para a gente resolver juntas! 💙`;
-      estrategia = 'Abertura com urgência real de parto próximo. Tom de cuidado.';
-    } else {
-      msg = `Oi ${nome}! Vi que você demonstrou interesse em saber mais sobre ${area}. Qualquer dúvida, é só me chamar — estou por aqui para te ajudar 😊`;
-    }
-    registro = `FUP 24h realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Enviada mensagem de abertura de atendimento.${respondeu?' Lead com histórico de resposta anterior.':''} Status: aguardando retorno para continuidade do atendimento.`;
-  }
-
-  // ══════════════════════════════════════════════════
-  // FUP 3d — Despertar: o direito existe e tem prazo
-  // ══════════════════════════════════════════════════
-  else if (etapaLabel === 'FUP 3d') {
-    estrategia = 'Criar consciência do direito e urgência de prazo. Gerar curiosidade.';
-    if (semResposta >= 1) {
-      msg = `Oi ${nome}! Passamos por aqui antes mas talvez não tenha chegado no melhor momento 📩
-
-Queria só te lembrar que o ${area} tem prazo para ser solicitado — e muita gente perde por não verificar a tempo. Me fala: você já sabe se tem direito?`;
-    } else if (mencionouPensando) {
-      msg = `${nome}, oi! Sei que você estava pensando sobre o ${area}. Só queria reforçar que os casos de quem começa mais cedo têm mais chances de aprovação. Posso te dar mais detalhes para facilitar a sua decisão? 😊`;
-      estrategia = 'Reativação após "vou pensar". Reduzir tempo de decisão com informação.';
-    } else {
-      msg = `${nome}, oi! Passando para ver se você teve a chance de pensar sobre o ${area}. Muitas pessoas não sabem, mas esse benefício tem um prazo — e verificar agora não te compromete com nada. Posso checar sua situação?`;
-    }
-    registro = `FUP 3d realizado via WhatsApp. Lead parada na fase de ${faseAtual}.${semResposta>=1?' Sem retorno ao primeiro contato.':''} Enviada abordagem sobre prazo e direito ao ${area}. Status: aguardando retorno para verificação de elegibilidade.`;
-  }
-
-  // ══════════════════════════════════════════════════
-  // FUP 7d — Percepção de perda + quebra de objeção
-  // ══════════════════════════════════════════════════
-  else if (etapaLabel === 'FUP 7d') {
-    estrategia = 'Percepção de perda suave + quebra da objeção específica identificada no histórico.';
-    if (mencionouMedo) {
-      msg = `${nome}, oi! Entendo que quando o assunto é benefício previdenciário surgem muitas dúvidas — é natural. Só queria te garantir que trabalhamos de forma 100% segura, com registro em contrato, e você só paga se receber. Posso te explicar melhor como funciona? 😊`;
-      estrategia = 'Quebra de objeção: medo de golpe. Segurança e modelo por êxito.';
-      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção de segurança/golpe identificada no histórico. Enviada abordagem de quebra de objeção com reforço de segurança e modelo por êxito. Status: aguardando retorno para retomada do atendimento.`;
-    } else if (mencionouDinheiro) {
-      msg = `${nome}, oi! Passando para esclarecer um ponto importante: nosso trabalho é 100% por êxito — você não paga nada antecipado, só se o benefício for aprovado. Então não tem risco financeiro para você. Quer que eu te explique como funciona na prática?`;
-      estrategia = 'Quebra de objeção financeira. Reforçar modelo por êxito sem risco.';
-      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção financeira (custo/pagamento) identificada no histórico. Enviada mensagem de quebra de objeção com explicação do modelo por êxito. Status: aguardando retorno.`;
-    } else if (partoUrgente) {
-      msg = `Oi ${nome}! Vi que o parto está se aproximando (${partoStr}) 💙 O ${area} precisa ser solicitado com antecedência para garantir o benefício. Se quisermos iniciar o processo, o momento é agora — é rápido e eu te guio em cada etapa. Me chama!`;
-      estrategia = 'Urgência real por parto próximo. Tom de cuidado, ação imediata.';
-      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Parto em ${diasParto} dias — urgência real identificada. Enviada mensagem de ativação com urgência de prazo gestacional. Status: aguardando retorno para início imediato do processo.`;
-    } else if (semResposta >= 2) {
-      msg = `${nome}, tudo bem? Sei que a rotina é corrida 😊 Só queria deixar claro que ainda estou por aqui — verificar o ${area} é mais simples do que parece e não te compromete com nada. Quer que eu te explique em 2 minutos como funciona?`;
-      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. ${semResposta} tentativas sem retorno. Enviada abordagem de baixa fricção com oferta de explicação rápida. Status: aguardando retorno.`;
-    } else {
-      msg = `${nome}, boa tarde! Uma coisa que muita gente não sabe: o ${area} tem prazo para pedir, e deixar para depois pode fazer você perder esse direito. O processo em si é simples — a parte difícil é dar o primeiro passo. Ainda posso te ajudar com isso?`;
-      registro = `FUP 7d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Enviada abordagem de percepção de perda por prazo. Status: aguardando retorno para retomada do processo.`;
-    }
-  }
-
-  // ══════════════════════════════════════════════════
-  // FUP 15d — Hibernação com intenção, não abandono
-  // ══════════════════════════════════════════════════
-  else if (etapaLabel === 'FUP 15d') {
-    if (travadoDocs) {
-      estrategia = 'Destravar documentação. Reduzir fricção, começar com o que tem.';
-      msg = `Oi ${nome}! Passando para saber se consigo te ajudar a reunir a documentação. A gente consegue começar com o que você já tiver em mãos — não precisa estar tudo perfeito para iniciar. Me fala o que está faltando? 😊`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Gargalo identificado: documentação pendente. Enviada mensagem para reduzir fricção documental com oferta de início parcial. Status: aguardando retorno para desbloqueio da documentação.`;
-    } else if (travadoAssinatura) {
-      estrategia = 'Reativar contrato em aberto. Manter urgência sem pressão.';
-      msg = `Oi ${nome}! Passando para saber se está tudo bem com o contrato. Estamos aguardando só a sua assinatura para dar início ao processo — é o último passo! Se tiver alguma dúvida sobre o documento, me chama que eu explico 😊`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contrato enviado e aguardando assinatura. Enviada mensagem de reativação focada no último passo. Status: aguardando assinatura para início do processo.`;
-    } else if (mencionouMarido) {
-      estrategia = 'Reativação com objeção familiar. Incluir o decisor no processo.';
-      msg = `${nome}, oi! Passando para saber se você teve a chance de conversar sobre o ${area} aí em casa. Se precisar que eu explique melhor — até para tirar dúvidas do casal — fico à disposição para uma conversa rápida 😊`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção familiar identificada no histórico (decisor externo). Enviada mensagem incluindo o parceiro na decisão. Status: aguardando retorno após decisão familiar.`;
-    } else if (mencionouDinheiro) {
-      estrategia = 'Reforçar modelo por êxito. Eliminar objeção financeira definitivamente.';
-      msg = `${nome}, oi! Só queria reforçar uma coisa importante: você não paga nada antecipado. Nosso honorário só é cobrado se o benefício for aprovado e você receber. Ou seja, não tem risco nenhum para você começar. Quer retomar? 😊`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção financeira recorrente no histórico. Enviada mensagem reforçando modelo por êxito como eliminação de risco. Status: aguardando retorno para retomada.`;
-    } else if (mencionouMedo) {
-      estrategia = 'Reforçar segurança e credibilidade. Reduzir barreira de confiança.';
-      msg = `${nome}, oi! Entendo que é importante ter segurança antes de confiar num processo como esse. Por isso quero te dizer: trabalhamos com contrato registrado, você tem acesso a tudo e só paga se receber. Sua proteção é nossa prioridade. Quer conversar sobre isso? 😊`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Objeção de segurança/confiança persistente no histórico. Enviada mensagem reforçando credibilidade e transparência. Status: aguardando retorno.`;
-    } else {
-      estrategia = 'Hibernação com intenção. Preservar vínculo, reforçar valor, manter porta aberta.';
-      msg = `Oi, ${nome} 😊
-
-Passei por aqui algumas vezes para retomar seu atendimento sobre ${area}, mas acredito que talvez não tenha sido o melhor momento para você.
-
-Vou deixar seu atendimento em aberto por aqui. Se ainda quiser verificar seu direito ou tirar alguma dúvida, é só me chamar.`;
-      registro = `FUP 15d realizado via WhatsApp. Lead parada na fase de ${faseAtual} após ${tentativas} contato${tentativas!==1?'s':''}. Enviada mensagem de hibernação ativa com manutenção de canal aberto — sem encerramento definitivo. Status: aguardando manifestação do lead para reativação futura.`;
-    }
-  }
-
-  // ══════════════════════════════════════════════════
-  // FUP 30d — Última tentativa com conversão em mente
-  // ══════════════════════════════════════════════════
-  else if (etapaLabel === 'FUP 30d') {
-    if (travadoAssinatura) {
-      estrategia = 'Reativar contrato em aberto com urgência real. Converter agora ou perder.';
-      msg = `${nome}, oi! Estou passando porque seu contrato de ${area} ainda está em aberto aqui comigo — e seria uma pena perder esse processo depois de tudo que já avançamos. Se tiver qualquer dúvida sobre a assinatura, me chama agora e a gente resolve juntas 😊`;
-      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contrato aberto há mais de 30 dias sem assinatura. Enviada mensagem de urgência para conversão final. Status: última tentativa ativa — aguardando assinatura para encerrar o processo.`;
-    } else if (travadoDocs) {
-      estrategia = 'Última tentativa para destravar documentação. Tom direto e resolutivo.';
-      msg = `${nome}, passando para uma última tentativa 😊 Ainda consigo te ajudar com o ${area} — mas preciso de pelo menos um documento para dar início. Me fala o que você tem disponível agora e a gente vê o que é possível fazer.`;
-      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual} há 30+ dias. Documentação pendente. Enviada última tentativa de desbloqueio com oferta de início mínimo. Status: última tentativa ativa — aguardando resposta sobre documentação disponível.`;
-    } else if (jaQualificada) {
-      estrategia = 'Lead qualificada travada antes do fechamento. Reativar com senso de oportunidade.';
-      msg = `${nome}, oi! Sei que já passamos por aqui algumas vezes, mas queria fazer uma última tentativa porque você já foi qualificada para o ${area} — e seria uma pena perder esse direito por não dar continuidade.
-
-Se ainda tiver interesse, me chama. Estou por aqui 😊`;
-      registro = `FUP 30d realizado via WhatsApp. Lead qualificada parada na fase de ${faseAtual}. Enviada mensagem de última tentativa com reforço do direito já verificado. Status: suspensão ativa do atendimento — aguardando manifestação para reativação.`;
-    } else {
-      estrategia = 'Hibernação definitiva com porta aberta. Curta, sem pressão, sem abandono.';
-      msg = `${nome}, tudo bem? Passando para uma última mensagem por agora — mas quero que saiba que seu atendimento sobre ${area} continua em aberto aqui. Quando quiser retomar, é só me chamar 😊`;
-      registro = `FUP 30d realizado via WhatsApp. Lead parada na fase de ${faseAtual} após ${tentativas} contato${tentativas!==1?'s':''}. Encerramento do ciclo de follow-up com suspensão ativa. Status: atendimento hibernado — aguardando reativação por iniciativa do lead.`;
-    }
-  }
-
-  // ══════════════════════════════════════════════════
-  // Mensal — Gestante: relacionamento, não venda
-  // ══════════════════════════════════════════════════
-  else if (etapaLabel === 'Mensal') {
-    if (possParto) {
-      estrategia = 'Parto recente identificado. Verificar e acionar processo imediatamente.';
-      msg = `Oi ${nome}! Passando para saber como você e o bebê estão 💙 Se o bebê já nasceu, o ${area} pode ser solicitado agora — não deixa passar o prazo! Me fala como foi, estamos torcendo por vocês!`;
-      registro = `FUP Mensal realizado via WhatsApp. Parto recente identificado (${Math.abs(diasParto)} dias atrás). Enviada mensagem de verificação e ativação imediata do processo de ${area}. Status: aguardando confirmação para abertura urgente do processo.`;
-    } else if (isGestante && diasParto !== null && diasParto <= 30) {
-      estrategia = 'Reta final da gestação. Relacionamento com lembrete suave de prazo.';
-      msg = `Oi ${nome}! Passando para saber como você está nessa reta final 🌸 Falta pouco para o grande dia! Estamos torcendo por você e pelo bebê. E quando chegar a hora, me avisa — a gente garante o seu ${area} juntas 💙`;
-      registro = `FUP Mensal Gestante realizado via WhatsApp. Parto em ${diasParto} dias. Contato de acompanhamento com reforço sobre timing do processo. Status: aguardando nascimento para início imediato.`;
-    } else if (isGestante) {
-      estrategia = 'Gestante em acompanhamento. Relacionamento humano, sem venda.';
-      msg = `Oi ${nome}! Passando só para dar um oi e saber como você está se sentindo 🌸 Como está a gestação? Estamos aqui torcendo por você e pelo bebê!`;
-      registro = `FUP Mensal Gestante realizado via WhatsApp. Contato de relacionamento humanizado — sem abordagem comercial. Status: manutenção de vínculo até proximidade do parto.`;
-    } else {
-      estrategia = 'Recontato mensal. Presença sem pressão, abertura para retomada.';
-      msg = `Oi ${nome}! Passando para saber se surgiu alguma novidade aí e se posso te ajudar com ${area}. Qualquer coisa, estou por aqui 😊`;
-      registro = `FUP Mensal realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contato de manutenção de presença. Status: aguardando abertura do lead para retomada do atendimento.`;
-    }
-  }
-
-  // ── Fallback ──
-  if (!msg) {
-    estrategia = 'Recontato estratégico baseado no histórico.';
-    msg = `Oi ${nome}! Passando para saber se posso te ajudar com ${area}. Qualquer dúvida, estou à disposição 😊`;
-    registro = `${etapaLabel} realizado via WhatsApp. Lead parada na fase de ${faseAtual}. Contato de reengajamento. Status: aguardando retorno.`;
-  }
+  const t = templates[etapaLabel] || templates['FUP 24h'];
 
   document.getElementById('msg-etapa-result').textContent  = etapaLabel;
-  document.getElementById('msg-estrat-result').textContent = estrategia;
-  document.getElementById('msg-texto').value               = msg;
-  document.getElementById('msg-registro').value            = registro;
+  document.getElementById('msg-estrat-result').textContent = t.estrategia;
+  document.getElementById('msg-texto').value               = t.msg;
+  document.getElementById('msg-registro').value            = t.registro;
   document.getElementById('msg-loading').style.display  = 'none';
   document.getElementById('msg-resultado').style.display= 'flex';
-  ativarTabMensagem('wpp');
 }
 
 window.fecharModalMensagem = () => document.getElementById('modal-mensagem').style.display = 'none';
 
-// ── Tab toggle ──
-let _abaAtiva = 'wpp';
-window.ativarTabMensagem = function(aba) {
-  _abaAtiva = aba;
-  ['wpp','crm'].forEach(a => {
-    document.getElementById('tab-btn-' + a)?.classList.toggle('active', a === aba);
-    document.getElementById('tab-panel-' + a)?.classList.toggle('active', a === aba);
-  });
-  // keep wpp green, crm blue
-  document.getElementById('tab-btn-wpp')?.classList.toggle('wpp', true);
-};
-
-window.copiarAbaAtiva = function() {
-  const txt = _abaAtiva === 'wpp'
-    ? document.getElementById('msg-texto')?.value
-    : document.getElementById('msg-registro')?.value;
-  if (!txt) return;
-  navigator.clipboard.writeText(txt).then(() =>
-    showToast(_abaAtiva === 'wpp' ? '✅ Mensagem WhatsApp copiada!' : '✅ Registro CRM copiado!')
-  );
-};
-
-// legacy — kept for compatibility
 window.copiarMensagem = function() {
   const txt = document.getElementById('msg-texto').value;
   navigator.clipboard.writeText(txt).then(() => showToast('✅ Mensagem copiada!'));
@@ -978,19 +742,16 @@ window.fecharListaLeads = () => document.getElementById('modal-lead-list').style
 
 // Abrir lista a partir dos cards de métricas do dashboard (filtra pelo mês atual)
 window.abrirMetricaLeads = function(status) {
-  const {ini,fim} = getDateRange(dashPeriodo, dashDataIni, dashDataFim);
-  const periodoLabel = {
-    'mes-atual':'Mês Atual','mes-anterior':'Mês Anterior',
-    '3-meses':'Últimos 3 Meses','6-meses':'Últimos 6 Meses','especifica':'Período Selecionado'
-  }[dashPeriodo]||'Período';
+  const now = new Date();
+  const m = now.getMonth(), y = now.getFullYear();
   let leads = allLeads.filter(l => {
     const d = l.createdAt?.toDate?.();
-    return d && d >= ini && d <= fim;
+    return d && d.getMonth() === m && d.getFullYear() === y;
   });
-  let titulo = `Todos os Leads — ${periodoLabel}`;
+  let titulo = 'Leads no Mês';
   if (status !== 'TODOS') {
     leads = leads.filter(l => l.status === status);
-    titulo = `${STATUS_META[status]?.label || status} — ${periodoLabel}`;
+    titulo = STATUS_META[status]?.label || status;
   }
   abrirListaLeads(leads.map(l => l.id), titulo);
 };
@@ -1034,26 +795,9 @@ window.confirmarDecisao=async function(decisao){
 };
 
 // ─── KANBAN ───
-function normStr(s){return(s||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();}
-window.filtrarKanban=function(){renderKanban();};
 function renderKanban(){
-  const el=document.getElementById('kanban-search');
-  const rawQ=el?el.value.trim():'';
-  const kanbanQ=normStr(rawQ);
-  const kanbanQDigits=rawQ.replace(/\D/g,''); // only digits for phone search
   const cols={'EM ANDAMENTO':[],'SEM RESPOSTA':[],'QUALIFICADO':[],'AGUARDANDO DOCUMENTOS':[],'AGUARDANDO ASSINATURA':[],'CONTRATO FECHADO':[],'DESQUALIFICADO':[]};
-  let leadsToRender=allLeads;
-  if(kanbanQ){
-    leadsToRender=allLeads.filter(l=>{
-      const nameMatch=normStr(l.name).includes(kanbanQ);
-      const phoneRaw=(l.phone||'').replace(/\D/g,'');
-      const phoneMatch=kanbanQDigits.length>=3
-        ? phoneRaw.includes(kanbanQDigits)
-        : (l.phone||'').toLowerCase().includes(kanbanQ);
-      return nameMatch||phoneMatch;
-    });
-  }
-  leadsToRender.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
+  allLeads.forEach(l=>{if(cols[l.status])cols[l.status].push(l);});
   Object.keys(cols).forEach(status=>{
     const el=document.getElementById('col-'+status);if(!el)return;
     document.getElementById('col-count-'+status).textContent=cols[status].length;
@@ -1142,30 +886,21 @@ function renderTable(){
 
 // ─── LEAD MODAL ───
 window.openLead=function(id){
-  // Always reset save button and cancel pending timers when opening any lead
-  const btnR=document.getElementById('btn-salvar-lead');
-  if(btnR){btnR.disabled=false;btnR.textContent='Salvar';btnR.style.background='';btnR.style.borderColor='';}
-  if(window._saveTimer){clearTimeout(window._saveTimer);window._saveTimer=null;}
   const l=id==='new'?null:allLeads.find(x=>x.id===id);
   editingLeadId=id==='new'?null:id;
+  renderAssigneeOptions();
   activeQuickNotes.clear();
   document.querySelectorAll('.qn-btn').forEach(b=>b.classList.remove('qn-active'));
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
-  // Default first contact date to today for new leads
-  if(!l) document.getElementById('f-data-contato').value=new Date().toISOString().slice(0,10);
   document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
   document.getElementById('f-tipo').value    =l?.tipo||'SM';
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
-  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):'');
-  document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
-  document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
   togglePartoField();
-  toggleHonorariosField();
   renderProgressBar(l?.etapaFollowup||0, l?.tipo||'SM', l?.followupHistory||[]);
   renderLog(l?.log||[]);
   // Show "FUP Feito" button if lead has pending followup
@@ -1178,13 +913,7 @@ window.openLead=function(id){
   const hiddenField=document.getElementById('msg-lead-id-hidden');if(hiddenField)hiddenField.value=editingLeadId||'';
   document.getElementById('modal-lead').style.display='flex';
 };
-window.closeLead=()=>{
-  document.getElementById('modal-lead').style.display='none';
-  editingLeadId=null;
-  // Always reset save button state
-  const btn=document.getElementById('btn-salvar-lead');
-  if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
-};
+window.closeLead=()=>{document.getElementById('modal-lead').style.display='none';editingLeadId=null;};
 window.togglePartoField=()=>{document.getElementById('parto-row').style.display=document.getElementById('f-tipo').value==='SM'?'flex':'none';};
 
 // ─── PROGRESS BAR ───
@@ -1260,15 +989,6 @@ window.addQuickNote=function(note,btn){
 };
 
 window.saveLead=async function(){
-  // Find save button robustly
-  const btn=document.getElementById('btn-salvar-lead');
-  if(btn&&btn.disabled)return;
-  if(btn){btn.disabled=true;btn.textContent='Salvando...';}
-  // Safety: always re-enable after 8s no matter what
-  if(window._saveTimer)clearTimeout(window._saveTimer);
-  const safetyTimer=window._saveTimer=setTimeout(()=>{
-    if(btn&&btn.disabled){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
-  },8000);
   const name    =document.getElementById('f-name').value.trim()||'Sem Nome';
   const phone   =document.getElementById('f-phone').value.trim();
   const campaign=document.getElementById('f-campaign').value;
@@ -1278,55 +998,33 @@ window.saveLead=async function(){
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
   const dataParto=partoVal?Timestamp.fromDate(new Date(partoVal+'T12:00:00')):null;
-  const valorHonorarios=parseFloat(document.getElementById('f-honorarios')?.value)||null;
-  const beneficioConcedido=document.getElementById('f-beneficio')?.value||null;
-  const dataContatoVal=document.getElementById('f-data-contato')?.value;
-  const dataPrimeiroContato=dataContatoVal?Timestamp.fromDate(new Date(dataContatoVal+'T12:00:00')):null;
-  try{
-    if(!editingLeadId){
-      const trilhaDias=getTrilhaDias(tipo);
-      const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
-      await addDoc(collection(db,'leads'),{
-        name,phone,campaign,status,tipo,assignee,currentNote:note,
-        nextFollowup:Timestamp.fromDate(d),dataParto,dataPrimeiroContato,etapaFollowup:0,valorHonorarios,
-        followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
-        log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
-      });
-      clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
-      showToast('Lead criado! FUP 24h agendado.');
-      closeLead();
-    }else{
-      const existing=allLeads.find(l=>l.id===editingLeadId);
-      const statusChanged=existing?.status&&existing.status!==status;
-      const partoChanged=partoVal&&!existing?.dataParto;
-      const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
-      if(note)upd.currentNote=note;
-      if(dataParto)upd.dataParto=dataParto;
-      if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
-      if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
-      if(dataPrimeiroContato)upd.dataPrimeiroContato=dataPrimeiroContato;
-      if(partoChanged&&tipo==='SM'){
-        const etapa=existing?.etapaFollowup||0;
-        const trilhaDias=getTrilhaDias('SM');
-        if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
-      }
-      upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
-      await updateDoc(doc(db,'leads',editingLeadId),upd);
-      clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
-      showToast('✅ Salvo!');
-      if(btn){btn.textContent='✅ Salvo!';btn.style.background='#10B981';btn.style.borderColor='#10B981';}
-      document.getElementById('f-note').value='';
-      if(currentTab==='indicacao') setTimeout(renderIndicacao, 300);
-      setTimeout(()=>{
-        if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
-      },2500);
+  if(!editingLeadId){
+    const trilhaDias=getTrilhaDias(tipo);
+    const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
+    await addDoc(collection(db,'leads'),{
+      name,phone,campaign,status,tipo,assignee,currentNote:note,
+      nextFollowup:Timestamp.fromDate(d),dataParto,etapaFollowup:0,
+      followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+      log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+    });
+    showToast('Lead criado! FUP 24h agendado.');
+  }else{
+    const existing=allLeads.find(l=>l.id===editingLeadId);
+    const statusChanged=existing?.status&&existing.status!==status;
+    const partoChanged=partoVal&&!existing?.dataParto;
+    const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
+    if(note)upd.currentNote=note;
+    if(dataParto)upd.dataParto=dataParto;
+    if(partoChanged&&tipo==='SM'){
+      const etapa=existing?.etapaFollowup||0;
+      const trilhaDias=getTrilhaDias('SM');
+      if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
     }
-  }catch(e){
-    clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
-    console.error('saveLead error:',e);
-    showToast('Erro ao salvar: '+( e?.message||'verifique sua conexão'),'error');
-    if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+    upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+    await updateDoc(doc(db,'leads',editingLeadId),upd);
+    showToast('Lead atualizado!');
   }
+  closeLead();
 };
 window.deleteLead=async function(){
   if(!editingLeadId||!confirm('Excluir este lead?'))return;
@@ -1423,20 +1121,6 @@ window.renderRelatorios=function(){
   document.getElementById('rel-contrato').textContent=leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length;
   document.getElementById('rel-desq').textContent    =leadsAll.filter(l=>l.status==='DESQUALIFICADO').length;
   document.getElementById('rel-taxa').textContent    =taxa+'%';
-  const totalRel=leadsAll.length;
-  const pctRel=n=>totalRel?Math.round(n/totalRel*100)+'% do total':'';
-  document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>l.status==='QUALIFICADO').length);
-  document.getElementById('rel-contrato-pct').textContent=pctRel(leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length);
-  document.getElementById('rel-desq-pct').textContent    =pctRel(leadsAll.filter(l=>l.status==='DESQUALIFICADO').length);
-  const fechados=leadsAll.filter(l=>l.status==='CONTRATO FECHADO'&&l.createdAt?.toDate);
-  const dias=fechados.map(l=>{
-    const ini_=l.createdAt.toDate();
-    let fimD=null;
-    if(l.log&&l.log.length>0){const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');if(lc.length>0)fimD=new Date(lc[lc.length-1].ts);}
-    if(!fimD)return null;
-    return Math.max(0,Math.round((fimD-ini_)/(1000*60*60*24)));
-  }).filter(d=>d!==null);
-  document.getElementById('rel-maturacao').textContent=dias.length?Math.round(dias.reduce((a,b)=>a+b,0)/dias.length)+' dias':'—';
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
   if(relKpiFilter){const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};const el=document.getElementById(map[relKpiFilter]||'');if(el)el.classList.add('kpi-active');}
   const sc={};Object.keys(STATUS_META).forEach(s=>sc[s]=0);leadsAll.forEach(l=>{if(sc[l.status]!==undefined)sc[l.status]++;});
@@ -1473,37 +1157,13 @@ window.imprimirRelatorio=()=>window.print();
 window.renderEstrategia=function(){
   const now=new Date();
   const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
-  const{ini,fim}=getDateRange(estPeriodo,estDataIni,estDataFim);
-  // fim now correctly reflects selected period
+  const ini=new Date(now.getFullYear(),now.getMonth(),1);
+  const fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);
   const isG=currentUser?.role==='gestora';
   const tituloEl=document.getElementById('est-titulo');
   const subEl=document.getElementById('est-subtitulo');
   if(tituloEl) tituloEl.textContent='🎯 Painel Estratégico'+(isG?'':' — '+(currentUser?.nome||''));
-  const _pLabel={'mes-atual':'Mês Atual','mes-anterior':'Mês Anterior','3-meses':'Últimos 3 Meses','6-meses':'Últimos 6 Meses','especifica':'Período Específico'};
-  if(subEl) subEl.textContent=(isG?'Visão completa':'Visão dos seus leads')+' — '+(_pLabel[estPeriodo]||'Mês Atual');
-
-  // Show/populate planning module for gestora
-  const metaWrap=document.getElementById('meta-module-wrap');
-  if(metaWrap){
-    metaWrap.style.display=isG?'block':'none';
-    if(isG){
-      // Populate plan selector
-      const sel=document.getElementById('select-plano');
-      if(sel&&planosAtivos.length>0){
-        sel.innerHTML=planosAtivos.map(p=>`<option value="${p.id}" ${planoSelecionado?.id===p.id?'selected':''}>${p.nome}</option>`).join('');
-      }
-      // Update active badge
-      const badge=document.getElementById('meta-badge-status');
-      if(badge&&planoSelecionado){
-        const now2=new Date();const fim2=new Date(planoSelecionado.fim+'T23:59:59');
-        badge.textContent=now2<=fim2?'ATIVA':'ENCERRADA';
-        badge.className=now2<=fim2?'meta-badge-ativa':'meta-badge-atrasada';
-      }
-    }
-  }
-  // Financial panel
-  const finWrap=document.getElementById('fin-panel-wrap');
-  if(finWrap){finWrap.style.display=isG?'block':'none';if(isG)renderFinanceiro();}
+  if(subEl) subEl.textContent=isG?'Visão completa do escritório':'Visão dos seus leads';
 
   // Atendentes veem apenas seus próprios leads
   const leadsBase=isG?allLeads:allLeads.filter(l=>l.assignee===currentUser?.nome);
@@ -1540,29 +1200,20 @@ window.renderEstrategia=function(){
   const qualif=qualifLeads.length;
   const contratos=contratosLeads.length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
-  const podmVirar=mesLeads.filter(l=>['EM ANDAMENTO','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status));
-  // Store for clickable alerts
-  window._estAlerts={partoProximo,qualifParados,esfriando,fuAtrasados,mesLeads,qualifLeads,contratosLeads,podmVirar};
   const taxaConv=qualif?Math.round(contratos/qualif*100):0;
   const campStats={};
   mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
   const equipeStats={};
   mesLeads.forEach(l=>{const a=l.assignee||'—';if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0};equipeStats[a].total++;if(l.status==='QUALIFICADO')equipeStats[a].qualif++;if(l.status==='CONTRATO FECHADO')equipeStats[a].contrato++;if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;});
-  // ── Planning module (gestora only) ──
-  if(isG){
-    const pmEl=document.getElementById('meta-module-content');
-    if(pmEl)renderPlanejamento();
-  }
-
   const el=document.getElementById('estrategia-content');if(!el)return;
   el.innerHTML=`
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     <div class="est-alerts-grid">
-      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" style="${partoProximo.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('partoProximo')"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
-      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" style="${qualifParados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('qualifParados')"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
-      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" style="${esfriando.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('esfriando')"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
-      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" style="${fuAtrasados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('fuAtrasados')"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
+      <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" onclick="${partoProximo.length?`abrirListaLeads(${JSON.stringify(partoProximo.map(l=>l.id)).replace(/\"/g,'&quot;')},'SM com parto em até 60 dias')`:''}"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
+      <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" onclick="${qualifParados.length?`abrirListaLeads(${JSON.stringify(qualifParados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados parados +7 dias')`:''}"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
+      <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" onclick="${esfriando.length?`abrirListaLeads(${JSON.stringify(esfriando.map(l=>l.id)).replace(/\"/g,'&quot;')},'Esfriando +15 dias sem contato')`:''}"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
+      <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" onclick="${fuAtrasados.length?`abrirListaLeads(${JSON.stringify(fuAtrasados.map(l=>l.id)).replace(/\"/g,'&quot;')},'Follow-ups em atraso')`:''}"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
     </div>
   </div>
   <div class="est-section">
@@ -1576,11 +1227,10 @@ window.renderEstrategia=function(){
       <div class="est-pipe-arrow">→</div>
       <div class="est-pipe-card"><div class="est-pipe-num" style="color:#F5A623">${taxaConv}%</div><div class="est-pipe-label">Taxa qualif.→contrato</div></div>
     </div>
-    <div class="est-insight" style="cursor:pointer" onclick="abrirAlertaEstrategia('podmVirar')">💡 <span style="color:#F5A623;font-weight:800;font-size:1rem">${podmVirar.length}</span> <strong>leads</strong> ainda podem virar contrato neste período — <span style="color:#4F6EF7;text-decoration:underline;font-size:.78rem">clique para ver</span></div>
+    <div class="est-insight">💡 <strong>${qualif+andamento} leads</strong> ainda podem virar contrato este mês.${contratos===0&&qualif>0?` <span style="color:#F5A623;cursor:pointer;text-decoration:underline" onclick="abrirListaLeads(${JSON.stringify(qualifLeads.map(l=>l.id)).replace(/\"/g,'&quot;')},'Qualificados sem contrato')">${qualif} qualificados sem contrato.</span>`:''}</div>
   </div>
   <div class="est-section">
-    <div class="section-header-row"><div class="est-section-title">📢 Eficiência por Campanha</div><button class="section-collapse-btn" onclick="toggleSection('est-efic-body',this)" title="Minimizar/Maximizar">▾</button></div>
-    <div id="est-efic-body" class="section-collapsible">
+    <div class="est-section-title">📢 Eficiência por Campanha</div>
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Campanha</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>Taxa</th><th>Diagnóstico</th></tr></thead>
       <tbody>${Object.entries(campStats).sort((a,b)=>b[1].total-a[1].total).map(([camp,s])=>{
@@ -1593,11 +1243,9 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${camp}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td><span class="taxa-badge" style="color:${taxa>=30?'#10B981':taxa>=15?'#F5A623':'#EF4444'}">${taxa}%</span></td><td><span class="diag-badge ${dc}">${diag}</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
-    </div>
   </div>
   <div class="est-section">
-    <div class="section-header-row"><div class="est-section-title">👥 Desempenho da Equipe</div><button class="section-collapse-btn" onclick="toggleSection('est-equipe-body',this)" title="Minimizar/Maximizar">▾</button></div>
-    <div id="est-equipe-body" class="section-collapsible">
+    <div class="est-section-title">👥 Desempenho da Equipe</div>
     <div class="est-table-wrap"><table class="est-table">
       <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
       <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
@@ -1605,7 +1253,6 @@ window.renderEstrategia=function(){
         return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
-    </div>
   </div>
   ${(partoProximo.length||qualifParados.length||esfriando.length)?`
   <div class="est-section">
@@ -1618,1293 +1265,15 @@ window.renderEstrategia=function(){
   </div>`:''}`;
 };
 
-
-// ═══════════════════════════════════════════════════════
-// MÓDULO PLANEJAMENTO DE META
-// ═══════════════════════════════════════════════════════
-
-// Default plan (pre-filled with the 30-contract campaign data)
-const PLAN_DEFAULT = {
-  id: 'plan_30sm_jun2026',
-  nome: '30 Contratos SM — Jun/Jul 2026',
-  meta: 30,
-  inicio: '2026-06-16',
-  fim: '2026-07-20',
-  investimento: 1500,
-  metaConversao: 8,
-  campanhas: ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico'],
-  semanas: [
-    {label:'S1',inicio:'2026-06-16',fim:'2026-06-22',meta:4},
-    {label:'S2',inicio:'2026-06-23',fim:'2026-06-29',meta:6},
-    {label:'S3',inicio:'2026-06-30',fim:'2026-07-06',meta:7},
-    {label:'S4',inicio:'2026-07-07',fim:'2026-07-13',meta:7},
-    {label:'S5',inicio:'2026-07-14',fim:'2026-07-20',meta:6},
-  ]
-};
-
-let planosAtivos = [];
-let planoSelecionado = null;
-let chartRitmo = null, chartFunil = null, chartCampanha = null;
-
-// Load plans from Firestore (collection 'config/planos')
-async function carregarPlanos() {
-  try {
-    const snap = await getDoc(doc(db, 'config', 'planos_meta'));
-    if (snap.exists()) {
-      planosAtivos = snap.data().planos || [];
-      // If Firestore has no plans yet, seed with default
-      if (planosAtivos.length === 0) {
-        planosAtivos = [PLAN_DEFAULT];
-        await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
-      }
-    } else {
-      // First time: save default plan
-      planosAtivos = [PLAN_DEFAULT];
-      await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
-    }
-    if (!planoSelecionado && planosAtivos.length > 0) {
-      planoSelecionado = planosAtivos[0];
-    }
-  } catch(e) {
-    console.error('Erro ao carregar planos:', e);
-    if (planosAtivos.length === 0) planosAtivos = [PLAN_DEFAULT];
-    if (!planoSelecionado) planoSelecionado = planosAtivos[0];
-  }
-}
-
-async function salvarPlanos() {
-  try {
-    await setDoc(doc(db, 'config', 'planos_meta'), { planos: planosAtivos });
-  } catch(e) { console.error('Erro ao salvar planos', e); }
-}
-
-// ── Campaign dynamic management ──
-let campanhasDinamicas = [];
-
-async function carregarCampanhas() {
-  try {
-    const snap = await getDoc(doc(db, 'config', 'campanhas'));
-    if (snap.exists()) {
-      campanhasDinamicas = snap.data().lista || [];
-    } else {
-      campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
-      await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas });
-    }
-  } catch(e) {
-    campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
-  }
-  atualizarSelectCampanha();
-}
-
-window.adicionarNovaCampanha = async function() {
-  // Remove existing modal if open
-  document.getElementById('modal-camp')?.remove();
-
-  const html2 = `<div class="modal-camp-overlay" id="modal-camp">
-    <div class="modal-camp-box">
-      <div class="modal-camp-head">
-        <span class="modal-camp-title">📢 Gerenciar Campanhas</span>
-        <button class="modal-close" onclick="document.getElementById('modal-camp').remove()">✕</button>
-      </div>
-      <div class="modal-camp-body">
-        <div class="modal-camp-input-row">
-          <input class="modal-camp-input" id="camp-nova-input" placeholder="Nome da nova campanha..." onkeydown="if(event.key==='Enter')salvarNovaCampanha()"/>
-          <button class="btn-meta btn-meta-primary" onclick="salvarNovaCampanha()">+ Adicionar</button>
-        </div>
-        <div style="font-size:.68rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Campanhas cadastradas</div>
-        <div class="modal-camp-list" id="camp-list-modal"></div>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html2);
-  renderCampList();
-  setTimeout(()=>document.getElementById('camp-nova-input')?.focus(), 80);
-}
-
-window.renderCampList = function() {
-  const el = document.getElementById('camp-list-modal');
-  if (!el) return;
-  if (campanhasDinamicas.length === 0) {
-    el.innerHTML = '<div class="modal-camp-empty">Nenhuma campanha cadastrada</div>';
-    return;
-  }
-  el.innerHTML = campanhasDinamicas.map((c,i) => `
-    <div class="modal-camp-item">
-      <span class="modal-camp-item-name">📢 ${c}</span>
-      <button class="modal-camp-item-del" onclick="excluirCampanha(${i})" title="Remover campanha">✕</button>
-    </div>`).join('');
-}
-
-window.salvarNovaCampanha = async function() {
-  const input = document.getElementById('camp-nova-input');
-  const n = (input?.value||'').trim();
-  if (!n) { input?.focus(); return; }
-  if (campanhasDinamicas.includes(n)) { showToast('Campanha já existe'); return; }
-  campanhasDinamicas.push(n);
-  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
-  atualizarSelectCampanha();
-  if (input) input.value = '';
-  renderCampList();
-  showToast('Campanha "' + n + '" adicionada!');
-  input?.focus();
-};
-
-window.excluirCampanha = async function(idx) {
-  const nome = campanhasDinamicas[idx];
-  if (!nome) return;
-  const emUso = allLeads.some(l => l.campaign === nome);
-  if (emUso) {
-    showToast(`"${nome}" está em uso em leads — não pode excluir`);
-    return;
-  }
-  campanhasDinamicas.splice(idx, 1);
-  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
-  atualizarSelectCampanha();
-  renderCampList();
-  showToast('Campanha removida');
-};
-
-function atualizarSelectCampanha() {
-  const sel = document.getElementById('f-campaign');
-  if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">Selecione...</option>' +
-    campanhasDinamicas.map(c => `<option value="${c}">${c}</option>`).join('');
-  if (cur) sel.value = cur;
-}
-
-// ── Plan calculations ──
-function calcularPlano(plano) {
-  const now = new Date();
-  const inicio = new Date(plano.inicio + 'T00:00:00');
-  const fim = new Date(plano.fim + 'T23:59:59');
-
-  // Filter leads that belong to this plan's campaigns
-  const campanhas = plano.campanhas || [];
-  const leadsPlano = allLeads.filter(l => {
-    if (campanhas.length === 0) return true;
-    return campanhas.includes(l.campaign);
-  });
-
-  // Contracts closed since plan start
-  const contratos = leadsPlano.filter(l => {
-    if (l.status !== 'CONTRATO FECHADO') return false;
-    const d = l.lastContact?.toDate ? l.lastContact.toDate() : (l.createdAt?.toDate ? l.createdAt.toDate() : null);
-    // Use log to find when contract was closed if possible
-    if (l.log && l.log.length > 0) {
-      const logContrato = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
-      if (logContrato.length > 0) {
-        const ts = new Date(logContrato[logContrato.length-1].ts);
-        return ts >= inicio && ts <= fim;
-      }
-    }
-    const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-    return cd && cd >= inicio;
-  });
-
-  // All leads that entered during campaign period
-  const leadsNoPeriodo = leadsPlano.filter(l => {
-    const d = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-    return d && d >= inicio && d <= fim;
-  });
-
-  const qualificados = leadsNoPeriodo.filter(l => 
-    ['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA','CONTRATO FECHADO'].includes(l.status)
-  );
-
-  // Weekly breakdown
-  const semanas = plano.semanas.map(s => {
-    const si = new Date(s.inicio + 'T00:00:00');
-    const sf = new Date(s.fim + 'T23:59:59');
-    const contrSem = contratos.filter(l => {
-      if (l.log && l.log.length > 0) {
-        const logC = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
-        if (logC.length > 0) {
-          const ts = new Date(logC[logC.length-1].ts);
-          return ts >= si && ts <= sf;
-        }
-      }
-      const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-      return cd && cd >= si && cd <= sf;
-    });
-    const isAtual = now >= si && now <= sf;
-    const isPast = sf < now;
-    const isFuture = si > now;
-    return { ...s, realizado: contrSem.length, isAtual, isPast, isFuture };
-  });
-
-  // Campaign performance
-  const campStats = {};
-  leadsNoPeriodo.forEach(l => {
-    const c = l.campaign || 'Sem campanha';
-    if (!campStats[c]) campStats[c] = { total: 0, qualif: 0, contrato: 0 };
-    campStats[c].total++;
-    if (['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA','CONTRATO FECHADO'].includes(l.status)) campStats[c].qualif++;
-    if (l.status === 'CONTRATO FECHADO') campStats[c].contrato++;
-  });
-
-  // Projections
-  const diasDecorridos = Math.max(1, Math.floor((now - inicio) / (1000*60*60*24)));
-  const diasTotal = Math.ceil((fim - inicio) / (1000*60*60*24));
-  const diasRestantes = Math.max(0, Math.ceil((fim - now) / (1000*60*60*24)));
-  const ritmoAtual = contratos.length / diasDecorridos;
-  const projecaoFinal = Math.round(ritmoAtual * diasTotal);
-  const necessarioPorDia = diasRestantes > 0 ? ((plano.meta - contratos.length) / diasRestantes).toFixed(1) : 0;
-  const taxaConvAtual = leadsNoPeriodo.length > 0 ? (contratos.length / leadsNoPeriodo.length * 100).toFixed(1) : 0;
-  const cplEstimado = leadsNoPeriodo.length > 0 ? (plano.investimento / leadsNoPeriodo.length).toFixed(2) : '—';
-  const custoContrato = contratos.length > 0 ? (plano.investimento / contratos.length).toFixed(2) : '—';
-
-  // Ritmo esperado hoje vs. real (quantos contratos deveriam ter sido fechados até hoje)
-  const pctTempoDecorrido = diasDecorridos / diasTotal;
-  const contratosEsperadosHoje = Math.round(plano.meta * pctTempoDecorrido);
-  const diferencaRitmo = contratos.length - contratosEsperadosHoje; // positive = ahead, negative = behind
-
-  // Funil breakdown for gargalo detection
-  const emAndamento = leadsNoPeriodo.filter(l => l.status === 'EM ANDAMENTO').length;
-  const semResposta = leadsNoPeriodo.filter(l => l.status === 'SEM RESPOSTA').length;
-  const agDocs = leadsNoPeriodo.filter(l => l.status === 'AGUARDANDO DOCUMENTOS').length;
-  const agAssin = leadsNoPeriodo.filter(l => l.status === 'AGUARDANDO ASSINATURA').length;
-  const desqualif = leadsNoPeriodo.filter(l => l.status === 'DESQUALIFICADO').length;
-  const nQualif2 = qualificados.length;
-  const nLeads2 = leadsNoPeriodo.length;
-
-  // Identify where the funnel is bleeding
-  let gargalo = null;
-  if (nLeads2 >= 5) {
-    const txQualif = nLeads2 > 0 ? nQualif2 / nLeads2 : 0;       // leads → qualificados
-    const txDocs   = nQualif2 > 0 ? agDocs / nQualif2 : 0;        // qualif → ag.docs (travados)
-    const txAssin  = (agDocs + agAssin) > 0 ? agAssin / (agDocs + agAssin) : 0; // docs → assinatura (travados)
-    const txSemResp = nLeads2 > 0 ? semResposta / nLeads2 : 0;
-    const txConv   = nQualif2 > 0 ? contratos.length / nQualif2 : 0;
-
-    if (txSemResp > 0.40)
-      gargalo = { etapa: '1ª resposta', descricao: `${Math.round(txSemResp*100)}% dos leads não responderam ao primeiro contato`, acao: 'Revisar horário de envio da primeira mensagem e testar áudio no lugar de texto' };
-    else if (txQualif < 0.20 && nLeads2 >= 10)
-      gargalo = { etapa: 'qualificação', descricao: `Apenas ${Math.round(txQualif*100)}% dos leads estão sendo qualificados`, acao: 'Verificar se o Flow do Meta está filtrando corretamente. Revisar script A1 de primeiro contato' };
-    else if (agDocs >= 3)
-      gargalo = { etapa: 'documentos', descricao: `${agDocs} lead${agDocs>1?'s':''} travado${agDocs>1?'s':''} em Aguardando Documentos`, acao: 'Ligar diretamente para cada lead em ag. documentos. Oferecer começar com o que ela tem' };
-    else if (agAssin >= 2)
-      gargalo = { etapa: 'assinatura', descricao: `${agAssin} contrato${agAssin>1?'s':''} com link enviado sem assinatura`, acao: 'Ligar agora — link enviado há mais de 15 min sem assinar fecha apenas 10% por mensagem, 70% por ligação' };
-    else if (txConv < 0.25 && nQualif2 >= 5)
-      gargalo = { etapa: 'fechamento', descricao: `Apenas ${Math.round(txConv*100)}% dos qualificados viraram contrato`, acao: 'Revisar script de quebra de objeção. Oferecer videochamada com a Dra. Jucineide para leads travados' };
-  }
-
-  return {
-    contratos, leadsNoPeriodo, qualificados, semanas, campStats,
-    diasDecorridos, diasTotal, diasRestantes, projecaoFinal,
-    necessarioPorDia, taxaConvAtual, cplEstimado, custoContrato,
-    pct: Math.min(100, Math.round(contratos.length / plano.meta * 100)),
-    // new
-    contratosEsperadosHoje, diferencaRitmo,
-    emAndamento, semResposta, agDocs, agAssin, desqualif,
-    gargalo
-  };
-}
-
-// ── Render planning module ──
-window.renderPlanejamento = function() {
-  const el = document.getElementById('meta-module-content');
-  if (!el || !planoSelecionado) return;
-
-  const p = planoSelecionado;
-  const c = calcularPlano(p);
-  const now = new Date();
-  const fim = new Date(p.fim + 'T23:59:59');
-  const ativa = now <= fim;
-  const atras = c.projecaoFinal < p.meta && ativa;
-
-  // Destroy old charts
-  if (chartRitmo) { chartRitmo.destroy(); chartRitmo = null; }
-  if (chartFunil) { chartFunil.destroy(); chartFunil = null; }
-  if (chartCampanha) { chartCampanha.destroy(); chartCampanha = null; }
-
-  const nContratosTotal = c.contratos.length;
-  const pctBar = c.pct;
-  const corBarra = pctBar >= 100 ? '#10B981' : atras ? '#EF4444' : '#4F6EF7';
-
-  // ── Alertas inteligentes ──
-  const alertas = [];
-  const fimFormatado = new Date(p.fim+'T12:00:00').toLocaleDateString('pt-BR');
-
-  if (!ativa) {
-    // Campanha encerrada
-    const cor = nContratosTotal >= p.meta ? 'green' : 'orange';
-    alertas.push({tipo:cor, icon: nContratosTotal >= p.meta ? '✅':'📋',
-      texto:`Campanha encerrada. <strong>${nContratosTotal} de ${p.meta} contratos</strong> fechados.${nContratosTotal < p.meta ? ` Faltaram <strong>${p.meta - nContratosTotal}</strong> para a meta.` : ' Meta atingida!'}`});
-  } else {
-    // ── Alerta 1: Ritmo — à frente ou atrás ──
-    const diff = c.diferencaRitmo;
-    if (diff > 0) {
-      alertas.push({tipo:'green', icon:'🚀',
-        texto:`Você está <strong>${diff} contrato${diff>1?'s':''} à frente</strong> do ritmo necessário. No ritmo atual, fecha <strong>${c.projecaoFinal} contratos</strong> até ${fimFormatado} — acima da meta de ${p.meta}!`});
-    } else if (diff < 0) {
-      const atras = Math.abs(diff);
-      alertas.push({tipo:'red', icon:'⚠️',
-        texto:`Você está <strong>${atras} contrato${atras>1?'s':''} atrás</strong> do ritmo necessário. Com o ritmo atual, fecha <strong>${c.projecaoFinal} contrato${c.projecaoFinal!==1?'s':''} até ${fimFormatado} — não os ${p.meta}</strong>. Precisa de <strong>${c.necessarioPorDia} contrato${parseFloat(c.necessarioPorDia)>1?'s':''}/dia</strong> daqui para frente.`});
-    } else {
-      alertas.push({tipo:'green', icon:'🎯',
-        texto:`No ritmo exato da meta. Projeção: <strong>${c.projecaoFinal} contratos</strong> até ${fimFormatado}. Mantenha o ritmo!`});
-    }
-
-    // ── Alerta 2: Taxa de conversão com diagnóstico de etapa ──
-    if (c.leadsNoPeriodo.length >= 5) {
-      const txAtual = parseFloat(c.taxaConvAtual);
-      if (txAtual < p.metaConversao) {
-        const txNecessaria = c.leadsNoPeriodo.length > 0
-          ? ((p.meta / (c.leadsNoPeriodo.length + Math.max(0, c.diasRestantes * 10))) * 100).toFixed(1)
-          : p.metaConversao;
-        let gargaloTexto = 'Revisar o funil completo.';
-        if (c.gargalo) gargaloTexto = `O gargalo está em <strong>${c.gargalo.etapa}</strong>: ${c.gargalo.descricao}.`;
-        alertas.push({tipo:'orange', icon:'📉',
-          texto:`Taxa de conversão atual: <strong>${c.taxaConvAtual}%</strong> — você precisa de <strong>${p.metaConversao}%</strong>. ${gargaloTexto}`});
-      }
-    }
-
-    // ── Alerta 3: Ação concreta baseada no gargalo ──
-    if (c.gargalo) {
-      alertas.push({tipo:'orange', icon:'🔧',
-        texto:`<strong>Ação agora:</strong> ${c.gargalo.acao}.`});
-    }
-
-    // ── Alerta 4: Links sem assinatura (urgência máxima) ──
-    if (c.agAssin >= 1) {
-      alertas.push({tipo:'red', icon:'✍️',
-        texto:`<strong>${c.agAssin} contrato${c.agAssin>1?'s':''} aguardando assinatura</strong> agora. Ligue imediatamente — cada hora sem assinar reduz em 30% a chance de fechar.`});
-    }
-
-    // ── Alerta 5: Sem leads registrados ──
-    if (c.leadsNoPeriodo.length === 0) {
-      alertas.push({tipo:'orange', icon:'📥',
-        texto:`Nenhum lead das campanhas desta meta registrado ainda. Verifique se o campo <strong>Campanha</strong> está sendo preenchido nos cadastros.`});
-    }
-  }
-
-  // Semanas HTML
-  const semsHTML = c.semanas.map(s => {
-    let cls = 'meta-semana';
-    let statusTxt = '';
-    let badgeHTML = '';
-    if (s.isAtual) { cls += ' sem-atual'; badgeHTML = '<span class="meta-sem-badge atual">ATUAL</span>'; }
-    else if (s.isPast) { cls += s.realizado >= s.meta ? ' sem-ok' : ' sem-atras'; }
-    else { cls += ' sem-futura'; }
-    if (s.isPast) statusTxt = s.realizado >= s.meta ? `<div class="meta-sem-status" style="color:#10B981">✓ Meta batida</div>` : `<div class="meta-sem-status" style="color:#EF4444">✗ Abaixo</div>`;
-    else if (s.isAtual) statusTxt = `<div class="meta-sem-status" style="color:#4F6EF7">Em andamento</div>`;
-    const si = new Date(s.inicio+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
-    const sf = new Date(s.fim+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
-    // Get leads with contracts in this week
-    const siD = new Date(s.inicio+'T00:00:00'); const sfD = new Date(s.fim+'T23:59:59');
-    const contrSem = c.contratos.filter(l=>{
-      if(l.log&&l.log.length>0){const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');if(lc.length>0){const ts=new Date(lc[lc.length-1].ts);return ts>=siD&&ts<=sfD;}}
-      const cd=l.createdAt?.toDate?l.createdAt.toDate():null;return cd&&cd>=siD&&cd<=sfD;
-    });
-    const hasLeads = contrSem.length > 0 || s.isAtual || s.isPast;
-    const clickable = hasLeads ? 'clickable' : '';
-    const onclick = contrSem.length > 0 ? `onclick="abrirListaLeads(${JSON.stringify(contrSem.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos ${s.label}: ${si}–${sf}')"` : (s.isAtual||s.isPast ? `onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads ativos — ${s.label}')"` : '');
-    return `<div class="${cls} ${clickable}" ${onclick} title="${s.isAtual||s.isPast?'Clique para ver os leads':'Semana futura'}">${badgeHTML}
-      <div class="meta-sem-label">${s.label}</div>
-      <div class="meta-sem-periodo">${si}–${sf}</div>
-      <div class="meta-sem-vals">
-        <span class="meta-sem-real" style="color:${s.isPast?(s.realizado>=s.meta?'#10B981':'#EF4444'):'#4F6EF7'}">${s.realizado}</span>
-        <span class="meta-sem-sep">/</span>
-        <span class="meta-sem-meta">${s.meta}</span>
-      </div>
-      ${statusTxt}
-    </div>`;
-  }).join('');
-
-  // Funil HTML
-  const nLeads = c.leadsNoPeriodo.length;
-  const nQualif = c.qualificados.length;
-  const nContr = nContratosTotal;
-  const txQL = nLeads > 0 ? (nQualif/nLeads*100).toFixed(0) : 0;
-  const txCQ = nQualif > 0 ? (nContr/nQualif*100).toFixed(0) : 0;
-  const txCL = nLeads > 0 ? (nContr/nLeads*100).toFixed(1) : 0;
-
-  el.innerHTML = `
-  <div id="print-only-header">
-    <strong style="font-size:1.1rem">Costa Galvão Advocacia</strong><br>
-    <span style="font-size:.85rem">${p.nome}</span><br>
-    <span style="font-size:.75rem;color:#555">Gerado em ${now.toLocaleDateString('pt-BR')} às ${now.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
-  </div>
-
-  <!-- Alertas -->
-  <div class="meta-alertas">
-    ${alertas.map(a=>`<div class="meta-alerta alerta-${a.tipo}"><span class="meta-alerta-icon">${a.icon}</span><div class="meta-alerta-texto">${a.texto}</div></div>`).join('')}
-  </div>
-
-  <!-- KPIs principais -->
-  <div class="meta-placar">
-    <div class="meta-kpi clickable" onclick="abrirListaLeads(${JSON.stringify(c.contratos.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos fechados na campanha')" title="Ver contratos fechados">
-      <div class="meta-kpi-val" style="color:#4F6EF7">${nContratosTotal}<span style="font-size:.9rem;color:#6B7280">/${p.meta}</span></div>
-      <div class="meta-kpi-label">Contratos fechados</div>
-      <div class="meta-kpi-sub">${pctBar}% da meta</div>
-    </div>
-    <div class="meta-kpi clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads da campanha — taxa de conversão ${c.taxaConvAtual}%')" title="Ver todos os leads da campanha">
-      <div class="meta-kpi-val" style="color:${parseFloat(c.taxaConvAtual)>=p.metaConversao?'#10B981':'#EF4444'}">${c.taxaConvAtual}%</div>
-      <div class="meta-kpi-label">Taxa de conversão</div>
-      <div class="meta-kpi-sub">Meta: ${p.metaConversao}%</div>
-    </div>
-    <div class="meta-kpi" title="Projeção calculada do ritmo atual">
-      <div class="meta-kpi-val" style="color:${c.projecaoFinal>=p.meta?'#10B981':'#EF4444'}">${c.projecaoFinal}</div>
-      <div class="meta-kpi-label">Projeção final</div>
-      <div class="meta-kpi-sub">${c.diasRestantes}d restantes</div>
-    </div>
-    <div class="meta-kpi" title="Custo por contrato fechado com base no investimento informado">
-      <div class="meta-kpi-val" style="color:#8B5CF6">R$${c.custoContrato}</div>
-      <div class="meta-kpi-label">Custo/contrato</div>
-      <div class="meta-kpi-sub">CPL: R$${c.cplEstimado}</div>
-    </div>
-  </div>
-
-  <!-- Barra de progresso -->
-  <div class="meta-progress-wrap">
-    <div class="meta-progress-label"><span>Progresso da meta</span><span>${nContratosTotal} de ${p.meta} contratos</span></div>
-    <div class="meta-progress-bar">
-      <div class="meta-progress-fill" style="width:${pctBar}%;background:${corBarra}">
-        ${pctBar>8?`<span class="meta-progress-pct">${pctBar}%</span>`:''}
-      </div>
-    </div>
-  </div>
-
-  <!-- Semanas -->
-  <div style="font-size:.72rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Ritmo Semanal</div>
-  <div class="meta-semanas">${semsHTML}</div>
-
-  <!-- Funil -->
-  <div style="font-size:.72rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Funil de Conversão</div>
-  <div class="meta-funil">
-    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads entrados na campanha')" title="Ver todos os leads">
-      <div class="meta-funil-num" style="color:#4F6EF7">${nLeads}</div><div class="meta-funil-label">Leads entrados</div><div class="meta-funil-taxa" style="color:#6B7280">100%</div>
-    </div>
-    <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.qualificados.map(l=>l.id)).replace(/"/g,'&quot;')},'Leads qualificados na campanha')" title="Ver leads qualificados">
-      <div class="meta-funil-num" style="color:#10B981">${nQualif}</div><div class="meta-funil-label">Qualificados</div><div class="meta-funil-taxa" style="color:${txQL>=25?'#10B981':'#F5A623'}">${txQL}%</div>
-    </div>
-    <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.contratos.map(l=>l.id)).replace(/"/g,'&quot;')},'Contratos fechados na campanha')" title="Ver contratos fechados">
-      <div class="meta-funil-num" style="color:#8B5CF6">${nContr}</div><div class="meta-funil-label">Contratos</div><div class="meta-funil-taxa" style="color:${txCQ>=30?'#10B981':txCQ>=15?'#F5A623':'#EF4444'}">${txCQ}% dos qualif.</div>
-    </div>
-    <div class="meta-funil-seta">›</div>
-    <div class="meta-funil-etapa clickable" onclick="abrirListaLeads(${JSON.stringify(c.leadsNoPeriodo.map(l=>l.id)).replace(/"/g,'&quot;')},'Todos os leads — conversão geral ${txCL}%')" title="Ver todos os leads da campanha">
-      <div class="meta-funil-num" style="color:${parseFloat(txCL)>=8?'#10B981':'#EF4444'}">${txCL}%</div><div class="meta-funil-label">Conversão geral</div><div class="meta-funil-taxa" style="color:#6B7280">Meta: ${p.metaConversao}%</div>
-    </div>
-  </div>
-
-  <!-- Gráficos -->
-  <div class="meta-graficos">
-    <div class="meta-grafico-box">
-      <div class="meta-grafico-title">📊 Meta vs. Realizado por Semana</div>
-      <canvas id="chart-ritmo" height="180"></canvas>
-    </div>
-    <div class="meta-grafico-box">
-      <div class="meta-grafico-title">📢 Contratos por Campanha</div>
-      <canvas id="chart-campanha" height="180"></canvas>
-    </div>
-    <div class="meta-grafico-box full-width">
-      <div class="meta-grafico-title">🔽 Funil de Conversão</div>
-      <canvas id="chart-funil" height="120"></canvas>
-    </div>
-  </div>`;
-
-  // Draw charts after DOM is updated
-  setTimeout(() => desenharGraficos(p, c), 50);
-};
-
-function desenharGraficos(p, c) {
-  // Chart 1 — Ritmo semanal
-  const ctxR = document.getElementById('chart-ritmo');
-  if (ctxR) {
-    chartRitmo = new Chart(ctxR, {
-      type: 'bar',
-      data: {
-        labels: c.semanas.map(s => s.label),
-        datasets: [
-          { label: 'Meta', data: c.semanas.map(s => s.meta), backgroundColor: '#1E2235', borderColor: '#4F6EF7', borderWidth: 2, type: 'line', tension: 0.3, pointRadius: 4 },
-          { label: 'Realizado', data: c.semanas.map(s => s.realizado), backgroundColor: c.semanas.map(s => s.realizado >= s.meta ? '#10B98188' : s.isAtual ? '#4F6EF788' : s.isPast ? '#EF444488' : '#2A2F45'), borderColor: c.semanas.map(s => s.realizado >= s.meta ? '#10B981' : s.isAtual ? '#4F6EF7' : s.isPast ? '#EF4444' : '#2A2F45'), borderWidth: 1, borderRadius: 5 }
-        ]
-      },
-      options: { responsive: true, plugins: { legend: { labels: { color: '#9CA3AF', font: { size: 10 } } } }, scales: { x: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { color: '#1E2235' } }, y: { ticks: { color: '#9CA3AF', font: { size: 10 }, stepSize: 1 }, grid: { color: '#1E2235' }, beginAtZero: true } } }
-    });
-  }
-
-  // Chart 2 — Campanha
-  const campEntries = Object.entries(c.campStats).sort((a,b)=>b[1].contrato-a[1].contrato).slice(0,6);
-  const ctxC = document.getElementById('chart-campanha');
-  if (ctxC && campEntries.length > 0) {
-    chartCampanha = new Chart(ctxC, {
-      type: 'doughnut',
-      data: {
-        labels: campEntries.map(([k])=>k),
-        datasets: [{ data: campEntries.map(([,v])=>v.contrato||0), backgroundColor: ['#4F6EF7','#10B981','#F5A623','#8B5CF6','#EF4444','#06B6D4'], borderWidth: 0 }]
-      },
-      options: { responsive: true, plugins: { legend: { position: 'right', labels: { color: '#9CA3AF', font: { size: 10 }, padding: 8 } } } }
-    });
-  } else if (ctxC) {
-    const ctx2 = ctxC.getContext('2d');
-    ctx2.fillStyle = '#6B7280'; ctx2.font = '12px Inter'; ctx2.textAlign = 'center';
-    ctx2.fillText('Dados insuficientes', ctxC.width/2, ctxC.height/2);
-  }
-
-  // Chart 3 — Funil horizontal
-  const ctxF = document.getElementById('chart-funil');
-  if (ctxF) {
-    const nL = c.leadsNoPeriodo.length; const nQ = c.qualificados.length; const nC = c.contratos.length;
-    chartFunil = new Chart(ctxF, {
-      type: 'bar',
-      data: {
-        labels: ['Leads entrados','Qualificados','Contratos fechados'],
-        datasets: [{ data: [nL, nQ, nC], backgroundColor: ['#4F6EF788','#10B98188','#8B5CF688'], borderColor: ['#4F6EF7','#10B981','#8B5CF6'], borderWidth: 2, borderRadius: 6 }]
-      },
-      options: { indexAxis: 'y', responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { color: '#1E2235' }, beginAtZero: true }, y: { ticks: { color: '#9CA3AF', font: { size: 10 } }, grid: { display: false } } } }
-    });
-  }
-}
-
-// ── Modal: criar/editar plano ──
-window.editarPlanoAtivo = function() {
-  // Always edit the currently selected plan
-  if (!planoSelecionado) { showToast('Nenhum plano selecionado'); return; }
-  // Ensure it's in planosAtivos
-  if (!planosAtivos.find(x=>x.id===planoSelecionado.id)) {
-    planosAtivos.unshift(planoSelecionado);
-  }
-  abrirModalPlano(planoSelecionado.id);
-};
-
-window.abrirModalPlano = function(planoId) {
-  // Remove any existing modal first
-  document.getElementById('modal-plan')?.remove();
-  // planoId===undefined or planoId===null means NEW plan
-  // planoId===string means EDIT that specific plan
-  const isNew = (planoId === null || planoId === undefined || planoId === '');
-  let p = null;
-  if (!isNew && planoId) {
-    p = planosAtivos.find(x=>x.id===planoId) || (planoSelecionado?.id===planoId ? planoSelecionado : null);
-  }
-  const isEdit = !!p;
-  const camps = (p?.campanhas || campanhasDinamicas).join(', ');
-
-  const html = `<div class="modal-plan-overlay" id="modal-plan">
-    <div class="modal-plan-box">
-      <div class="modal-plan-head">
-        <span class="modal-plan-title">${isEdit?'✏️ Editar':'➕ Novo'} Planejamento de Meta</span>
-        <button class="modal-close" onclick="document.getElementById('modal-plan').remove()">✕</button>
-      </div>
-      <div class="modal-plan-body">
-        <div class="plan-form-grid">
-          <div class="plan-f-group full"><label class="plan-f-label">Nome do planejamento</label><input class="plan-f-input" id="pf-nome" value="${p?.nome||''}" placeholder="Ex: 30 Contratos SM — Jun/Jul 2026"/></div>
-          <div class="plan-f-group"><label class="plan-f-label">Meta de contratos</label><input class="plan-f-input" id="pf-meta" type="number" value="${p?.meta||30}" oninput="atualizarCalcPreview()"/></div>
-          <div class="plan-f-group"><label class="plan-f-label">Investimento/mês (R$)</label><input class="plan-f-input" id="pf-invest" type="number" value="${p?.investimento||1500}" oninput="atualizarCalcPreview()"/></div>
-          <div class="plan-f-group"><label class="plan-f-label">Data início</label><input class="plan-f-input" id="pf-inicio" type="date" value="${p?.inicio||''}" oninput="atualizarCalcPreview()"/></div>
-          <div class="plan-f-group"><label class="plan-f-label">Data fim</label><input class="plan-f-input" id="pf-fim" type="date" value="${p?.fim||''}" oninput="atualizarCalcPreview()"/></div>
-          <div class="plan-f-group"><label class="plan-f-label">Meta de conversão (%)</label><input class="plan-f-input" id="pf-conv" type="number" value="${p?.metaConversao||8}" oninput="atualizarCalcPreview()"/></div>
-          <div class="plan-f-group full"><label class="plan-f-label">Campanhas vinculadas (separadas por vírgula)</label><input class="plan-f-input" id="pf-camps" value="${camps}" placeholder="SM - V3, SM - 01, Indicação"/></div>
-        </div>
-        <div class="plan-calc-preview" id="plan-calc-preview">
-          <div class="plan-calc-title">📐 Cálculo automático</div>
-          <div class="plan-calc-grid" id="plan-calc-grid">Preencha as datas e a meta para ver a projeção.</div>
-        </div>
-        <div style="display:flex;gap:.6rem;margin-top:1rem;justify-content:flex-end;">
-          ${isEdit?`<button class="btn-meta btn-meta-danger" onclick="excluirPlano('${p.id}')">Excluir</button>`:''}
-          <button class="btn-meta" onclick="document.getElementById('modal-plan').remove()">Cancelar</button>
-          <button class="btn-meta btn-meta-primary" onclick="salvarPlanoForm('${p?.id||''}')">💾 Salvar</button>
-        </div>
-      </div>
-    </div>
-  </div>`;
-  document.body.insertAdjacentHTML('beforeend', html);
-  atualizarCalcPreview();
-};
-
-window.atualizarCalcPreview = function() {
-  const meta = parseInt(document.getElementById('pf-meta')?.value)||0;
-  const inicio = document.getElementById('pf-inicio')?.value;
-  const fim = document.getElementById('pf-fim')?.value;
-  const invest = parseFloat(document.getElementById('pf-invest')?.value)||0;
-  const conv = parseFloat(document.getElementById('pf-conv')?.value)||8;
-  const el = document.getElementById('plan-calc-grid');
-  if (!el || !meta || !inicio || !fim) return;
-  const di = new Date(inicio+'T12:00:00'), df = new Date(fim+'T12:00:00');
-  const dias = Math.ceil((df-di)/(1000*60*60*24));
-  const semanas = Math.ceil(dias/7);
-  const porSemana = (meta/semanas).toFixed(1);
-  const leadsNec = conv>0 ? Math.ceil(meta/(conv/100)) : '—';
-  const cpl = leadsNec!=='—'&&invest>0 ? 'R$'+(invest/(leadsNec/semanas*4)).toFixed(2) : '—';
-  const custContr = invest>0&&meta>0 ? 'R$'+(invest/meta*semanas/4).toFixed(2) : '—';
-  el.innerHTML = `
-    <div class="plan-calc-item">⏱ Dias de operação: <strong>${dias}</strong></div>
-    <div class="plan-calc-item">📅 Semanas: <strong>${semanas}</strong></div>
-    <div class="plan-calc-item">📈 Contratos/semana: <strong>${porSemana}</strong></div>
-    <div class="plan-calc-item">👥 Leads necessários: <strong>${leadsNec}</strong></div>
-    <div class="plan-calc-item">💰 CPL estimado: <strong>${cpl}</strong></div>
-    <div class="plan-calc-item">📋 Custo/contrato: <strong>${custContr}</strong></div>`;
-};
-
-window.salvarPlanoForm = async function(idExistente) {
-  const nome = document.getElementById('pf-nome')?.value.trim();
-  const meta = parseInt(document.getElementById('pf-meta')?.value)||0;
-  const inicio = document.getElementById('pf-inicio')?.value;
-  const fim = document.getElementById('pf-fim')?.value;
-  const invest = parseFloat(document.getElementById('pf-invest')?.value)||0;
-  const conv = parseFloat(document.getElementById('pf-conv')?.value)||8;
-  const campsRaw = document.getElementById('pf-camps')?.value||'';
-  const campanhas = campsRaw.split(',').map(s=>s.trim()).filter(Boolean);
-  if (!nome||!meta||!inicio||!fim) { showToast('Preencha todos os campos obrigatórios'); return; }
-
-  // Auto-generate semanas
-  const di = new Date(inicio+'T12:00:00');
-  const df = new Date(fim+'T12:00:00');
-  const dias = Math.ceil((df-di)/(1000*60*60*24));
-  const nSems = Math.ceil(dias/7);
-  const baseContr = Math.floor(meta/nSems);
-  const resto = meta - baseContr*nSems;
-  const semanas = [];
-  for (let i=0;i<nSems;i++){
-    const si = new Date(di); si.setDate(di.getDate()+i*7);
-    const sf = new Date(si); sf.setDate(si.getDate()+6); if(sf>df) sf.setTime(df.getTime());
-    const metaSem = baseContr+(i<resto?1:0);
-    semanas.push({label:`S${i+1}`,inicio:si.toISOString().slice(0,10),fim:sf.toISOString().slice(0,10),meta:metaSem});
-  }
-
-  const id = idExistente || 'plan_'+Date.now();
-  const novoPlan = {id, nome, meta, inicio, fim, investimento:invest, metaConversao:conv, campanhas, semanas};
-  const idx = planosAtivos.findIndex(x=>x.id===id);
-  if (idx>=0) planosAtivos[idx]=novoPlan; else planosAtivos.unshift(novoPlan);
-  planoSelecionado = novoPlan;
-  await salvarPlanos();
-  document.getElementById('modal-plan')?.remove();
-  // Update select dropdown with all plans
-  const sel = document.getElementById('select-plano');
-  if (sel) {
-    sel.innerHTML = planosAtivos.map(p =>
-      `<option value="${p.id}" ${p.id===novoPlan.id?'selected':''}>${p.nome}</option>`
-    ).join('');
-  }
-  // Update badge
-  const badge = document.getElementById('meta-badge-status');
-  if (badge) {
-    const now2=new Date(); const fim2=new Date(novoPlan.fim+'T23:59:59');
-    badge.textContent = now2<=fim2?'ATIVA':'ENCERRADA';
-    badge.className = now2<=fim2?'meta-badge-ativa':'meta-badge-atrasada';
-  }
-  renderPlanejamento();
-  showToast('✅ Planejamento salvo!');
-};
-
-window.excluirPlano = async function(id) {
-  if (!confirm('Excluir este planejamento?')) return;
-  planosAtivos = planosAtivos.filter(x=>x.id!==id);
-  planoSelecionado = planosAtivos[0]||null;
-  await salvarPlanos();
-  document.getElementById('modal-plan')?.remove();
-  renderPlanejamento();
-  showToast('Planejamento excluído');
-};
-
-window.imprimirRelatorio = function() {
-  window.print();
-};
-
-
 // ─── TABS ───
-
-// ── Period filter functions ──
-window.setDashPeriodo=function(p,btn){
-  dashPeriodo=p;dashDataIni='';dashDataFim='';
-  document.querySelectorAll('#dash-period-bar .period-btn').forEach(b=>b.classList.remove('active'));
-  if(btn)btn.classList.add('active');
-  const di=document.getElementById('dash-date-inputs');
-  if(di)di.classList.toggle('visible',p==='especifica');
-  renderMetrics();
-};
-window.setDashPeriodoCustom=function(){
-  dashDataIni=document.getElementById('dash-ini')?.value||'';
-  dashDataFim=document.getElementById('dash-fim')?.value||'';
-  if(dashDataIni&&dashDataFim)renderMetrics();
-};
-window.setEstPeriodo=function(p,btn){
-  estPeriodo=p;estDataIni='';estDataFim='';
-  document.querySelectorAll('#est-period-bar .period-btn').forEach(b=>b.classList.remove('active'));
-  if(btn)btn.classList.add('active');
-  const di=document.getElementById('est-date-inputs');
-  if(di)di.classList.toggle('visible',p==='especifica');
-  renderEstrategia();
-};
-window.setEstPeriodoCustom=function(){
-  estDataIni=document.getElementById('est-ini')?.value||'';
-  estDataFim=document.getElementById('est-fim')?.value||'';
-  if(estDataIni&&estDataFim)renderEstrategia();
-};
-
-// ── Honorarios modal ──
-window.calcHonorarios=function(){
-  const val=parseFloat(document.getElementById('f-honorarios')?.value)||0;
-  const tipo=document.getElementById('f-tipo')?.value||'SM';
-  const el=document.getElementById('honor-calc-preview');
-  if(!el)return;
-  if(!val){el.textContent='';return;}
-  if(tipo==='SM'){
-    const parc=(val/4).toFixed(2);
-    el.textContent=`4x de R$ ${parc} • Primeira parcela em ~4 meses`;
-  } else {
-    el.textContent=`Pagamento único de R$ ${val.toFixed(2)} • Previsão em ~9 meses`;
-  }
-};
-
-// Show/hide honorarios field based on status
-window.toggleHonorariosField=function(){
-  const status=document.getElementById('f-status')?.value;
-  const row=document.getElementById('honorarios-row');
-  const rowB=document.getElementById('beneficio-row');
-  const isClosed=status==='CONTRATO FECHADO';
-  if(row)row.style.display=isClosed?'flex':'none';
-  if(rowB)rowB.style.display=isClosed?'flex':'none';
-  calcHonorarios();
-};
-
-// ── Financial Panel render ──
-window.renderFinanceiro=function(){
-  const el=document.getElementById('fin-panel-content');
-  if(!el)return;
-  const{ini,fim}=getDateRange(estPeriodo,estDataIni,estDataFim);
-  const contratos=allLeads.filter(l=>{
-    if(l.status!=='CONTRATO FECHADO')return false;
-    const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;
-  });
-
-  // Total honorários
-  const totalHonor=contratos.reduce((s,l)=>s+getHonorario(l),0);
-
-  // Parcelas por mês (próximos 6 meses)
-  const now=new Date();
-  const meses=[];
-  for(let i=0;i<6;i++){
-    const d=new Date(now.getFullYear(),now.getMonth()+i,1);
-    meses.push({label:d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'}),ini:d,fim:new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59),total:0});
-  }
-  contratos.forEach(l=>{
-    getParcelas(l).forEach(p=>{
-      const m=meses.find(mx=>p.data>=mx.ini&&p.data<=mx.fim);
-      if(m)m.total+=p.valor;
-    });
-  });
-  const recProx6=meses.reduce((s,m)=>s+m.total,0);
-
-  // Investimento e ROI (do plano ativo se existir)
-  const investTotal=planoSelecionado?planoSelecionado.investimento:0;
-  const roi=investTotal>0?((totalHonor-investTotal)/investTotal*100):null;
-
-  // Taxa de conversão atual (do plano ou geral)
-  const txConv=planoSelecionado?parseFloat(calcularPlano(planoSelecionado).taxaConvAtual):
-    (allLeads.length>0?(contratos.length/allLeads.length*100):0);
-
-  el.innerHTML=`
-  <!-- KPIs financeiros -->
-  <div class="fin-kpis">
-    <div class="fin-kpi">
-      <div class="fin-kpi-val" style="color:#10B981">R$${totalHonor.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
-      <div class="fin-kpi-label">Honorários estimados</div>
-      <div class="fin-kpi-sub">${contratos.length} contrato${contratos.length!==1?'s':''} fechado${contratos.length!==1?'s':''}</div>
-    </div>
-    <div class="fin-kpi">
-      <div class="fin-kpi-val" style="color:#4F6EF7">R$${recProx6.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0})}</div>
-      <div class="fin-kpi-label">A receber (6 meses)</div>
-      <div class="fin-kpi-sub">Parcelas agendadas</div>
-    </div>
-    <div class="fin-kpi">
-      <div class="fin-kpi-val" style="color:${roi===null?'#6B7280':roi>=0?'#10B981':'#EF4444'}">${roi===null?'—':roi.toFixed(0)+'%'}</div>
-      <div class="fin-kpi-label">ROI estimado</div>
-      <div class="fin-kpi-sub">${investTotal>0?'vs. R$'+investTotal.toLocaleString('pt-BR'):'Configure o investimento no plano'}</div>
-    </div>
-    <div class="fin-kpi clickable" onclick="abrirAlertaEstrategia('contratosAll')" title="Ver contratos por tipo" style="cursor:pointer">
-      <div style="display:flex;justify-content:center;gap:1rem;align-items:baseline">
-        <div>
-          <div class="fin-kpi-val" style="color:#4F6EF7;font-size:1.1rem">${contratos.filter(l=>l.tipo==='SM').length}</div>
-          <div style="font-size:.6rem;color:#6B7280;margin-top:.15rem">SM</div>
-        </div>
-        <div style="color:#2A2F45;font-size:.9rem">/</div>
-        <div>
-          <div class="fin-kpi-val" style="color:#10B981;font-size:1.1rem">${contratos.filter(l=>l.tipo!=='SM').length}</div>
-          <div style="font-size:.6rem;color:#6B7280;margin-top:.15rem">Outros</div>
-        </div>
-      </div>
-      <div class="fin-kpi-label">Contratos por Tipo</div>
-      <div class="fin-kpi-sub">SM / Outros benefícios</div>
-    </div>
-  </div>
-
-  <!-- Timeline de recebimento -->
-  <div style="font-size:.72rem;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">📅 Previsão de Recebimento — Próximos 6 Meses</div>
-  <div class="fin-timeline">
-    ${meses.map(m=>`
-      <div class="fin-month ${m.total>0?'has-value':''}">
-        <div class="fin-month-label">${m.label}</div>
-        <div class="fin-month-val ${m.total===0?'zero':''}">R$${m.total>0?m.total.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0}):'0'}</div>
-      </div>`).join('')}
-  </div>
-
-  <!-- ROI bar -->
-  ${investTotal>0&&roi!==null?`
-  <div class="fin-roi-bar">
-    <div>
-      <div class="fin-roi-num" style="color:${roi>=200?'#10B981':roi>=100?'#F5A623':'#EF4444'}">${roi.toFixed(0)}% ROI</div>
-      <div style="font-size:.65rem;color:#6B7280">Para cada R$1 investido, retorno de R$${investTotal>0?(totalHonor/investTotal).toFixed(2):'—'}</div>
-    </div>
-    <div class="fin-roi-desc">
-      Investimento: <strong>R$${investTotal.toLocaleString('pt-BR')}</strong> ·
-      Honorários: <strong>R$${totalHonor.toLocaleString('pt-BR',{minimumFractionDigits:0})}</strong> ·
-      Resultado: <strong style="color:${totalHonor-investTotal>=0?'#10B981':'#EF4444'}">R$${(totalHonor-investTotal).toLocaleString('pt-BR',{minimumFractionDigits:0})}</strong>
-    </div>
-  </div>`:''}
-
-  <!-- Simulador -->
-  <div class="fin-sim">
-    <div class="fin-sim-title">🔢 Simulador de Projeção</div>
-    <div class="fin-sim-row">
-      <span class="fin-sim-label">Se eu investir</span>
-      <input class="fin-sim-input" id="sim-invest" type="number" value="${investTotal||1500}" oninput="simularROI()"/>
-      <span class="fin-sim-label">com conversão de</span>
-      <input class="fin-sim-input" id="sim-conv" type="number" value="${txConv.toFixed(1)}" step="0.1" oninput="simularROI()"/>
-      <span class="fin-sim-label">%</span>
-    </div>
-    <div class="fin-sim-result" id="sim-resultado">
-      <div class="fin-sim-res-item"><div class="fin-sim-res-val" id="sim-contratos">—</div><div class="fin-sim-res-label">Contratos estimados</div></div>
-      <div class="fin-sim-res-item"><div class="fin-sim-res-val" id="sim-honor" style="color:#10B981">—</div><div class="fin-sim-res-label">Honorários estimados</div></div>
-      <div class="fin-sim-res-item"><div class="fin-sim-res-val" id="sim-roi" style="color:#8B5CF6">—</div><div class="fin-sim-res-label">ROI projetado</div></div>
-    </div>
-  </div>`;
-
-  setTimeout(simularROI,50);
-};
-
-window.simularROI=function(){
-  const invest=parseFloat(document.getElementById('sim-invest')?.value)||1500;
-  const conv=parseFloat(document.getElementById('sim-conv')?.value)||8;
-  const cpl=5; // CPL médio estimado
-  const leads=Math.round(invest/cpl);
-  const contratos=Math.round(leads*conv/100);
-  const honor=contratos*(planoSelecionado?.campanhas?.length>0?(allLeads.filter(l=>l.status==='CONTRATO FECHADO'&&planoSelecionado.campanhas.includes(l.campaign)).reduce((s,l,_,a)=>s+getHonorario(l)/a.length,0)||HONOR_MEDIO.SM):HONOR_MEDIO.SM);
-  const roi=invest>0?((honor-invest)/invest*100):0;
-  const el_c=document.getElementById('sim-contratos');
-  const el_h=document.getElementById('sim-honor');
-  const el_r=document.getElementById('sim-roi');
-  if(el_c)el_c.textContent=contratos;
-  if(el_h)el_h.textContent='R$'+honor.toLocaleString('pt-BR',{minimumFractionDigits:0,maximumFractionDigits:0});
-  if(el_r){el_r.textContent=roi.toFixed(0)+'%';el_r.style.color=roi>=200?'#10B981':roi>=100?'#F5A623':'#EF4444';}
-};
-
-window.abrirAlertaEstrategia = function(tipo) {
-  const a = window._estAlerts || {};
-  const mapa = {
-    partoProximo:  { leads: a.partoProximo,    titulo: 'SM com parto em até 60 dias' },
-    qualifParados: { leads: a.qualifParados,   titulo: 'Qualificados parados +7 dias' },
-    esfriando:     { leads: a.esfriando,       titulo: 'Leads esfriando (+15 dias sem contato)' },
-    fuAtrasados:   { leads: a.fuAtrasados,     titulo: 'Follow-ups em atraso' },
-    mesLeads:      { leads: a.mesLeads,        titulo: 'Leads do período' },
-    qualifLeads:   { leads: a.qualifLeads,     titulo: 'Qualificados do período' },
-    contratosLeads:{ leads: a.contratosLeads,  titulo: 'Contratos fechados no período' },
-    podmVirar:     { leads: a.podmVirar,       titulo: 'Leads que podem virar contrato' },
-    contratosAll:  { leads: a.contratosLeads,  titulo: 'Contratos fechados — por tipo' },
-  };
-  const item = mapa[tipo];
-  if (!item || !item.leads || item.leads.length === 0) {
-    showToast('Nenhum lead nesta categoria');
-    return;
-  }
-  abrirListaLeads(item.leads.map(l => l.id), item.titulo);
-};
-
-window.toggleMetaModule = function() {
-  const body = document.getElementById('meta-module-body');
-  const btn = document.getElementById('meta-collapse-btn');
-  if (!body) return;
-  const collapsed = body.classList.toggle('collapsed');
-  if (btn) btn.textContent = collapsed ? '▸' : '▾';
-};
-
-
-// ═══════════════════════════════════════════════════════
-// MÓDULO OPERAÇÃO DE INDICAÇÃO ATIVA
-// ═══════════════════════════════════════════════════════
-
-const GOOGLE_REVIEW_URL = 'https://g.page/r/Cdbsuq49wWMlEBM/review';
-let indFiltroAtivo = 'todos';
-
-// ── Classificar lead em grupo A ou B ──
-function classifIndGrupo(l) {
-  // Grupo A: benefício já concedido OU parto já passou (mais de 30 dias)
-  if (l.beneficioConcedido === 'sim') return 'A';
-  if (l.dataParto) {
-    const p = l.dataParto?.toDate ? l.dataParto.toDate() : new Date(l.dataParto);
-    const dias = Math.floor((new Date() - p) / (1000*60*60*24));
-    if (dias > 30) return 'A'; // parto passado há mais de 30 dias
-  }
-  if (!l.dataParto && l.tipo !== 'SM') return 'A'; // sem parto (outros benefícios) → A
-  return 'B'; // ainda grávida aguardando
-}
-
-// ── Cadência por grupo ──
-const IND_CADENCIA = {
-  A: [
-    { dia: 1,  fase: 'Google',    label: 'D+1',  objetivo: 'Avaliação Google' },
-    { dia: 5,  fase: 'Indicacao', label: 'D+5',  objetivo: 'Pedido de indicação' },
-    { dia: 12, fase: 'Reforco',   label: 'D+12', objetivo: 'Reforço indicação' },
-  ],
-  B: [
-    { dia: 1,  fase: 'Google',    label: 'D+1',  objetivo: 'Avaliação Google (agora)' },
-    { dia: 0,  fase: 'PosNasc',   label: 'Pós-nascimento', objetivo: 'Indicação após concessão' },
-  ]
-};
-
-// ── Mensagens por fase ──
-function getMsgIndicacao(l, fase, tentativa) {
-  const nome = (l.name||'').split(' ')[0] || 'você';
-  const beneficio = l.tipo === 'SM' ? 'salário-maternidade' : 'benefício previdenciário';
-  const msgs = {
-    Google: {
-      wpp: `💙 ${nome}, a sua experiência pode ajudar outras pessoas!
-
-Muitas mulheres deixam de buscar o ${beneficio} por medo de ser tudo online, de não conhecer o escritório pessoalmente ou por acharem que não têm direito. Por isso, peço que me ajude com a sua avaliação.
-
-Se você puder, ao fazer sua avaliação, inclua um comentário contando:
-• Que o atendimento foi 100% online, mesmo você estando em outro Estado, e mesmo sem nos conhecer deu tudo certo
-• Que conseguimos o ${beneficio} para você${l.tipo==='SM'?' e seu bebê':''}
-• O que achou do nosso atendimento
-
-👉 A avaliação leva menos de 1 minuto:
-${GOOGLE_REVIEW_URL}
-
-Sua avaliação ajuda outras pessoas a não desistirem de um direito que é delas 🌸`,
-      crm: `D+1 Operação Indicação: enviada mensagem de solicitação de avaliação Google Meu Negócio. Aguardando retorno.`,
-      comoResponder: [
-        { trigger: 'Avaliou', resp: 'Agradecer com mensagem calorosa. Após 3 dias enviar mensagem de indicação (D+5).' },
-        { trigger: 'Disse que vai avaliar', resp: 'Confirmar que está aguardando. Reforçar após 2 dias se não aparecer.' },
-        { trigger: 'Não respondeu', resp: 'Aguardar até D+5 e reforçar junto com o pedido de indicação.' },
-        { trigger: 'Pediu o link de novo', resp: `Reenviar: ${GOOGLE_REVIEW_URL}` },
-      ]
-    },
-    Indicacao: {
-      wpp: `${nome}, oi! 😊
-
-Passei aqui para te agradecer mais uma vez por ter confiado no nosso trabalho${l.tipo==='SM'?' para garantir o salário-maternidade da sua família':` para conseguir seu ${beneficio}`}.
-
-Se você conhece alguma ${l.tipo==='SM'?'mãe ou gestante':'pessoa'} que pode precisar de ajuda com algum benefício previdenciário, pode indicar para mim? Atendo com o mesmo cuidado que tive com você — 100% online, sem burocracia.
-
-É só me passar o contato ou pedir para ela me chamar diretamente. Você me ajuda muito com isso! 💙`,
-      crm: `D+5 Operação Indicação: enviada mensagem de pedido de indicação ativa. Aguardando retorno.`,
-      comoResponder: [
-        { trigger: 'Indicou alguém', resp: 'Agradecer imediatamente. Registrar o lead indicado e abrir atendimento com urgência. Informar a cliente quando o processo avançar.' },
-        { trigger: 'Disse que vai pensar', resp: 'Agradecer a boa vontade. Não insistir. Retornar em D+12 com mensagem de reforço leve.' },
-        { trigger: 'Não conhece ninguém', resp: 'Agradecer pela honestidade. Encerrar ciclo de indicação mantendo vínculo.' },
-        { trigger: 'Não respondeu', resp: 'Aguardar até D+12 para tentativa final.' },
-      ]
-    },
-    Reforco: {
-      wpp: `${nome}, oi! Passando para saber se você conseguiu pensar em alguém que eu possa ajudar com algum benefício previdenciário 😊 Não precisa ser agora — sempre que lembrar de alguém, pode me mandar o contato. Fico muito grata pela indicação! 💙`,
-      crm: `D+12 Operação Indicação: enviada mensagem de reforço final. Após esta tentativa, encerrar ciclo de indicação.`,
-      comoResponder: [
-        { trigger: 'Indicou', resp: 'Agradecer e abrir atendimento imediatamente para o lead indicado.' },
-        { trigger: 'Não respondeu ou não tem indicação', resp: 'Encerrar o ciclo. Registrar como "concluído sem indicação". Manter vínculo para futuro.' },
-      ]
-    },
-    PosNasc: {
-      wpp: `${nome}, oi! 🍼 Passando para parabenizar pelo nascimento${l.tipo==='SM'?' do bebê':''} e para saber como vocês estão!
-
-Agora que o benefício foi concedido, se você conhecer alguma ${l.tipo==='SM'?'mãe ou gestante':'pessoa'} que pode ter direito a algum benefício previdenciário, pode me indicar? Seu relato vai dar mais segurança para quem ainda tem dúvida de confiar num atendimento online 💙`,
-      crm: `Pós-nascimento Operação Indicação: enviada mensagem de felicitações e pedido de indicação. Aguardando retorno.`,
-      comoResponder: [
-        { trigger: 'Indicou alguém', resp: 'Agradecer e abrir atendimento com urgência para o lead indicado.' },
-        { trigger: 'Ainda aguardando concessão', resp: 'Registrar. Aguardar concessão e retornar.' },
-        { trigger: 'Não respondeu', resp: 'Tentar novamente em 7 dias. Após 2 tentativas, encerrar ciclo.' },
-      ]
-    }
-  };
-  return msgs[fase] || msgs.Indicacao;
-}
-
-// ── Status da operação de indicação ──
-function getIndStatus(l) {
-  const hist = l.indHistorico || [];
-  if (hist.some(h => h.resultado === 'indicacao_recebida')) return 'recebido';
-  if (hist.some(h => h.resultado === 'concluido')) return 'concluido';
-  if (hist.length > 0) return 'aguardando';
-  return 'pendente';
-}
-
-function getIndFaseAtual(l) {
-  const grupo = classifIndGrupo(l);
-  const cadencia = IND_CADENCIA[grupo];
-  const hist = l.indHistorico || [];
-  const feitasOk = hist.filter(h => h.enviado).length;
-  return Math.min(feitasOk, cadencia.length - 1);
-}
-
-// ── Main render ──
-window.filtrarIndicacao = function() {
-  renderIndicacao();
-};
-
-window.renderIndicacao = function() {
-  if (currentTab !== 'indicacao') return;
-  const lista = document.getElementById('ind-lista');
-  const statsEl = document.getElementById('ind-stats-bar');
-  if (!lista) return;
-  const searchQ = normStr(document.getElementById('ind-search')?.value||'');
-
-  // Todos os contratos fechados
-  let leads = allLeads.filter(l => l.status === 'CONTRATO FECHADO');
-  // Apply search
-  if (searchQ) leads = leads.filter(l => normStr(l.name||'').includes(searchQ));
-
-  // Stats
-  const grpA = leads.filter(l => classifIndGrupo(l) === 'A');
-  const grpB = leads.filter(l => classifIndGrupo(l) === 'B');
-  const pendentes = leads.filter(l => getIndStatus(l) === 'pendente');
-  const recebidos = leads.filter(l => getIndStatus(l) === 'recebido');
-
-  if (statsEl) statsEl.innerHTML = `
-    <div class="ind-stat"><div class="ind-stat-val" style="color:#4F6EF7">${leads.length}</div><div class="ind-stat-label">Total contratos</div></div>
-    <div class="ind-stat"><div class="ind-stat-val" style="color:#10B981">${grpA.length}</div><div class="ind-stat-label">Grupo A — Indicação</div></div>
-    <div class="ind-stat"><div class="ind-stat-val" style="color:#8B5CF6">${grpB.length}</div><div class="ind-stat-label">Grupo B — Aguardando</div></div>
-    <div class="ind-stat"><div class="ind-stat-val" style="color:#F5A623">${recebidos.length}</div><div class="ind-stat-label">Indicações recebidas</div></div>
-  `;
-
-  // Filter
-  if (indFiltroAtivo === 'A') leads = grpA;
-  else if (indFiltroAtivo === 'B') leads = grpB;
-  else if (indFiltroAtivo === 'pendente') leads = pendentes;
-  else if (indFiltroAtivo === 'concluido') leads = leads.filter(l => getIndStatus(l) === 'concluido');
-
-  if (leads.length === 0) {
-    lista.innerHTML = '<div style="text-align:center;color:#6B7280;padding:2rem;font-size:.85rem">Nenhum lead nesta categoria</div>';
-    return;
-  }
-
-  lista.innerHTML = leads.map(l => renderIndCard(l)).join('');
-};
-
-function renderIndCard(l) {
-  const grupo = classifIndGrupo(l);
-  const status = getIndStatus(l);
-  const faseIdx = getIndFaseAtual(l);
-  const cadencia = IND_CADENCIA[grupo];
-  const faseAtual = cadencia[faseIdx];
-  const hist = l.indHistorico || [];
-
-  const statusLabel = {pendente:'Pendente',aguardando:'Aguardando resp.',recebido:'🎉 Indicação recebida',concluido:'✓ Concluído'}[status]||status;
-  const msg = getMsgIndicacao(l, faseAtual?.fase || 'Indicacao', faseIdx + 1);
-
-  // ── Calcular data do próximo passo ──
-  // Base: data da última ação feita, ou data de criação do lead
-  let baseData = null;
-  const ultimaAcao = [...hist].filter(h=>h.data).pop();
-  if (ultimaAcao) baseData = new Date(ultimaAcao.data);
-  else if (l.lastContact?.toDate) baseData = l.lastContact.toDate();
-  else if (l.createdAt?.toDate) baseData = l.createdAt.toDate();
-  else baseData = new Date();
-
-  // ── Barra de progresso SEMPRE VISÍVEL ──
-  const progressHTML = (() => {
-    const steps = cadencia.map((t, i) => {
-      const feita = !!hist[i]?.enviado;
-      const eAtual = i === faseIdx && status !== 'concluido' && status !== 'recebido';
-      const sFutura = !feita && !eAtual;
-      const cls = feita ? 's-feita' : eAtual ? 's-atual' : 's-futura';
-
-      // Data: se feita → data real; se atual → "Hoje/Em X dias"; se futura → prevista
-      let dataLabel = '';
-      let dataCls = 'futura';
-      if (feita && hist[i]?.data) {
-        dataLabel = new Date(hist[i].data).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'});
-        dataCls = 'feita';
-      } else if (eAtual) {
-        // Next step: baseData + dias da cadência
-        const prevDate = new Date(baseData);
-        prevDate.setDate(prevDate.getDate() + (t.dia||0));
-        const hoje = new Date(); hoje.setHours(0,0,0,0);
-        prevDate.setHours(0,0,0,0);
-        const diff = Math.round((prevDate - hoje) / (1000*60*60*24));
-        dataLabel = diff <= 0 ? '⚡ Hoje' : diff === 1 ? 'Amanhã' : `${diff}d`;
-        dataCls = 'proxima';
-      }
-
-      const connector = i < cadencia.length - 1
-        ? `<div class="ind-step-connector ${feita?'feita':'pendente'}"></div>`
-        : '';
-
-      return `<div class="ind-step-wrap">
-        <div class="ind-step">
-          <div class="ind-step-circle ${cls}">${feita?'✓':eAtual?i+1:i+1}</div>
-          <div class="ind-step-text">
-            <div class="ind-step-label ${cls}">${t.label}</div>
-            <div class="ind-step-sublabel">${t.objetivo}</div>
-            <div class="ind-step-date ${dataCls}">${dataLabel||'—'}</div>
-          </div>
-        </div>
-        ${connector}
-      </div>`;
-    });
-
-    // If concluido or recebido, show final state
-    if (status === 'recebido') steps.push(`<div class="ind-step"><div class="ind-step-circle s-feita">🎉</div><div class="ind-step-text"><div class="ind-step-label s-feita">Recebida!</div></div></div>`);
-    if (status === 'concluido') steps.push(`<div class="ind-step"><div class="ind-step-circle" style="background:#6B7280;color:#fff;border:none">✓</div><div class="ind-step-text"><div class="ind-step-label" style="color:#6B7280">Encerrado</div></div></div>`);
-
-    return steps.join('');
-  })();
-
-  const respostasHTML = (msg.comoResponder||[]).map(r =>
-    `<div class="ind-resp-item"><span class="ind-resp-trigger">↳ ${r.trigger}:</span> ${r.resp}</div>`
-  ).join('');
-
-  const wa = formatPhone ? formatPhone(l.phone) : (l.phone||'').replace(/\D/g,'');
-
-  return `<div class="ind-card status-${status}" id="ind-card-${l.id}">
-    <!-- LINHA PRINCIPAL — sempre visível -->
-    <div class="ind-card-header" onclick="toggleIndCard('${l.id}')">
-      <div class="ind-card-avatar grupo-${grupo.toLowerCase()}">${grupo}</div>
-      <div class="ind-card-info">
-        <div class="ind-card-name">${l.name||'Sem Nome'}</div>
-        <div class="ind-card-sub">${l.assignee||'—'} · ${l.campaign||'—'} · ${l.tipo||'—'}</div>
-      </div>
-      <div class="ind-card-badges">
-        <span class="ind-badge-grupo ${grupo.toLowerCase()}">Grupo ${grupo}</span>
-        <span class="ind-badge-status ${status}">${statusLabel}</span>
-        <button onclick="event.stopPropagation();openLead('${l.id}')" style="background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.62rem;padding:.15rem .5rem;border-radius:5px;cursor:pointer;" title="Abrir ficha do lead">📋 Ver ficha</button>
-        <span class="ind-card-toggle" id="ind-toggle-${l.id}">▾</span>
-      </div>
-    </div>
-    <!-- BARRA DE PROGRESSO SEMPRE VISÍVEL -->
-    <div class="ind-card-progress">${progressHTML}</div>
-    <div class="ind-card-body" id="ind-body-${l.id}">
-      <!-- Tabs mensagem -->
-      <div class="ind-msg-tabs">
-        <button class="ind-msg-tab active" id="ind-tab-wpp-${l.id}" onclick="indAtivarTab('${l.id}','wpp')">💬 WhatsApp</button>
-        <button class="ind-msg-tab" id="ind-tab-crm-${l.id}" onclick="indAtivarTab('${l.id}','crm')">📝 Registro CRM</button>
-      </div>
-      <div class="ind-msg-box wpp" id="ind-msg-wpp-${l.id}">${msg.wpp}</div>
-      <div class="ind-msg-box crm" id="ind-msg-crm-${l.id}" style="display:none">${msg.crm}</div>
-      <!-- Como responder -->
-      <div class="ind-respostas">
-        <div class="ind-resp-title">💡 Como responder</div>
-        ${respostasHTML}
-      </div>
-      <!-- Ações -->
-      <div class="ind-acoes">
-        <button class="ind-btn-feito" onclick="marcarIndFeito('${l.id}','enviado')">✓ Mensagem enviada</button>
-        <button class="ind-btn-copy" onclick="copiarIndMsg('${l.id}')">📋 Copiar mensagem</button>
-        ${wa?`<a href="https://wa.me/${wa}?text=${encodeURIComponent(msg.wpp)}" target="_blank" class="ind-btn-indicacao" style="text-decoration:none;display:inline-flex;align-items:center">WhatsApp ↗</a>`:''}
-        <button class="ind-btn-indicacao" onclick="marcarIndFeito('${l.id}','indicacao_recebida')" style="background:#10B981">🎉 Indicação recebida!</button>
-        <button class="ind-btn-pular" onclick="marcarIndFeito('${l.id}','concluido')">Encerrar ciclo</button>
-      </div>
-    </div>
-  </div>`;
-}
-
-// ── Toggle card expand ──
-window.toggleIndCard = function(id) {
-  const body = document.getElementById('ind-body-'+id);
-  const toggle = document.getElementById('ind-toggle-'+id);
-  if (!body) return;
-  const open = body.classList.toggle('open');
-  if (toggle) toggle.classList.toggle('open', open);
-};
-
-// ── Tab toggle msg ──
-window.indAtivarTab = function(id, aba) {
-  const wpp = document.getElementById('ind-msg-wpp-'+id);
-  const crm = document.getElementById('ind-msg-crm-'+id);
-  const btnW = document.getElementById('ind-tab-wpp-'+id);
-  const btnC = document.getElementById('ind-tab-crm-'+id);
-  if (wpp) wpp.style.display = aba==='wpp'?'block':'none';
-  if (crm) crm.style.display = aba==='crm'?'block':'none';
-  if (btnW) btnW.classList.toggle('active', aba==='wpp');
-  if (btnC) btnC.classList.toggle('active', aba==='crm');
-};
-
-// ── Copiar mensagem ativa ──
-window.copiarIndMsg = function(id) {
-  const wpp = document.getElementById('ind-msg-wpp-'+id);
-  const crm = document.getElementById('ind-msg-crm-'+id);
-  const txt = (wpp?.style.display!=='none' ? wpp?.textContent : crm?.textContent)||'';
-  navigator.clipboard.writeText(txt).then(()=>showToast('✅ Mensagem copiada!'));
-};
-
-// ── Marcar ação e avançar cadência ──
-window.marcarIndFeito = async function(id, resultado) {
-  const l = allLeads.find(x=>x.id===id);
-  if (!l) return;
-  const hist = [...(l.indHistorico||[])];
-  const faseIdx = getIndFaseAtual(l);
-  const grupo = classifIndGrupo(l);
-  const cadencia = IND_CADENCIA[grupo];
-  const fase = cadencia[faseIdx];
-
-  // Record this attempt
-  if (hist[faseIdx]) hist[faseIdx] = {...hist[faseIdx], enviado:true, resultado, data: new Date().toISOString()};
-  else hist.push({fase:fase?.fase, enviado:true, resultado, data: new Date().toISOString()});
-
-  // Also log in lead's main log
-  const logEntry = {
-    user: currentUser?.nome||'Sistema',
-    note: `Operação Indicação — ${fase?.objetivo||'contato'}: ${resultado==='enviado'?'mensagem enviada':resultado==='indicacao_recebida'?'🎉 indicação recebida!':'ciclo encerrado'}`,
-    ts: new Date().toISOString(),
-    statusChange: null
-  };
-
-  try {
-    await updateDoc(doc(db,'leads',id), {
-      indHistorico: hist,
-      log: arrayUnion(logEntry),
-      lastContact: serverTimestamp()
-    });
-    showToast(resultado==='indicacao_recebida'?'🎉 Indicação registrada!':resultado==='concluido'?'Ciclo encerrado':'✅ Registrado!');
-    if (resultado==='indicacao_recebida') {
-      // Show prompt to open new lead
-      setTimeout(()=>{
-        if(confirm('Deseja abrir um novo lead para o indicado?')) openLead(null);
-      }, 500);
-    }
-  } catch(e) {
-    showToast('Erro ao salvar. Tente novamente.');
-  }
-};
-
-// ── Filter ──
-window.setIndFiltro = function(filtro, btn) {
-  indFiltroAtivo = filtro;
-  document.querySelectorAll('.ind-filter-btn').forEach(b=>b.classList.remove('ind-filter-active'));
-  if(btn) btn.classList.add('ind-filter-active');
-  renderIndicacao();
-};
-
-window.toggleSection=function(id, btn){
-  const el=document.getElementById(id);
-  if(!el)return;
-  const collapsed=el.classList.toggle('collapsed');
-  // btn can be element or string id
-  const b=typeof btn==='string'?document.getElementById(btn):btn;
-  if(b)b.textContent=collapsed?'▸':'▾';
-};
-
-window.trocarPlano=function(id){
-  planoSelecionado=planosAtivos.find(x=>x.id===id)||null;
-  if(!planoSelecionado&&planosAtivos.length>0)planoSelecionado=planosAtivos[0];
-  renderPlanejamento();
-  // Also refresh financial panel if visible
-  const finWrap=document.getElementById('fin-panel-wrap');
-  if(finWrap&&finWrap.style.display!=='none')renderFinanceiro();
-};
-
 window.switchTab=function(tab){
   currentTab=tab;
-  window.scrollTo({top:0,behavior:'smooth'});
-  ['kanban','table','equipe','relatorios','estrategia','indicacao'].forEach(t=>{
+  ['kanban','table','equipe','relatorios','estrategia'].forEach(t=>{
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
   if(tab==='relatorios')setTimeout(renderRelatorios,100);
   else if(tab==='estrategia')setTimeout(renderEstrategia,100);
-  else if(tab==='indicacao')setTimeout(renderIndicacao,100);
   else renderAll();
 };
 window.setFilter=function(s){filterStatus=s;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));document.getElementById('filter-'+s)?.classList.add('active');renderTable();};
@@ -2952,7 +1321,7 @@ header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1rem;height:
 .btn-hdr-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .btn-hdr-primary:hover{background:#3B5BDB;border-color:#3B5BDB;color:#fff}
 main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
-.metrics-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:.6rem;margin-bottom:1.25rem}
+.metrics-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:.6rem;margin-bottom:1.25rem}
 .metric-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1.1rem}
 .metric-label{font-size:.65rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem}
 .metric-value{font-size:1.7rem;font-weight:800;line-height:1}
@@ -2966,8 +1335,6 @@ main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
 body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .mc-amber2{border-top:2px solid #F59E0B}.mc-amber2 .metric-value{color:#F59E0B}
 .mc-cyan{border-top:2px solid #06B6D4}.mc-cyan .metric-value{color:#06B6D4}
-.mc-slate{border-top:2px solid #6B7280}.mc-slate .metric-value{color:#6B7280}
-.metric-pct{font-size:.68rem;color:#6B7280;font-weight:700;margin-top:.15rem}
 /* FOLLOW-UP */
 .fu-panel{background:#13161F;border:1px solid #1E2235;border-radius:12px;margin-bottom:1.25rem;overflow:hidden}
 @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
@@ -2990,7 +1357,7 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fua-dias{font-size:.65rem;font-weight:700;color:#4F6EF7;background:rgba(79,110,247,.12);border-radius:4px;padding:.1rem .35rem;white-space:nowrap}
 .fua-data{font-size:.68rem;color:#6B7280}
 /* FU STAGE KANBAN */
-.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
+.fu-stages-wrap{overflow-x:auto;padding:1rem 1.25rem;scrollbar-width:thin;scrollbar-color:#1E2235 transparent;max-height:500px;transition:max-height .25s ease,padding .25s ease,opacity .2s ease}
 .fu-stages-wrap.fu-collapsed{max-height:0;padding-top:0;padding-bottom:0;opacity:0;overflow:hidden}
 .fu-collapse-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;transition:all .15s;flex-shrink:0}
 .fu-collapse-btn:hover{border-color:#4F6EF7;color:#4F6EF7}
@@ -2999,19 +1366,15 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .kanban-board{transition:max-height .25s ease,opacity .2s ease;overflow:hidden;max-height:2000px}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
-.fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px;}
+.fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
 .fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
-.fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F;border-radius:10px 10px 0 0;}
+.fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F}
 .fu-stage-title{font-size:.75rem;font-weight:700;color:#4F6EF7;flex:1}
 .fu-stage-count{font-size:.65rem;font-weight:700;background:rgba(79,110,247,.15);color:#4F6EF7;border-radius:999px;padding:.1rem .45rem}
 .fu-stage-late{font-size:.65rem;font-weight:700;color:#EF4444}
 .fu-stage-empty{font-size:.75rem;color:#2A2F45;text-align:center;padding:1rem .5rem;font-style:italic}
-.fu-stage-body::-webkit-scrollbar{width:4px;}
-.fu-stage-body::-webkit-scrollbar-track{background:transparent;}
-.fu-stage-body::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:4px;}
-.fu-stage-body::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
-.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;height:340px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#2A2F45 transparent;}
+.fu-stage-body{padding:.6rem;display:flex;flex-direction:column;gap:.5rem;height:340px;overflow-y:scroll;scrollbar-width:auto;scrollbar-color:#2A2F45 #13161F}
 /* FU CARD */
 .fu-card2{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.8rem;cursor:pointer;transition:border-color .15s,transform .15s;display:flex;flex-direction:column;gap:.4rem}
 .fu-card2:hover{border-color:#4F6EF7;transform:translateY(-1px)}
@@ -3131,7 +1494,6 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .rel-kpi.kpi-active{border-color:#4F6EF7;background:#171B2E;box-shadow:0 0 0 2px rgba(79,110,247,.25)}
 .rel-kpi-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem}
 .rel-kpi-val{font-size:1.5rem;font-weight:800}
-.rel-kpi-pct{font-size:.68rem;color:#6B7280;font-weight:700;margin-top:.1rem}
 .kpi-ver-btn{font-size:.65rem;color:#4F6EF7;margin-top:.35rem;background:rgba(79,110,247,.1);border:1px solid rgba(79,110,247,.25);border-radius:5px;padding:.15rem .55rem;cursor:pointer;transition:all .15s}
 .kpi-ver-btn:hover{background:#4F6EF7;color:#fff;border-color:#4F6EF7}
 .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin-bottom:1rem}
@@ -3208,12 +1570,12 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .urgent-fu{color:#F5A623;font-weight:600}
 /* MODAL */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:1000;display:none;align-items:center;justify-content:center;padding:1rem}
-.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:720px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column}
+.modal-box{background:#13161F;border:1px solid #1E2235;border-radius:14px;width:100%;max-width:720px;max-height:92vh;overflow-y:auto;display:flex;flex-direction:column}
 .modal-head{padding:1.1rem 1.4rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:#13161F;z-index:2}
 .modal-title{font-size:.95rem;font-weight:700}
 .modal-close{background:none;border:none;color:#6B7280;font-size:1.2rem;cursor:pointer;transition:color .2s}
 .modal-close:hover{color:#F1F3F9}
-.modal-body{padding:1.4rem 1.4rem 0 1.4rem;display:flex;flex-direction:column;gap:1.1rem;flex:1;overflow-y:auto;}
+.modal-body{padding:1.4rem;display:flex;flex-direction:column;gap:1.1rem}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
 .f-group{display:flex;flex-direction:column;gap:.35rem}
 .f-group.full{grid-column:1/-1}
@@ -3231,7 +1593,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .progress-section{display:flex;flex-direction:column;gap:.6rem}
 .progress-section-title{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 #progress-container{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;padding:1rem 1.1rem}
-.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;background:#13161F;z-index:10;}
+.modal-foot{padding:.9rem 1.4rem;border-top:1px solid #1E2235;display:flex;justify-content:space-between;align-items:center;position:sticky;bottom:0;background:#13161F}
 .btn-delete{background:transparent;border:1px solid #EF4444;color:#EF4444;border-radius:7px;padding:.45rem .9rem;font-size:.78rem;font-weight:600;cursor:pointer}
 .btn-delete:hover{background:rgba(239,68,68,.1)}
 .btn-save{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem 1.35rem;font-size:.82rem;font-weight:700;cursor:pointer}
@@ -3336,13 +1698,7 @@ body.light-theme .modal-title{color:#1A1D2E}
 body.light-theme .modal-close{color:#8B92A8}
 body.light-theme .modal-foot{background:#FFFFFF;border-top-color:#E2E5EE}
 body.light-theme .f-label{color:#8B92A8}
-body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea,body.light-theme .f-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
-body.light-theme .f-select option,body.light-theme select option{background:#ffffff;color:#1A1D2E}
-body.light-theme .modal-box{background:#ffffff;color:#1A1D2E}
-body.light-theme .modal-head{background:#ffffff;border-bottom-color:#E2E5EE}
-body.light-theme .modal-title{color:#1A1D2E}
-body.light-theme .f-label{color:#4B5563}
-body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563}
+body.light-theme .f-input,body.light-theme .f-select,body.light-theme .f-textarea{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .qn-btn{background:#F4F5F8;border-color:#E2E5EE;color:#8B92A8}
 body.light-theme .qn-btn:hover{background:#EDEFF5}
 body.light-theme #progress-container{background:#F8F9FC;border-color:#E2E5EE}
@@ -3362,471 +1718,6 @@ body.light-theme .auth-sub{color:#8B92A8}
 body.light-theme ::-webkit-scrollbar-track{background:#E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb{background:#B0B6C5;border:2px solid #E8EAF0}
 body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
-
-/* ═══ MÓDULO PLANEJAMENTO DE META ═══ */
-.meta-module{background:#0F1420;border:1px solid #1E2235;border-radius:14px;padding:1.2rem 1.4rem;margin-bottom:1.4rem;}
-.meta-module-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;}
-.meta-module-title{font-size:.95rem;font-weight:700;color:#F1F3F9 !important;display:flex;align-items:center;gap:.5rem;}
-.meta-badge-ativa{background:#10B981;color:#fff;font-size:.62rem;font-weight:700;padding:.15rem .5rem;border-radius:20px;letter-spacing:.04em;}
-.meta-badge-atrasada{background:#EF4444;color:#fff;font-size:.62rem;font-weight:700;padding:.15rem .5rem;border-radius:20px;}
-.meta-module-actions{display:flex;gap:.5rem;flex-wrap:wrap;}
-.btn-meta{background:#1E2235;border:1px solid #2A2F45;color:#C4C9D8;font-size:.72rem;padding:.3rem .75rem;border-radius:7px;cursor:pointer;transition:background .2s;}
-.btn-meta:hover{background:#2A2F45;}
-.btn-meta-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
-.btn-meta-primary:hover{background:#3d5ce0;}
-.btn-meta-danger{background:#EF4444;border-color:#EF4444;color:#fff;}
-.btn-meta-print{background:#8B5CF6;border-color:#8B5CF6;color:#fff;}
-.btn-meta-print:hover{background:#7c3aed;}
-
-/* Placar principal */
-.meta-placar{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.85rem;margin-bottom:1rem;}
-@media(max-width:700px){.meta-placar{grid-template-columns:1fr 1fr;}}
-.meta-kpi{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.8rem 1rem;text-align:center;}
-.meta-kpi-val{font-size:1.6rem;font-weight:800;line-height:1;}
-.meta-kpi-label{font-size:.67rem;color:#6B7280;margin-top:.3rem;}
-.meta-kpi-sub{font-size:.65rem;color:#9CA3AF;margin-top:.15rem;}
-
-/* Barra de progresso da meta */
-.meta-progress-wrap{margin-bottom:1rem;}
-.meta-progress-label{display:flex;justify-content:space-between;font-size:.72rem;color:#9CA3AF;margin-bottom:.35rem;}
-.meta-progress-bar{height:18px;background:#1E2235;border-radius:9px;overflow:hidden;position:relative;}
-.meta-progress-fill{height:100%;border-radius:9px;transition:width .5s ease;display:flex;align-items:center;justify-content:flex-end;padding-right:.5rem;}
-.meta-progress-pct{font-size:.65rem;font-weight:700;color:#fff;}
-.meta-progress-marker{position:absolute;top:0;height:100%;width:2px;background:#fff;opacity:.4;}
-.meta-progress-marker-label{position:absolute;top:-18px;font-size:.6rem;color:#9CA3AF;transform:translateX(-50%);}
-
-/* Semanas */
-.meta-semanas{display:grid;grid-template-columns:repeat(5,1fr);gap:.6rem;margin-bottom:1rem;}
-@media(max-width:700px){.meta-semanas{grid-template-columns:repeat(3,1fr);}}
-.meta-semana{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.65rem .6rem;text-align:center;position:relative;}
-.meta-semana.sem-atual{border-color:#4F6EF7;box-shadow:0 0 0 1px #4F6EF755;}
-.meta-semana.sem-ok{border-color:#10B98155;}
-.meta-semana.sem-atras{border-color:#EF444455;}
-.meta-semana.sem-futura{opacity:.5;}
-.meta-sem-label{font-size:.6rem;color:#6B7280;margin-bottom:.3rem;}
-.meta-sem-periodo{font-size:.55rem;color:#6B7280;margin-bottom:.35rem;}
-.meta-sem-vals{display:flex;justify-content:center;align-items:baseline;gap:.3rem;}
-.meta-sem-real{font-size:1.2rem;font-weight:800;}
-.meta-sem-sep{font-size:.7rem;color:#6B7280;}
-.meta-sem-meta{font-size:.8rem;color:#6B7280;}
-.meta-sem-status{font-size:.58rem;margin-top:.3rem;font-weight:600;}
-.meta-sem-badge{position:absolute;top:.3rem;right:.3rem;font-size:.55rem;padding:.1rem .35rem;border-radius:10px;}
-.meta-sem-badge.atual{background:#4F6EF7;color:#fff;}
-
-/* Funil de conversão */
-.meta-funil{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;}
-.meta-funil-etapa{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.65rem .9rem;text-align:center;flex:1;min-width:80px;}
-.meta-funil-num{font-size:1.3rem;font-weight:800;}
-.meta-funil-label{font-size:.62rem;color:#6B7280;margin-top:.2rem;}
-.meta-funil-taxa{font-size:.65rem;font-weight:600;margin-top:.25rem;}
-.meta-funil-seta{color:#2A2F45;font-size:1.2rem;flex-shrink:0;}
-
-/* Gráficos */
-.meta-graficos{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;margin-bottom:1rem;}
-@media(max-width:700px){.meta-graficos{grid-template-columns:1fr;}}
-.meta-grafico-box{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.8rem;}
-.meta-grafico-title{font-size:.72rem;font-weight:600;color:#C4C9D8;margin-bottom:.7rem;}
-.meta-grafico-box.full-width{grid-column:1/-1;}
-
-/* Alertas estratégicos */
-.meta-alertas{display:flex;flex-direction:column;gap:.5rem;margin-bottom:1rem;}
-.meta-alerta{display:flex;align-items:flex-start;gap:.7rem;background:#13161F;border-radius:9px;padding:.65rem .85rem;border-left:3px solid #4F6EF7;}
-.meta-alerta.alerta-red{border-left-color:#EF4444;background:#1F1215;}
-.meta-alerta.alerta-orange{border-left-color:#F5A623;background:#1A160D;}
-.meta-alerta.alerta-green{border-left-color:#10B981;background:#0D1A14;}
-.meta-alerta-texto{font-size:.73rem;color:#E5E7EB !important;line-height:1.5;}
-.meta-alerta-texto strong{color:#FFFFFF !important;}
-.meta-alerta-icon{font-size:1rem;flex-shrink:0;}
-/* meta-alerta-texto defined above with alerts */
-
-/* Modal planejamento */
-.modal-plan-overlay{position:fixed;inset:0;background:#000000cc;z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem;}
-.modal-plan-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;}
-.modal-plan-head{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.2rem;border-bottom:1px solid #1E2235;}
-.modal-plan-title{font-size:.9rem;font-weight:700;color:#F1F3F9;}
-.modal-plan-body{padding:1.2rem;}
-.plan-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;}
-@media(max-width:500px){.plan-form-grid{grid-template-columns:1fr;}}
-.plan-form-grid .full{grid-column:1/-1;}
-.plan-f-group{display:flex;flex-direction:column;gap:.35rem;}
-.plan-f-label{font-size:.7rem;color:#9CA3AF;font-weight:500;}
-.plan-f-input{background:#13161F;border:1px solid #1E2235;border-radius:7px;padding:.45rem .75rem;color:#F1F3F9;font-size:.8rem;outline:none;}
-.plan-f-input:focus{border-color:#4F6EF7;}
-.plan-calc-preview{background:#13161F;border:1px solid #1E2235;border-radius:9px;padding:.85rem;margin-top:.85rem;}
-.plan-calc-title{font-size:.7rem;color:#6B7280;font-weight:600;margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.05em;}
-.plan-calc-grid{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;}
-.plan-calc-item{font-size:.72rem;color:#C4C9D8;}
-.plan-calc-item strong{color:#F1F3F9;}
-
-/* Campanhas dinâmicas */
-.campaign-add-wrap{display:flex;align-items:center;gap:.4rem;margin-top:.35rem;}
-.btn-add-campaign{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.7rem;padding:.25rem .6rem;border-radius:6px;cursor:pointer;white-space:nowrap;}
-.btn-add-campaign:hover{background:#2A2F45;color:#F1F3F9;}
-
-/* Print */
-@media print{
-  header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast,
-  .meta-module-actions,.btn-meta,.est-section,.estrategia-period-bar{display:none!important;}
-  body{background:#fff!important;color:#000!important;}
-  .meta-module{background:#fff!important;border:1px solid #ddd!important;color:#000!important;}
-  .meta-kpi,.meta-semana,.meta-funil-etapa,.meta-grafico-box{background:#f9f9f9!important;border:1px solid #ddd!important;color:#000!important;}
-  .meta-kpi-val,.meta-sem-real,.meta-funil-num{color:#000!important;}
-  #print-only-header{display:block!important;}
-}
-#print-only-header{display:none;text-align:center;padding:1rem 0 .5rem;border-bottom:2px solid #000;margin-bottom:1rem;}
-
-/* Light theme overrides */
-body.light-theme .meta-module{background:#fff;border-color:#E2E5EE;}
-body.light-theme .meta-module-title{color:#1A1D2E !important;}
-body.light-theme .fin-panel-title{color:#1A1D2E !important;}
-body.light-theme .fin-panel{background:#fff;border-color:#E2E5EE;}
-body.light-theme .meta-kpi,body.light-theme .meta-semana,body.light-theme .meta-funil-etapa,body.light-theme .meta-grafico-box{background:#F4F5F8;border-color:#E2E5EE;}
-body.light-theme .meta-alerta{background:#F8F9FC;border-color:#E2E5EE;}
-body.light-theme .meta-alerta.alerta-orange{background:#FFFBF0;}
-body.light-theme .meta-alerta.alerta-red{background:#FFF5F5;}
-body.light-theme .meta-alerta.alerta-green{background:#F0FDF4;}
-body.light-theme .meta-alerta-texto{color:#374151 !important;}
-body.light-theme .meta-alerta-texto strong{color:#111827 !important;}
-body.light-theme .meta-kpi-val,body.light-theme .meta-sem-real,body.light-theme .meta-funil-num{color:#1A1D2E;}
-
-
-/* ── Meta cards: hover + clickable ── */
-.meta-kpi.clickable,
-.meta-semana.clickable,
-.meta-funil-etapa.clickable {
-  cursor:pointer;
-  transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease;
-}
-.meta-kpi.clickable:hover {
-  transform:translateY(-2px);
-  box-shadow:0 4px 18px #4F6EF733;
-  border-color:#4F6EF7;
-}
-.meta-semana.clickable:hover {
-  transform:translateY(-2px);
-  box-shadow:0 4px 14px #4F6EF722;
-  border-color:#4F6EF7 !important;
-}
-.meta-funil-etapa.clickable:hover {
-  transform:translateY(-2px);
-  box-shadow:0 4px 14px #10B98122;
-  border-color:#10B981;
-}
-.meta-kpi.clickable::after,
-.meta-semana.clickable::after,
-.meta-funil-etapa.clickable::after {
-  content:'🔍';
-  display:block;
-  font-size:.55rem;
-  color:#6B7280;
-  margin-top:.3rem;
-  opacity:0;
-  transition:opacity .15s;
-}
-.meta-kpi.clickable:hover::after,
-.meta-semana.clickable:hover::after,
-.meta-funil-etapa.clickable:hover::after { opacity:1; }
-
-/* ── Collapse ── */
-.btn-meta-collapse {
-  background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;
-  font-size:.75rem;padding:.25rem .6rem;border-radius:7px;
-  cursor:pointer;transition:background .2s;line-height:1;
-}
-.btn-meta-collapse:hover{background:#2A2F45;color:#F1F3F9;}
-#meta-module-body {
-  transition:max-height .35s ease, opacity .25s ease;
-  overflow:hidden;
-  max-height:3000px;
-  opacity:1;
-}
-#meta-module-body.collapsed {
-  max-height:0;
-  opacity:0;
-}
-
-
-/* ── Modal mensagem: tab toggle ── */
-.msg-tab-bar{display:flex;gap:.4rem;margin-bottom:.85rem;}
-.msg-tab-btn{flex:1;padding:.45rem .6rem;border-radius:8px;border:1px solid #2A2F45;background:#13161F;color:#9CA3AF;font-size:.78rem;font-weight:600;cursor:pointer;transition:background .15s,color .15s,border-color .15s;text-align:center;}
-.msg-tab-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
-.msg-tab-btn.active.wpp{background:#1DAA61;border-color:#1DAA61;}
-.msg-tab-panel{display:none;}
-.msg-tab-panel.active{display:flex;flex-direction:column;gap:.5rem;}
-.msg-copy-btn{background:#1DAA61;color:#fff;border:none;border-radius:7px;padding:.4rem .9rem;font-size:.76rem;font-weight:700;cursor:pointer;align-self:flex-start;}
-.msg-copy-btn.crm{background:#4F6EF7;}
-.msg-copy-btn:active{opacity:.8;}
-body.light-theme .msg-tab-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563;}
-body.light-theme .msg-tab-btn.active{background:#4F6EF7;color:#fff;}
-body.light-theme .msg-tab-btn.active.wpp{background:#1DAA61;}
-
-
-/* ── Scrollbar global — mais larga e visível ── */
-::-webkit-scrollbar{width:8px;height:8px;}
-::-webkit-scrollbar-track{background:transparent;}
-::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
-::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
-* { scrollbar-width:thin; scrollbar-color:#2A2F45 transparent; }
-
-/* ── Follow-up panel scrollbar — igual ao kanban ── */
-.fu-stages::-webkit-scrollbar{width:6px;height:6px;}
-.fu-stages::-webkit-scrollbar-track{background:transparent;}
-.fu-stages::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:6px;}
-.fu-stages::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
-/* fu-stage-col scrollbar handled by fu-stage-body */
-
-/* ── Collapse button reutilizável ── */
-.section-collapse-btn{background:none;border:none;color:#6B7280;font-size:.75rem;cursor:pointer;padding:.1rem .35rem;border-radius:5px;line-height:1;transition:color .15s;}
-.section-collapse-btn:hover{color:#F1F3F9;}
-.section-collapsible{transition:max-height .3s ease,opacity .2s ease;overflow:hidden;max-height:3000px;opacity:1;}
-.section-collapsible.collapsed{max-height:0;opacity:0;}
-
-/* ── Section header com collapse ── */
-.section-header-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:.85rem;}
-.section-header-row .est-section-title{margin-bottom:0;}
-
-/* ── Light theme scrollbar ── */
-body.light-theme ::-webkit-scrollbar-thumb{background:#C4C9D8;}
-body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7;}
-body.light-theme *{scrollbar-color:#C4C9D8 transparent;}
-
-
-/* ── Period filter bar ── */
-.period-bar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;padding:.55rem .75rem;background:#0F1420;border:1px solid #1E2235;border-radius:10px;margin-bottom:.85rem;}
-.period-btn{background:transparent;border:1px solid #2A2F45;color:#9CA3AF;font-size:.7rem;padding:.3rem .7rem;border-radius:6px;cursor:pointer;transition:all .15s;white-space:nowrap;}
-.period-btn:hover{border-color:#4F6EF7;color:#F1F3F9;}
-.period-btn.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff;font-weight:600;}
-.period-label{font-size:.68rem;color:#6B7280;font-weight:600;margin-right:.25rem;}
-.period-date-inputs{display:none;gap:.4rem;align-items:center;}
-.period-date-inputs.visible{display:flex;}
-.period-date-input{background:#13161F;border:1px solid #2A2F45;color:#F1F3F9;font-size:.7rem;padding:.28rem .5rem;border-radius:6px;outline:none;}
-.period-date-input:focus{border-color:#4F6EF7;}
-
-/* ── Financial panel ── */
-.fin-panel{background:#0F1420;border:1px solid #1E2235;border-radius:14px;padding:1.2rem 1.4rem;margin-bottom:1.4rem;}
-.fin-panel-title{font-size:.88rem;font-weight:700;color:#F1F3F9 !important;margin-bottom:1rem;display:flex;align-items:center;gap:.5rem;}
-.fin-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:.85rem;margin-bottom:1rem;}
-@media(max-width:700px){.fin-kpis{grid-template-columns:1fr 1fr;}}
-.fin-kpi{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.8rem 1rem;text-align:center;}
-.fin-kpi-val{font-size:1.4rem;font-weight:800;line-height:1;}
-.fin-kpi-label{font-size:.65rem;color:#6B7280;margin-top:.3rem;}
-.fin-kpi-sub{font-size:.62rem;color:#9CA3AF;margin-top:.15rem;}
-
-/* ── Parcelas timeline ── */
-.fin-timeline{display:grid;grid-template-columns:repeat(6,1fr);gap:.5rem;margin-bottom:1rem;}
-@media(max-width:700px){.fin-timeline{grid-template-columns:repeat(3,1fr);}}
-.fin-month{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.6rem .5rem;text-align:center;}
-.fin-month.has-value{border-color:#10B98155;}
-.fin-month-label{font-size:.6rem;color:#6B7280;margin-bottom:.25rem;}
-.fin-month-val{font-size:.8rem;font-weight:700;color:#10B981;}
-.fin-month-val.zero{color:#2A2F45;}
-
-/* ── ROI ── */
-.fin-roi-bar{display:flex;align-items:center;gap:1rem;background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.85rem 1.1rem;margin-bottom:1rem;flex-wrap:wrap;}
-.fin-roi-num{font-size:1.8rem;font-weight:800;}
-.fin-roi-desc{font-size:.75rem;color:#9CA3AF;flex:1;}
-
-/* ── Simulator ── */
-.fin-sim{background:#13161F;border:1px solid #2A2F45;border-radius:10px;padding:.9rem 1.1rem;}
-.fin-sim-title{font-size:.75rem;font-weight:700;color:#C4C9D8;margin-bottom:.75rem;}
-.fin-sim-row{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:.6rem;}
-.fin-sim-label{font-size:.72rem;color:#9CA3AF;white-space:nowrap;}
-.fin-sim-input{background:#0F1420;border:1px solid #2A2F45;color:#F1F3F9;font-size:.8rem;padding:.3rem .6rem;border-radius:6px;width:100px;outline:none;}
-.fin-sim-input:focus{border-color:#4F6EF7;}
-.fin-sim-result{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.75rem;}
-.fin-sim-res-item{background:#0F1420;border-radius:7px;padding:.5rem .7rem;text-align:center;}
-.fin-sim-res-val{font-size:1.1rem;font-weight:800;color:#4F6EF7;}
-.fin-sim-res-label{font-size:.6rem;color:#6B7280;margin-top:.15rem;}
-
-/* ── Honorarios field in modal ── */
-#honorarios-row{display:none;}
-.honor-calc{font-size:.68rem;color:#10B981;margin-top:.3rem;font-weight:600;}
-
-/* Light theme ── */
-body.light-theme .period-bar{background:#fff;border-color:#E2E5EE;}
-body.light-theme .period-btn{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563;}
-body.light-theme .period-date-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E;}
-body.light-theme .fin-panel{background:#fff;border-color:#E2E5EE;}
-body.light-theme .fin-kpi,.fin-month,.fin-roi-bar,.fin-sim,.fin-sim-res-item{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
-
-
-/* ── Modal de campanhas ── */
-.modal-camp-overlay{position:fixed;inset:0;background:#000000cc;z-index:1100;display:flex;align-items:center;justify-content:center;padding:1rem;}
-.modal-camp-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:420px;max-height:85vh;overflow-y:auto;}
-.modal-camp-head{display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;border-bottom:1px solid #1E2235;}
-.modal-camp-title{font-size:.88rem;font-weight:700;color:#F1F3F9;}
-.modal-camp-body{padding:1rem 1.1rem;}
-.modal-camp-input-row{display:flex;gap:.5rem;margin-bottom:1rem;}
-.modal-camp-input{flex:1;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;color:#F1F3F9;font-size:.82rem;outline:none;}
-.modal-camp-input:focus{border-color:#4F6EF7;}
-.modal-camp-list{display:flex;flex-direction:column;gap:.35rem;max-height:280px;overflow-y:auto;}
-.modal-camp-item{display:flex;align-items:center;justify-content:space-between;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;}
-.modal-camp-item-name{font-size:.8rem;color:#C4C9D8;}
-.modal-camp-item-del{background:none;border:none;color:#EF444466;font-size:.85rem;cursor:pointer;padding:.1rem .3rem;border-radius:4px;transition:color .15s;}
-.modal-camp-item-del:hover{color:#EF4444;}
-.modal-camp-empty{font-size:.75rem;color:#6B7280;text-align:center;padding:.75rem;}
-body.light-theme .modal-camp-box{background:#fff;border-color:#E2E5EE;}
-body.light-theme .modal-camp-input{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E;}
-body.light-theme .modal-camp-item{background:#F4F5F8;border-color:#E2E5EE;}
-body.light-theme .modal-camp-item-name{color:#1A1D2E;}
-
-
-/* ═══ MÓDULO INDICAÇÃO ATIVA ═══ */
-.ind-filter-btn{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;font-size:.72rem;padding:.3rem .75rem;border-radius:7px;cursor:pointer;transition:all .15s;white-space:nowrap;}
-.ind-filter-btn:hover{background:#2A2F45;color:#F1F3F9;}
-.ind-filter-active{background:#4F6EF7 !important;border-color:#4F6EF7 !important;color:#fff !important;font-weight:600;}
-.ind-grupo-badge{font-size:.7rem;font-weight:600;padding:.3rem .75rem;border-radius:20px;}
-.ind-badge-a{background:rgba(16,185,129,.12);color:#10B981;border:1px solid rgba(16,185,129,.25);}
-.ind-badge-b{background:rgba(139,92,246,.12);color:#8B5CF6;border:1px solid rgba(139,92,246,.25);}
-.ind-stats-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;}
-@media(max-width:600px){.ind-stats-bar{grid-template-columns:1fr 1fr;}}
-.ind-stat{background:#0F1420;border:1px solid #1E2235;border-radius:10px;padding:.7rem 1rem;text-align:center;}
-.ind-stat-val{font-size:1.4rem;font-weight:800;}
-.ind-stat-label{font-size:.64rem;color:#6B7280;margin-top:.2rem;}
-
-/* Card de indicação */
-.ind-card{background:#0F1420;border:1px solid #1E2235;border-radius:12px;overflow:hidden;transition:border-color .15s,box-shadow .15s,transform .15s;cursor:pointer;}
-.ind-card:hover{border-color:#4F6EF7;box-shadow:0 4px 16px rgba(79,110,247,.2);transform:translateY(-1px);}
-.ind-card-header{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.1rem;cursor:pointer;min-width:0;}
-.ind-card-avatar{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:800;flex-shrink:0;}
-.ind-card-avatar.grupo-a{background:rgba(16,185,129,.15);color:#10B981;}
-.ind-card-avatar.grupo-b{background:rgba(139,92,246,.15);color:#8B5CF6;}
-.ind-card-info{flex:1;min-width:120px;overflow:hidden;}
-.ind-card-name{font-size:.88rem;font-weight:700;color:#FFFFFF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;width:100%;}
-.ind-card-sub{font-size:.68rem;color:#9CA3AF;margin-top:.1rem;display:block;}
-.ind-card-badges{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;}
-.ind-badge-grupo{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
-.ind-badge-grupo.a{background:rgba(16,185,129,.15);color:#10B981;}
-.ind-badge-grupo.b{background:rgba(139,92,246,.15);color:#8B5CF6;}
-.ind-badge-fase{font-size:.6rem;padding:.15rem .5rem;border-radius:10px;background:#1E2235;color:#9CA3AF;}
-.ind-badge-status{font-size:.6rem;font-weight:700;padding:.15rem .5rem;border-radius:10px;}
-.ind-badge-status.pendente{background:rgba(245,166,35,.15);color:#F5A623;}
-.ind-badge-status.aguardando{background:rgba(79,110,247,.15);color:#4F6EF7;}
-.ind-badge-status.recebido{background:rgba(16,185,129,.15);color:#10B981;}
-.ind-badge-status.concluido{background:rgba(107,114,128,.15);color:#6B7280;}
-.ind-card-toggle{color:#6B7280;font-size:.8rem;transition:transform .2s;}
-.ind-card-toggle.open{transform:rotate(180deg);}
-
-/* Card body — expandível */
-.ind-card-body{display:none;border-top:1px solid #1E2235;padding:1rem 1.1rem;}
-.ind-card-body.open{display:block;}
-
-/* Cadência de tentativas */
-.ind-cadencia{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap;}
-.ind-tent{text-align:center;flex:1;min-width:70px;}
-.ind-tent-num{width:28px;height:28px;border-radius:50%;border:2px solid #2A2F45;display:flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;margin:0 auto .25rem;color:#6B7280;}
-.ind-tent-num.feita{background:#10B981;border-color:#10B981;color:#fff;}
-.ind-tent-num.atual{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 3px rgba(79,110,247,.2);}
-.ind-tent-label{font-size:.6rem;color:#6B7280;}
-.ind-tent-data{font-size:.58rem;color:#9CA3AF;margin-top:.1rem;}
-
-/* Mensagem */
-.ind-msg-tabs{display:flex;gap:.4rem;margin-bottom:.6rem;}
-.ind-msg-tab{font-size:.7rem;padding:.3rem .7rem;border-radius:6px;border:1px solid #2A2F45;background:#13161F;color:#9CA3AF;cursor:pointer;}
-.ind-msg-tab.active{background:#4F6EF7;border-color:#4F6EF7;color:#fff;}
-.ind-msg-box{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.85rem;font-size:.8rem;color:#C4C9D8;line-height:1.65;white-space:pre-wrap;margin-bottom:.75rem;max-height:200px;overflow-y:auto;}
-.ind-msg-box.wpp{border-left:3px solid #1DAA61;}
-.ind-msg-box.crm{border-left:3px solid #4F6EF7;}
-
-/* Como responder */
-.ind-respostas{background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.75rem;margin-bottom:.75rem;}
-.ind-resp-title{font-size:.67rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;}
-.ind-resp-item{display:flex;gap:.5rem;margin-bottom:.45rem;font-size:.75rem;color:#C4C9D8;line-height:1.45;}
-.ind-resp-trigger{font-weight:700;color:#F1F3F9;flex-shrink:0;}
-
-/* Ações */
-.ind-acoes{display:flex;gap:.5rem;flex-wrap:wrap;}
-.ind-btn-feito{background:#10B981;color:#fff;border:none;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;font-weight:700;cursor:pointer;}
-.ind-btn-feito:hover{background:#059669;}
-.ind-btn-copy{background:#1E2235;color:#C4C9D8;border:1px solid #2A2F45;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;cursor:pointer;}
-.ind-btn-copy:hover{background:#2A2F45;}
-.ind-btn-indicacao{background:#8B5CF6;color:#fff;border:none;border-radius:8px;padding:.45rem 1rem;font-size:.78rem;font-weight:700;cursor:pointer;}
-.ind-btn-indicacao:hover{background:#7c3aed;}
-.ind-btn-pular{background:transparent;color:#6B7280;border:1px solid #2A2F45;border-radius:8px;padding:.45rem .75rem;font-size:.75rem;cursor:pointer;}
-.ind-btn-pular:hover{color:#9CA3AF;}
-
-/* Light theme */
-body.light-theme .ind-card{background:#fff;border-color:#E2E5EE;}
-body.light-theme .ind-card:hover{border-color:#4F6EF7;box-shadow:0 4px 16px rgba(79,110,247,.15);transform:translateY(-1px);}
-body.light-theme .ind-card .ind-card-name{color:#111827;}
-body.light-theme .ind-card.status-recebido .ind-card-name{color:#059669;}
-body.light-theme .ind-card.status-concluido .ind-card-name{color:#6B7280;}
-body.light-theme .ind-card-sub{color:#4B5563 !important;}
-/* wildcard removed */
-body.light-theme .ind-stat{background:#fff;border-color:#E2E5EE;}
-body.light-theme .ind-msg-box,.ind-respostas{background:#F4F5F8 !important;border-color:#E2E5EE !important;}
-body.light-theme .ind-msg-box{color:#374151 !important;}
-
-
-/* ── Inline cadência flow ── */
-.ind-flow{display:flex;align-items:center;gap:.25rem;flex-shrink:0;}
-.ind-flow-step{display:flex;flex-direction:column;align-items:center;gap:.2rem;position:relative;}
-.ind-flow-dot{width:22px;height:22px;border-radius:50%;border:2px solid #2A2F45;display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700;color:#6B7280;flex-shrink:0;transition:all .2s;}
-.ind-flow-dot.feita{background:#10B981;border-color:#10B981;color:#fff;}
-.ind-flow-dot.atual{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 3px rgba(79,110,247,.25);animation:pulse-ind 2s infinite;}
-.ind-flow-dot.futura{background:transparent;border-color:#2A2F45;color:#2A2F45;}
-.ind-flow-label{font-size:.52rem;color:#6B7280;text-align:center;max-width:44px;line-height:1.2;}
-.ind-flow-label.atual{color:#4F6EF7;font-weight:700;}
-.ind-flow-label.feita{color:#10B981;}
-.ind-flow-sep{width:18px;height:2px;background:#2A2F45;flex-shrink:0;margin-bottom:10px;}
-.ind-flow-sep.feita{background:#10B981;}
-@keyframes pulse-ind{0%,100%{box-shadow:0 0 0 3px rgba(79,110,247,.25);}50%{box-shadow:0 0 0 5px rgba(79,110,247,.1);}}
-
-/* ── Card state visual differentiation ── */
-/* state colors handled by border-left rules below */
-
-/* Next step pill */
-.ind-next-pill{font-size:.58rem;font-weight:700;padding:.15rem .55rem;border-radius:10px;background:rgba(79,110,247,.15);color:#4F6EF7;border:1px solid rgba(79,110,247,.3);white-space:nowrap;flex-shrink:0;}
-.ind-next-pill.urgente{background:rgba(245,166,35,.15);color:#F5A623;border-color:rgba(245,166,35,.3);}
-.ind-next-pill.concluido{background:rgba(107,114,128,.1);color:#6B7280;border-color:#2A2F45;}
-.ind-next-pill.recebido{background:rgba(16,185,129,.15);color:#10B981;border-color:rgba(16,185,129,.3);}
-
-/* Light theme */
-body.light-theme .ind-flow-dot{border-color:#E2E5EE;color:#9CA3AF;}
-body.light-theme .ind-flow-sep{background:#E2E5EE;}
-body.light-theme .ind-card.status-recebido{background:#F0FDF4;border-color:#10B98155;}
-body.light-theme .ind-card.status-aguardando{background:#EFF6FF;border-color:#4F6EF755;}
-
-
-/* ── Linha de progresso SEMPRE VISÍVEL no card ── */
-.ind-card-progress{padding:.55rem 1.1rem .65rem;border-top:1px solid #1A1D2E;display:flex;align-items:center;gap:0;}
-.ind-step-wrap{display:flex;align-items:center;flex:1;}
-.ind-step{display:flex;flex-direction:column;align-items:center;gap:.25rem;flex-shrink:0;position:relative;min-width:80px;}
-.ind-step-circle{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:800;flex-shrink:0;transition:all .2s;}
-.ind-step-circle.s-feita{background:#10B981;color:#fff;border:none;}
-.ind-step-circle.s-atual{background:#4F6EF7;color:#fff;border:none;box-shadow:0 0 0 4px rgba(79,110,247,.2);animation:pulse-ind 2s infinite;}
-.ind-step-circle.s-futura{background:transparent;color:#3A3F55;border:2px solid #2A2F45;}
-.ind-step-text{text-align:center;}
-.ind-step-label{font-size:.62rem;font-weight:600;line-height:1.2;}
-.ind-step-label.s-feita{color:#10B981;}
-.ind-step-label.s-atual{color:#4F6EF7;}
-.ind-step-label.s-futura{color:#3A3F55;}
-.ind-step-sublabel{font-size:.57rem;color:#6B7280;margin-top:.1rem;line-height:1.2;}
-.ind-step-date{font-size:.58rem;font-weight:700;margin-top:.15rem;line-height:1;}
-.ind-step-date.feita{color:#10B981;}
-.ind-step-date.proxima{color:#F5A623;}
-.ind-step-date.futura{color:transparent;}
-.ind-step-connector{flex:1;height:2px;margin:0 .15rem;margin-bottom:18px;transition:background .2s;}
-.ind-step-connector.feita{background:#10B981;}
-.ind-step-connector.pendente{background:#2A2F45;}
-
-/* Card estados visuais — borda esquerda colorida */
-.ind-card.status-pendente{border-left:4px solid #2A2F45;}
-.ind-card.status-aguardando{border-left:4px solid #4F6EF7;background:#0C0F1C;}
-.ind-card .ind-card-name{color:#FFFFFF;}
-.ind-card.status-recebido .ind-card-name{color:#10B981;}
-.ind-card.status-concluido .ind-card-name{color:#9CA3AF;}
-.ind-card.status-recebido{border-left:4px solid #10B981;background:#091510;}
-.ind-card.status-concluido{border-left:4px solid #2A2F45;opacity:.55;}
-
-/* Light theme */
-body.light-theme .ind-card-progress{border-top-color:#F0F2F7;background:#FAFBFF;}
-body.light-theme .ind-step-circle.s-futura{border-color:#D1D5DB;color:#9CA3AF;}
-body.light-theme .ind-step-sublabel{color:#9CA3AF;}
-body.light-theme .ind-step-connector.pendente{background:#E2E5EE;}
-body.light-theme .ind-card.status-aguardando{background:#EFF6FF;}
-body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
-
 </style>
 </head>
 <body>
@@ -3874,31 +1765,16 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <button id="tab-relatorios" class="tab-btn"            onclick="switchTab('relatorios')" style="display:none">📊 Relatórios</button>
         <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
         <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
-        <button id="tab-indicacao"  class="tab-btn"            onclick="switchTab('indicacao')">🤝 Indicação</button>
-      </div>
-    </div>
-    <div class="period-bar" id="dash-period-bar">
-      <span class="period-label">📅 Período:</span>
-      <button class="period-btn active" onclick="setDashPeriodo('mes-atual',this)">Mês Atual</button>
-      <button class="period-btn" onclick="setDashPeriodo('mes-anterior',this)">Mês Anterior</button>
-      <button class="period-btn" onclick="setDashPeriodo('3-meses',this)">3 Meses</button>
-      <button class="period-btn" onclick="setDashPeriodo('6-meses',this)">6 Meses</button>
-      <button class="period-btn" onclick="setDashPeriodo('especifica',this)">Específico</button>
-      <div class="period-date-inputs" id="dash-date-inputs">
-        <input type="date" class="period-date-input" id="dash-ini" onchange="setDashPeriodoCustom()"/>
-        <span style="color:#6B7280;font-size:.7rem">até</span>
-        <input type="date" class="period-date-input" id="dash-fim" onchange="setDashPeriodoCustom()"/>
       </div>
     </div>
     <div class="metrics-grid">
-      <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Período</div>  <div class="metric-value" id="m-total">—</div></div>
+      <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Mês</div>  <div class="metric-value" id="m-total">—</div></div>
       <div class="metric-card mc-amber clickable-card" onclick="abrirMetricaLeads('EM ANDAMENTO')"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
-      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div><div class="metric-pct" id="m-qualif-pct"></div></div>
+      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div></div>
       <div class="metric-card mc-amber2 clickable-card" onclick="abrirMetricaLeads('AGUARDANDO DOCUMENTOS')"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
       <div class="metric-card mc-cyan clickable-card" onclick="abrirMetricaLeads('AGUARDANDO ASSINATURA')"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
-      <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div><div class="metric-pct" id="m-contrato-pct"></div></div>
-      <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div><div class="metric-pct" id="m-semresp-pct"></div></div>
-      <div class="metric-card mc-slate clickable-card" onclick="abrirMetricaLeads('DESQUALIFICADO')"><div class="metric-label">Desqualificados</div><div class="metric-value" id="m-desq">—</div><div class="metric-pct" id="m-desq-pct"></div></div>
+      <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div></div>
+      <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div></div>
     </div>
     <div class="fu-panel" id="fu-panel">
       <div class="fu-panel-header">
@@ -3917,7 +1793,6 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div class="kanban-panel-header">
         <span style="font-size:1rem">📋</span>
         <span class="kanban-panel-title">Kanban de Leads</span>
-        <input type="text" id="kanban-search" class="fu-search-input" placeholder="Buscar nome ou telefone..." oninput="filtrarKanban()" onkeyup="filtrarKanban()" onchange="filtrarKanban()" style="margin-left:.5rem;width:200px;"/>
         <button class="fu-collapse-btn" onclick="toggleKanbanPanel()" id="kanban-collapse-btn" title="Encolher/Expandir painel">▾</button>
       </div>
       <div class="kanban-board" id="kanban-board-wrap">
@@ -3944,13 +1819,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
           <button id="filter-DESQUALIFICADO"   class="filter-btn"        onclick="setFilter('DESQUALIFICADO')">Desqualificados</button>
         </div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin:.75rem 0 .4rem">
-        <span style="font-size:.75rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em">📋 Lista de leads</span>
-        <button class="section-collapse-btn" id="btn-collapse-tabela" onclick="toggleSection('tabela-body','btn-collapse-tabela')" title="Minimizar/Maximizar">▾</button>
-      </div>
-      <div id="tabela-body" class="section-collapsible">
-        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
-      </div>
+      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
     </div>
     <div id="view-relatorios" class="hidden">
       <div class="rel-controls">
@@ -3964,11 +1833,10 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="rel-kpis">
         <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="rel-kpi-pct" id="rel-desq-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
-        <div class="rel-kpi" id="kpi-maturacao" title="Média de dias entre a entrada do lead e o fechamento do contrato"><div class="rel-kpi-label">Tempo Médio até Fechar</div><div class="rel-kpi-val" id="rel-maturacao" style="color:#F5A623">—</div></div>
       </div>
       <div class="charts-grid">
         <div class="chart-card"><div class="chart-title">Distribuição por Status</div><div class="chart-container"><canvas id="chart-status"></canvas></div></div>
@@ -3976,97 +1844,18 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
       </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .4rem">
-        <span style="font-size:.75rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em">📋 Lista de contatos</span>
-        <button class="section-collapse-btn" id="btn-collapse-rel-lista" onclick="toggleSection('rel-lista-body','btn-collapse-rel-lista')" title="Minimizar/Maximizar">▾</button>
-      </div>
-      <div id="rel-lista-body" class="section-collapsible collapsed">
-        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
-      </div>
+      <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>Telefone</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th></tr></thead><tbody id="rel-tbody"></tbody></table></div>
     </div>
     <div id="view-estrategia" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
         <div><div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-          <button class="btn-hdr" onclick="imprimirRelatorio()" style="background:#8B5CF6;color:#fff;border-color:#8B5CF6">🖨️ Imprimir / PDF</button>
-          <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
-        </div>
-      </div>
-      <div class="period-bar" id="est-period-bar">
-        <span class="period-label">📅 Período:</span>
-        <button class="period-btn active" onclick="setEstPeriodo('mes-atual',this)">Mês Atual</button>
-        <button class="period-btn" onclick="setEstPeriodo('mes-anterior',this)">Mês Anterior</button>
-        <button class="period-btn" onclick="setEstPeriodo('3-meses',this)">3 Meses</button>
-        <button class="period-btn" onclick="setEstPeriodo('6-meses',this)">6 Meses</button>
-        <button class="period-btn" onclick="setEstPeriodo('especifica',this)">Específico</button>
-        <div class="period-date-inputs" id="est-date-inputs">
-          <input type="date" class="period-date-input" id="est-ini" onchange="setEstPeriodoCustom()"/>
-          <span style="color:#6B7280;font-size:.7rem">até</span>
-          <input type="date" class="period-date-input" id="est-fim" onchange="setEstPeriodoCustom()"/>
-        </div>
-      </div>
-      <!-- Planning module — visible only to gestora -->
-      <div id="meta-module-wrap" class="meta-module" style="display:none">
-        <div class="meta-module-header">
-          <div class="meta-module-title">
-            🎯 Planejamento de Meta
-            <span class="meta-badge-ativa" id="meta-badge-status">ATIVA</span>
-          </div>
-          <div class="meta-module-actions">
-            <select id="select-plano" class="fu-search-input" style="width:auto;padding:.3rem .65rem" onchange="trocarPlano(this.value)"></select>
-            <button class="btn-meta btn-meta-primary" onclick="abrirModalPlano('')">+ Nova Meta</button>
-            <button class="btn-meta" onclick="editarPlanoAtivo()">✏️ Editar</button>
-            <button class="btn-meta-collapse" id="meta-collapse-btn" onclick="toggleMetaModule()" title="Minimizar/Maximizar">▾</button>
-          </div>
-        </div>
-        <div id="meta-module-body"><div id="meta-module-content"></div></div>
-      </div>
-      <!-- Financial panel — gestora only -->
-      <div id="fin-panel-wrap" class="fin-panel" style="display:none">
-        <div class="fin-panel-title">
-          💰 Painel Financeiro
-          <span style="font-size:.62rem;font-weight:400;color:#6B7280;margin-left:.5rem">Honorários, recebimentos e ROI</span>
-          <button class="section-collapse-btn" style="margin-left:auto" onclick="toggleSection('fin-panel-body','fin-collapse-btn')" id="fin-collapse-btn" title="Minimizar">▾</button>
-        </div>
-        <div id="fin-panel-body" class="section-collapsible">
-          <div id="fin-panel-content"></div>
-        </div>
+        <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
       </div>
       <div id="estrategia-content"></div>
     </div>
     <div id="view-equipe" class="hidden">
       <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
       <div id="equipe-lista"></div>
-    </div>
-    <!-- INDICAÇÃO VIEW -->
-    <div id="view-indicacao" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
-        <div>
-          <div style="font-size:.95rem;font-weight:700">🤝 Operação de Indicação Ativa</div>
-          <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Clientes com contrato fechado — transforme cada contrato em novas indicações</div>
-        </div>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-          <button class="ind-filter-btn ind-filter-active" id="ind-f-todos" onclick="setIndFiltro('todos',this)">Todos</button>
-          <button class="ind-filter-btn" id="ind-f-a" onclick="setIndFiltro('A',this)">Grupo A</button>
-          <button class="ind-filter-btn" id="ind-f-b" onclick="setIndFiltro('B',this)">Grupo B</button>
-          <button class="ind-filter-btn" id="ind-f-pendente" onclick="setIndFiltro('pendente',this)">Pendentes</button>
-          <button class="ind-filter-btn" id="ind-f-concluido" onclick="setIndFiltro('concluido',this)">Concluídos</button>
-          <button class="btn-hdr" onclick="renderIndicacao()">↻ Atualizar</button>
-        </div>
-      </div>
-      <!-- Legenda grupos -->
-      <div style="display:flex;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap">
-        <div class="ind-grupo-badge ind-badge-a">🏆 Grupo A — Benefício já recebido → Indicação ativa</div>
-        <div class="ind-grupo-badge ind-badge-b">🌸 Grupo B — Aguardando nascimento → Avaliação Google primeiro</div>
-      </div>
-      <!-- Search bar -->
-      <div style="margin-bottom:.85rem;">
-        <input type="text" id="ind-search" class="fu-search-input" placeholder="Buscar por nome..." oninput="filtrarIndicacao()" onkeyup="filtrarIndicacao()" style="width:100%;max-width:320px;" />
-      </div>
-      <!-- Stats bar -->
-      <div class="ind-stats-bar" id="ind-stats-bar"></div>
-      <!-- Cards -->
-      <div id="ind-lista" style="display:flex;flex-direction:column;gap:.75rem;margin-top:1rem"></div>
     </div>
   </main>
 </div>
@@ -4078,25 +1867,11 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div class="form-grid">
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
-        <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField();calcHonorarios()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
-        <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
-        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="toggleHonorariosField()"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
-        <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"><option>Isabel</option><option>Joelma</option><option>Jucineide</option></select></div>
-        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-data-contato" class="f-input" type="date" title="Data em que o lead chegou ou entrou em contato"/></div>
+        <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
+        <div class="f-group"><label class="f-label">Campanha</label><select id="f-campaign" class="f-select"><option value="">Selecione...</option><option>SM - 01</option><option>SM - 02</option><option>SM - 03</option><option>SM - V3</option><option>Redes Sociais</option><option>Indicação</option><option>Outro</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"></select></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
-        <div class="f-group" id="honorarios-row">
-          <label class="f-label">💰 Valor dos Honorários (R$)</label>
-          <input id="f-honorarios" class="f-input" type="number" placeholder="Ex: 1600" step="0.01" min="0" oninput="calcHonorarios()"/>
-          <div class="honor-calc" id="honor-calc-preview"></div>
-        </div>
-        <div class="f-group" id="beneficio-row" style="display:none">
-          <label class="f-label">✅ Benefício concedido pelo INSS?</label>
-          <select id="f-beneficio" class="f-select">
-            <option value="">Aguardando concessão</option>
-            <option value="sim">Sim — benefício já concedido</option>
-            <option value="nao">Não — indeferido/cancelado</option>
-          </select>
-        </div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
           <textarea id="f-note" class="f-textarea" placeholder="O que aconteceu neste contato?"></textarea>
@@ -4145,7 +1920,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button id="btn-feito-modal" class="btn-done" onclick="avancarEtapaDoModal()" style="display:none" title="Marcar follow-up como feito e avançar etapa">✓ FUP Feito</button>
         <button class="btn-cancel" onclick="closeLead()">Cancelar</button>
-        <button class="btn-save" id="btn-salvar-lead" onclick="saveLead()">Salvar</button>
+        <button class="btn-save" onclick="saveLead()">Salvar</button>
       </div>
     </div>
   </div>
@@ -4240,38 +2015,36 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div style="font-size:.82rem;color:#9CA3AF">Analisando histórico e gerando mensagem...</div>
       </div>
       <!-- RESULTADO -->
-      <div id="msg-resultado" style="display:none;flex-direction:column;gap:.85rem">
+      <div id="msg-resultado" style="display:none;flex-direction:column;gap:1rem">
         <!-- Etapa + Estratégia -->
-        <div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:.75rem 1rem">
+        <div style="background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.2);border-radius:8px;padding:.85rem 1rem">
           <div style="display:flex;gap:1rem;flex-wrap:wrap">
             <div>
-              <div style="font-size:.6rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">Etapa</div>
-              <div style="font-size:.8rem;font-weight:700;color:#8B5CF6" id="msg-etapa-result"></div>
+              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Etapa</div>
+              <div style="font-size:.82rem;font-weight:700;color:#8B5CF6" id="msg-etapa-result"></div>
             </div>
             <div style="flex:1">
-              <div style="font-size:.6rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.15rem">Estratégia</div>
-              <div style="font-size:.75rem;color:#D1D5DB" id="msg-estrat-result"></div>
+              <div style="font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.2rem">Estratégia</div>
+              <div style="font-size:.78rem;color:#D1D5DB" id="msg-estrat-result"></div>
             </div>
           </div>
         </div>
-        <!-- Toggle tabs -->
-        <div class="msg-tab-bar">
-          <button class="msg-tab-btn wpp active" id="tab-btn-wpp" onclick="ativarTabMensagem('wpp')">💬 WhatsApp</button>
-          <button class="msg-tab-btn" id="tab-btn-crm" onclick="ativarTabMensagem('crm')">📝 Registro CRM</button>
-        </div>
-        <!-- Painel WhatsApp -->
-        <div class="msg-tab-panel active" id="tab-panel-wpp">
+        <!-- Mensagem editável -->
+        <div class="f-group">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.4rem">
+            <label class="f-label">💬 Mensagem WhatsApp — revise antes de enviar</label>
+            <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:6px;padding:.3rem .75rem;font-size:.72rem;font-weight:600;cursor:pointer">📋 Copiar</button>
+          </div>
           <textarea id="msg-texto" class="f-textarea" style="min-height:120px;font-size:.85rem;line-height:1.6"></textarea>
-          <button class="msg-copy-btn" onclick="copiarAbaAtiva()">📋 Copiar mensagem</button>
         </div>
-        <!-- Painel CRM -->
-        <div class="msg-tab-panel" id="tab-panel-crm">
-          <textarea id="msg-registro" class="f-textarea" style="min-height:100px;font-size:.82rem;line-height:1.55"></textarea>
-          <button class="msg-copy-btn crm" onclick="copiarAbaAtiva()">📋 Copiar registro</button>
+        <!-- Registro CRM editável -->
+        <div class="f-group">
+          <label class="f-label">📝 Registro CRM — será salvo no histórico do lead</label>
+          <textarea id="msg-registro" class="f-textarea" style="min-height:65px;font-size:.8rem"></textarea>
         </div>
-        <!-- Rodapé -->
-        <div style="display:flex;gap:.5rem;justify-content:flex-end;padding-top:.25rem">
+        <div style="display:flex;gap:.5rem;justify-content:flex-end">
           <button onclick="fecharModalMensagem()" class="btn-cancel">Fechar</button>
+          <button onclick="copiarMensagem()" style="background:#1DAA61;color:#fff;border:none;border-radius:8px;padding:.5rem 1.1rem;font-size:.82rem;font-weight:700;cursor:pointer">📋 Copiar Mensagem</button>
           <button onclick="salvarRegistroCRM()" class="btn-save">✅ Salvar no CRM</button>
         </div>
       </div>
