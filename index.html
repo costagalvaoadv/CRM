@@ -271,6 +271,20 @@ function filterLeadsByPeriodo(periodo,dataIni,dataFim){
   return allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
 }
 
+// ── Dias entre Data do Primeiro Contato e Data de Fechamento do Contrato ──
+function getDiasFechamentoLead(l){
+  if(l.status!=='CONTRATO FECHADO')return null;
+  const iniD=l.dataPrimeiroContato?.toDate?l.dataPrimeiroContato.toDate():(l.createdAt?.toDate?l.createdAt.toDate():null);
+  if(!iniD)return null;
+  let fimD=l.dataFechamentoContrato?.toDate?l.dataFechamentoContrato.toDate():null;
+  if(!fimD&&l.log&&l.log.length>0){
+    const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');
+    if(lc.length>0)fimD=new Date(lc[lc.length-1].ts);
+  }
+  if(!fimD)return null;
+  return Math.max(0,Math.round((fimD-iniD)/(1000*60*60*24)));
+}
+
 // ── Honorário de um lead ──
 function getHonorario(l){
   if(l.valorHonorarios) return parseFloat(l.valorHonorarios)||0;
@@ -1162,15 +1176,15 @@ window.openLead=function(id){
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
-  // Default first contact date to today for new leads
-  if(!l) document.getElementById('f-data-contato').value=new Date().toISOString().slice(0,10);
   document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'EM ANDAMENTO';
   document.getElementById('f-tipo').value    =l?.tipo||'SM';
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
-  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):'');
+  // Data do Primeiro Contato: usa valor salvo; se não houver e for lead novo, sugere hoje (editável)
+  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):(!l?new Date().toISOString().slice(0,10):''));
+  document.getElementById('f-data-fechamento').value=l?.dataFechamentoContrato?toDateInput(l.dataFechamentoContrato):'';
   document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
   document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
   togglePartoField();
@@ -1291,6 +1305,8 @@ window.saveLead=async function(){
   const beneficioConcedido=document.getElementById('f-beneficio')?.value||null;
   const dataContatoVal=document.getElementById('f-data-contato')?.value;
   const dataPrimeiroContato=dataContatoVal?Timestamp.fromDate(new Date(dataContatoVal+'T12:00:00')):null;
+  const dataFechamentoVal=document.getElementById('f-data-fechamento')?.value;
+  const dataFechamentoContrato=dataFechamentoVal?Timestamp.fromDate(new Date(dataFechamentoVal+'T12:00:00')):null;
   try{
     if(!editingLeadId){
       const trilhaDias=getTrilhaDias(tipo);
@@ -1298,7 +1314,8 @@ window.saveLead=async function(){
       await addDoc(collection(db,'leads'),{
         name,phone,campaign,status,tipo,assignee,currentNote:note,
         nextFollowup:Timestamp.fromDate(d),dataParto,dataPrimeiroContato,etapaFollowup:0,valorHonorarios,
-        followupHistory:[],createdAt:serverTimestamp(),lastContact:serverTimestamp(),
+        dataFechamentoContrato,
+        followupHistory:[],createdAt:dataPrimeiroContato||serverTimestamp(),lastContact:serverTimestamp(),
         log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
       });
       clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
@@ -1314,6 +1331,7 @@ window.saveLead=async function(){
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
       if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
       if(dataPrimeiroContato)upd.dataPrimeiroContato=dataPrimeiroContato;
+      if(dataFechamentoContrato)upd.dataFechamentoContrato=dataFechamentoContrato;
       if(partoChanged&&tipo==='SM'){
         const etapa=existing?.etapaFollowup||0;
         const trilhaDias=getTrilhaDias('SM');
@@ -1437,14 +1455,8 @@ window.renderRelatorios=function(){
   document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>l.status==='QUALIFICADO').length);
   document.getElementById('rel-contrato-pct').textContent=pctRel(leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length);
   document.getElementById('rel-desq-pct').textContent    =pctRel(leadsAll.filter(l=>l.status==='DESQUALIFICADO').length);
-  const fechados=leadsAll.filter(l=>l.status==='CONTRATO FECHADO'&&l.createdAt?.toDate);
-  const dias=fechados.map(l=>{
-    const ini_=l.createdAt.toDate();
-    let fimD=null;
-    if(l.log&&l.log.length>0){const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');if(lc.length>0)fimD=new Date(lc[lc.length-1].ts);}
-    if(!fimD)return null;
-    return Math.max(0,Math.round((fimD-ini_)/(1000*60*60*24)));
-  }).filter(d=>d!==null);
+  const fechados=leadsAll.filter(l=>l.status==='CONTRATO FECHADO');
+  const dias=fechados.map(l=>getDiasFechamentoLead(l)).filter(d=>d!==null);
   document.getElementById('rel-maturacao').textContent=dias.length?Math.round(dias.reduce((a,b)=>a+b,0)/dias.length)+' dias':'—';
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
   if(relKpiFilter){const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};const el=document.getElementById(map[relKpiFilter]||'');if(el)el.classList.add('kpi-active');}
@@ -1556,7 +1568,19 @@ window.renderEstrategia=function(){
   const campStats={};
   mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
   const equipeStats={};
-  mesLeads.forEach(l=>{const a=l.assignee||'—';if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0};equipeStats[a].total++;if(l.status==='QUALIFICADO')equipeStats[a].qualif++;if(l.status==='CONTRATO FECHADO')equipeStats[a].contrato++;if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;});
+  mesLeads.forEach(l=>{
+    const a=l.assignee||'—';
+    if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0,diasFechamento:[]};
+    equipeStats[a].total++;
+    if(l.status==='QUALIFICADO')equipeStats[a].qualif++;
+    if(l.status==='CONTRATO FECHADO'){
+      equipeStats[a].contrato++;
+      const dfl=getDiasFechamentoLead(l);
+      if(dfl!==null)equipeStats[a].diasFechamento.push(dfl);
+    }
+    if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;
+    equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;
+  });
   // ── Planning module (gestora only) ──
   if(isG){
     const pmEl=document.getElementById('meta-module-content');
@@ -1608,10 +1632,11 @@ window.renderEstrategia=function(){
     <div class="section-header-row"><div class="est-section-title">👥 Desempenho da Equipe</div><button class="section-collapse-btn" onclick="toggleSection('est-equipe-body',this)" title="Minimizar/Maximizar">▾</button></div>
     <div id="est-equipe-body" class="section-collapsible">
     <div class="est-table-wrap"><table class="est-table">
-      <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Eficiência</th></tr></thead>
+      <thead><tr><th>Atendente</th><th>Leads</th><th>Qualif.</th><th>Contratos</th><th>FU Feitos</th><th>FU Atraso</th><th>Tempo Médio</th><th>Eficiência</th></tr></thead>
       <tbody>${Object.entries(equipeStats).map(([nome,s])=>{
         const ef=s.total?Math.round((s.qualif+s.contrato)/s.total*100):0;
-        return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
+        const tm=s.diasFechamento.length?Math.round(s.diasFechamento.reduce((a,b)=>a+b,0)/s.diasFechamento.length)+' dias':'—';
+        return `<tr><td class="est-camp-name">${nome}</td><td>${s.total}</td><td>${s.qualif}</td><td>${s.contrato}</td><td>${s.fuFeitos}</td><td class="${s.fuAtrasados>0?'text-red':''}">${s.fuAtrasados}</td><td>${tm}</td><td><span class="taxa-badge" style="color:${ef>=30?'#10B981':ef>=15?'#F5A623':'#EF4444'}">${ef}%</span></td></tr>`;
       }).join('')}</tbody>
     </table></div>
     </div>
@@ -2365,9 +2390,16 @@ window.toggleHonorariosField=function(){
   const status=document.getElementById('f-status')?.value;
   const row=document.getElementById('honorarios-row');
   const rowB=document.getElementById('beneficio-row');
+  const rowF=document.getElementById('fechamento-row');
   const isClosed=status==='CONTRATO FECHADO';
   if(row)row.style.display=isClosed?'flex':'none';
   if(rowB)rowB.style.display=isClosed?'flex':'none';
+  if(rowF){
+    rowF.style.display=isClosed?'flex':'none';
+    // Ao marcar como Contrato Fechado, sugere hoje como data (editável) se ainda não houver valor
+    const fEl=document.getElementById('f-data-fechamento');
+    if(isClosed&&fEl&&!fEl.value)fEl.value=new Date().toISOString().slice(0,10);
+  }
   calcHonorarios();
 };
 
@@ -4105,6 +4137,10 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
             <option value="sim">Sim — benefício já concedido</option>
             <option value="nao">Não — indeferido/cancelado</option>
           </select>
+        </div>
+        <div class="f-group" id="fechamento-row" style="display:none">
+          <label class="f-label">📅 Data de Fechamento do Contrato</label>
+          <input id="f-data-fechamento" class="f-input" type="date" title="Data em que o contrato foi efetivamente fechado"/>
         </div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
