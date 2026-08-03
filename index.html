@@ -271,6 +271,17 @@ function filterLeadsByPeriodo(periodo,dataIni,dataFim){
   return allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
 }
 
+// ── Data real de fechamento do contrato (com fallback pro histórico) ──
+function getDataFechamento(l){
+  if(l.dataFechamentoContrato?.toDate)return l.dataFechamentoContrato.toDate();
+  if(l.log&&l.log.length>0){
+    const lc=l.log.filter(lg=>lg.statusChange==='CONTRATO FECHADO');
+    if(lc.length>0)return new Date(lc[lc.length-1].ts);
+  }
+  if(l.lastContact?.toDate)return l.lastContact.toDate();
+  return null;
+}
+
 // ── Dias entre Data do Primeiro Contato e Data de Fechamento do Contrato ──
 function getDiasFechamentoLead(l){
   if(l.status!=='CONTRATO FECHADO')return null;
@@ -310,10 +321,14 @@ function getParcelas(l){
 function renderMetrics(){
   const{ini,fim}=getDateRange(dashPeriodo,dashDataIni,dashDataFim);
   const mo=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
+  const contratosPeriodo=allLeads.filter(l=>{
+    if(l.status!=='CONTRATO FECHADO')return false;
+    const d=getDataFechamento(l);return d&&d>=ini&&d<=fim;
+  });
   document.getElementById('m-total').textContent   =mo.length;
   document.getElementById('m-andamento').textContent=mo.filter(l=>l.status==='EM ANDAMENTO').length;
   document.getElementById('m-qualif').textContent  =mo.filter(l=>l.status==='QUALIFICADO').length;
-  document.getElementById('m-contrato').textContent=mo.filter(l=>l.status==='CONTRATO FECHADO').length;
+  document.getElementById('m-contrato').textContent=contratosPeriodo.length;
   document.getElementById('m-agdocs').textContent=mo.filter(l=>l.status==='AGUARDANDO DOCUMENTOS').length;
   document.getElementById('m-agass').textContent=mo.filter(l=>l.status==='AGUARDANDO ASSINATURA').length;
   document.getElementById('m-semresp').textContent =mo.filter(l=>l.status==='SEM RESPOSTA').length;
@@ -321,7 +336,7 @@ function renderMetrics(){
   const totalPeriodo=mo.length;
   const pct=n=>totalPeriodo?Math.round(n/totalPeriodo*100)+'% do total':'';
   document.getElementById('m-qualif-pct').textContent  =pct(mo.filter(l=>l.status==='QUALIFICADO').length);
-  document.getElementById('m-contrato-pct').textContent=pct(mo.filter(l=>l.status==='CONTRATO FECHADO').length);
+  document.getElementById('m-contrato-pct').textContent=pct(contratosPeriodo.length);
   document.getElementById('m-semresp-pct').textContent =pct(mo.filter(l=>l.status==='SEM RESPOSTA').length);
   document.getElementById('m-desq-pct').textContent    =pct(mo.filter(l=>l.status==='DESQUALIFICADO').length);
 }
@@ -1005,6 +1020,15 @@ window.abrirMetricaLeads = function(status) {
     'mes-atual':'Mês Atual','mes-anterior':'Mês Anterior',
     '3-meses':'Últimos 3 Meses','6-meses':'Últimos 6 Meses','especifica':'Período Selecionado'
   }[dashPeriodo]||'Período';
+  if (status === 'CONTRATO FECHADO') {
+    const leads = allLeads.filter(l => {
+      if (l.status !== 'CONTRATO FECHADO') return false;
+      const d = getDataFechamento(l);
+      return d && d >= ini && d <= fim;
+    });
+    abrirListaLeads(leads.map(l => l.id), `Contrato Fechado — ${periodoLabel}`);
+    return;
+  }
   let leads = allLeads.filter(l => {
     const d = l.createdAt?.toDate?.();
     return d && d >= ini && d <= fim;
@@ -1439,9 +1463,8 @@ window.fazerBackup=function(){
 };
 
 // ─── RELATÓRIOS ───
-function getLeadsFiltrados(semStatus){
+function getRelDateRange(){
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
-  const statusF=semStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
   const ini_=document.getElementById('rel-data-ini')?.value;
   const fim_=document.getElementById('rel-data-fim')?.value;
   const now=new Date();let ini,fim;
@@ -1450,6 +1473,11 @@ function getLeadsFiltrados(semStatus){
   else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
   else if(periodo==='especifica'&&ini_&&fim_){ini=new Date(ini_+'T00:00:00');fim=new Date(fim_+'T23:59:59');}
   else{ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
+  return{ini,fim};
+}
+function getLeadsFiltrados(semStatus){
+  const statusF=semStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
+  const{ini,fim}=getRelDateRange();
   let leads=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
   if(statusF!=='TODOS')leads=leads.filter(l=>l.status===statusF);
   return leads;
@@ -1457,20 +1485,25 @@ function getLeadsFiltrados(semStatus){
 
 window.renderRelatorios=function(){
   const leads=getLeadsFiltrados(false);const leadsAll=getLeadsFiltrados(true);
+  const{ini:relIni,fim:relFim}=getRelDateRange();
+  const contratosPeriodo=allLeads.filter(l=>{
+    if(l.status!=='CONTRATO FECHADO')return false;
+    const d=getDataFechamento(l);return d&&d>=relIni&&d<=relFim;
+  });
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
   document.getElementById('rel-data-range').style.display=periodo==='especifica'?'flex':'none';
   const taxa=leads.length?Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100):0;
   document.getElementById('rel-total').textContent   =leadsAll.length;
   document.getElementById('rel-qualif').textContent  =leadsAll.filter(l=>l.status==='QUALIFICADO').length;
-  document.getElementById('rel-contrato').textContent=leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length;
+  document.getElementById('rel-contrato').textContent=contratosPeriodo.length;
   document.getElementById('rel-desq').textContent    =leadsAll.filter(l=>l.status==='DESQUALIFICADO').length;
   document.getElementById('rel-taxa').textContent    =taxa+'%';
   const totalRel=leadsAll.length;
   const pctRel=n=>totalRel?Math.round(n/totalRel*100)+'% do total':'';
   document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>l.status==='QUALIFICADO').length);
-  document.getElementById('rel-contrato-pct').textContent=pctRel(leadsAll.filter(l=>l.status==='CONTRATO FECHADO').length);
+  document.getElementById('rel-contrato-pct').textContent=pctRel(contratosPeriodo.length);
   document.getElementById('rel-desq-pct').textContent    =pctRel(leadsAll.filter(l=>l.status==='DESQUALIFICADO').length);
-  const fechados=leadsAll.filter(l=>l.status==='CONTRATO FECHADO');
+  const fechados=contratosPeriodo;
   const dias=fechados.map(l=>getDiasFechamentoLead(l)).filter(d=>d!==null);
   document.getElementById('rel-maturacao').textContent=dias.length?Math.round(dias.reduce((a,b)=>a+b,0)/dias.length)+' dias':'—';
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
@@ -1491,6 +1524,13 @@ window.renderRelatorios=function(){
 };
 window.clickKpi=function(s){relKpiFilter=relKpiFilter===s?null:s;renderRelatorios();};
 window.getLeadsFiltrados=getLeadsFiltrados;
+window.getContratosFechadosPeriodo=function(){
+  const{ini,fim}=getRelDateRange();
+  return allLeads.filter(l=>{
+    if(l.status!=='CONTRATO FECHADO')return false;
+    const d=getDataFechamento(l);return d&&d>=ini&&d<=fim;
+  });
+};
 
 function renderChart(id,type,labels,data,colors){
   const canvas=document.getElementById(id);if(!canvas)return;
@@ -1572,7 +1612,10 @@ window.renderEstrategia=function(){
     return d<todayStart;
   });
   const qualifLeads=mesLeads.filter(l=>l.status==='QUALIFICADO');
-  const contratosLeads=mesLeads.filter(l=>l.status==='CONTRATO FECHADO');
+  const contratosLeads=leadsBase.filter(l=>{
+    if(l.status!=='CONTRATO FECHADO')return false;
+    const d=getDataFechamento(l);return d&&d>=ini&&d<=fim;
+  });
   const qualif=qualifLeads.length;
   const contratos=contratosLeads.length;
   const andamento=mesLeads.filter(l=>l.status==='EM ANDAMENTO').length;
@@ -1581,20 +1624,23 @@ window.renderEstrategia=function(){
   window._estAlerts={partoProximo,qualifParados,esfriando,fuAtrasados,mesLeads,qualifLeads,contratosLeads,podmVirar};
   const taxaConv=qualif?Math.round(contratos/qualif*100):0;
   const campStats={};
-  mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;if(l.status==='CONTRATO FECHADO')campStats[c].contrato++;});
+  mesLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].total++;if(l.status==='QUALIFICADO')campStats[c].qualif++;});
+  contratosLeads.forEach(l=>{const c=l.campaign||'Sem campanha';if(!campStats[c])campStats[c]={total:0,qualif:0,contrato:0};campStats[c].contrato++;});
   const equipeStats={};
   mesLeads.forEach(l=>{
     const a=l.assignee||'—';
     if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0,diasFechamento:[]};
     equipeStats[a].total++;
     if(l.status==='QUALIFICADO')equipeStats[a].qualif++;
-    if(l.status==='CONTRATO FECHADO'){
-      equipeStats[a].contrato++;
-      const dfl=getDiasFechamentoLead(l);
-      if(dfl!==null)equipeStats[a].diasFechamento.push(dfl);
-    }
     if(fuAtrasados.find(x=>x.id===l.id))equipeStats[a].fuAtrasados++;
     equipeStats[a].fuFeitos+=(l.followupHistory||[]).length;
+  });
+  contratosLeads.forEach(l=>{
+    const a=l.assignee||'—';
+    if(!equipeStats[a])equipeStats[a]={total:0,qualif:0,contrato:0,fuFeitos:0,fuAtrasados:0,diasFechamento:[]};
+    equipeStats[a].contrato++;
+    const dfl=getDiasFechamentoLead(l);
+    if(dfl!==null)equipeStats[a].diasFechamento.push(dfl);
   });
   // ── Planning module (gestora only) ──
   if(isG){
@@ -4022,7 +4068,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div class="rel-kpis">
         <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='CONTRATO FECHADO').map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getContratosFechadosPeriodo().map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="rel-kpi-pct" id="rel-desq-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
         <div class="rel-kpi" id="kpi-maturacao" title="Média de dias entre a entrada do lead e o fechamento do contrato"><div class="rel-kpi-label">Tempo Médio até Fechar</div><div class="rel-kpi-val" id="rel-maturacao" style="color:#F5A623">—</div></div>
