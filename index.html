@@ -1307,6 +1307,17 @@ window.saveLead=async function(){
   const dataPrimeiroContato=dataContatoVal?Timestamp.fromDate(new Date(dataContatoVal+'T12:00:00')):null;
   const dataFechamentoVal=document.getElementById('f-data-fechamento')?.value;
   const dataFechamentoContrato=dataFechamentoVal?Timestamp.fromDate(new Date(dataFechamentoVal+'T12:00:00')):null;
+  const phoneNorm=normalizePhone(phone);
+  if(phoneNorm){
+    const dup=allLeads.find(l=>l.id!==editingLeadId&&normalizePhone(l.phone)===phoneNorm);
+    if(dup){
+      clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
+      if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+      const abrir=confirm(`⚠️ Este telefone já está cadastrado para o lead "${dup.name||'Sem Nome'}".\n\nCadastro bloqueado para evitar duplicidade.\n\nDeseja abrir o lead existente?`);
+      if(abrir){closeLead();setTimeout(()=>openLead(dup.id),200);}
+      return;
+    }
+  }
   try{
     if(!editingLeadId){
       const trilhaDias=getTrilhaDias(tipo);
@@ -1371,12 +1382,15 @@ window.importarExcel=async function(input){
       const ws=wb.Sheets[wb.SheetNames[0]];
       const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       const dataRows=rows.slice(1).filter(r=>r[1]&&String(r[1]).trim());
-      let imp=0,err=0;
+      let imp=0,err=0,dupCount=0;
+      const seenPhones=new Set(allLeads.map(l=>normalizePhone(l.phone)).filter(Boolean));
       showToast(`Importando ${dataRows.length} leads...`,'warn');
       for(const row of dataRows){
         const ds=parseFloat(row[0]);
         const nome=String(row[1]||'').trim()||'Sem Nome';
         const tel=String(row[2]||'').trim();
+        const telNorm=normalizePhone(tel);
+        if(telNorm&&seenPhones.has(telNorm)){dupCount++;continue;}
         const status=normalizeStatus(String(row[3]||'').trim());
         let camp='';for(let c=4;c<=9;c++){if(row[c]&&String(row[c]).trim()){camp=String(row[c]).trim();break;}}
         const obs=String(row[11]||'').trim();
@@ -1394,9 +1408,10 @@ window.importarExcel=async function(input){
             createdAt:Timestamp.fromDate(cAt),lastContact:Timestamp.fromDate(cAt),
             log:obs?[{user:atend,note:obs,ts:cAt.toISOString(),statusChange:null}]:[],importado:true
           });imp++;
+          if(telNorm)seenPhones.add(telNorm);
         }catch(er){err++;}
       }
-      showToast(`✅ ${imp} leads importados!${err?` (${err} erros)`:''}`);
+      showToast(`✅ ${imp} leads importados!${dupCount?` (${dupCount} duplicados ignorados)`:''}${err?` (${err} erros)`:''}`);
     }catch(er){showToast('Erro: '+er.message,'error');}
   };
   reader.readAsArrayBuffer(file);
@@ -2954,6 +2969,7 @@ window.onSearch=v=>{searchQuery=v;renderTable();};
 // ─── UTILS ───
 function toDateInput(ts){const d=ts?.toDate?ts.toDate():new Date(ts);return d.toISOString().slice(0,10);}
 function formatPhone(p){if(!p)return '';return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
+function normalizePhone(p){if(!p)return '';return p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function formatDate(d){return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';}
 function formatDatetime(d){return d?new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
 function showToast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.className='toast',3500);}
