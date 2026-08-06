@@ -1892,20 +1892,11 @@ function calcularPlano(plano) {
     return campanhas.includes(l.campaign);
   });
 
-  // Contracts closed since plan start
+  // Contracts closed since plan start (usa a data real de fechamento, com fallback padrão do sistema)
   const contratos = leadsPlano.filter(l => {
     if (l.status !== 'CONTRATO FECHADO') return false;
-    const d = l.lastContact?.toDate ? l.lastContact.toDate() : (l.createdAt?.toDate ? l.createdAt.toDate() : null);
-    // Use log to find when contract was closed if possible
-    if (l.log && l.log.length > 0) {
-      const logContrato = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
-      if (logContrato.length > 0) {
-        const ts = new Date(logContrato[logContrato.length-1].ts);
-        return ts >= inicio && ts <= fim;
-      }
-    }
-    const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-    return cd && cd >= inicio;
+    const d = getDataFechamento(l);
+    return d && d >= inicio && d <= fim;
   });
 
   // All leads that entered during campaign period
@@ -1923,15 +1914,8 @@ function calcularPlano(plano) {
     const si = new Date(s.inicio + 'T00:00:00');
     const sf = new Date(s.fim + 'T23:59:59');
     const contrSem = contratos.filter(l => {
-      if (l.log && l.log.length > 0) {
-        const logC = l.log.filter(lg => lg.statusChange === 'CONTRATO FECHADO');
-        if (logC.length > 0) {
-          const ts = new Date(logC[logC.length-1].ts);
-          return ts >= si && ts <= sf;
-        }
-      }
-      const cd = l.createdAt?.toDate ? l.createdAt.toDate() : null;
-      return cd && cd >= si && cd <= sf;
+      const d = getDataFechamento(l);
+      return d && d >= si && d <= sf;
     });
     const isAtual = now >= si && now <= sf;
     const isPast = sf < now;
@@ -2479,7 +2463,7 @@ window.renderFinanceiro=function(){
   const{ini,fim}=getDateRange(estPeriodo,estDataIni,estDataFim);
   const contratos=allLeads.filter(l=>{
     if(l.status!=='CONTRATO FECHADO')return false;
-    const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;
+    const d=getDataFechamento(l);return d&&d>=ini&&d<=fim;
   });
 
   // Total honorários
