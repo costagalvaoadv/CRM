@@ -1111,6 +1111,10 @@ function renderKanban(){
       const lid=e.dataTransfer.getData('leadId');if(!lid)return;
       const l=allLeads.find(x=>x.id===lid);
       if(!l||l.status===status)return;
+      if(status==='CONTRATO FECHADO'){
+        const ok=confirm(`Confirmar fechamento de contrato para "${l.name||'Sem Nome'}"?\n\nDepois de mover, abra o card e preencha honorários e data de fechamento.`);
+        if(!ok)return;
+      }
       await updateDoc(doc(db,'leads',lid),{status,log:arrayUnion({user:currentUser?.nome||'—',note:`Status → ${status}`,ts:new Date().toISOString(),statusChange:status})});
       showToast(`Movido → ${STATUS_META[status].label}`);
     };
@@ -1366,7 +1370,14 @@ window.saveLead=async function(){
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
       if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
       if(dataPrimeiroContato)upd.dataPrimeiroContato=dataPrimeiroContato;
-      if(dataFechamentoContrato)upd.dataFechamentoContrato=dataFechamentoContrato;
+      // Só grava a data de fechamento se o status estiver "Contrato Fechado" E
+      // (a mudança de status aconteceu agora) OU (a pessoa editou o campo de data manualmente).
+      // Isso evita gravar uma data "de hoje" só porque alguém abriu e salvou um lead já fechado.
+      const existingFechamentoVal=existing?.dataFechamentoContrato?toDateInput(existing.dataFechamentoContrato):'';
+      const fechamentoEditadoManualmente=dataFechamentoVal!==existingFechamentoVal;
+      if(dataFechamentoContrato&&status==='CONTRATO FECHADO'&&(statusChanged||fechamentoEditadoManualmente)){
+        upd.dataFechamentoContrato=dataFechamentoContrato;
+      }
       if(partoChanged&&tipo==='SM'){
         const etapa=existing?.etapaFollowup||0;
         const trilhaDias=getTrilhaDias('SM');
@@ -2457,9 +2468,6 @@ window.toggleHonorariosField=function(){
   if(rowB)rowB.style.display=isClosed?'flex':'none';
   if(rowF){
     rowF.style.display=isClosed?'flex':'none';
-    // Ao marcar como Contrato Fechado, sugere hoje como data (editável) se ainda não houver valor
-    const fEl=document.getElementById('f-data-fechamento');
-    if(isClosed&&fEl&&!fEl.value)fEl.value=new Date().toISOString().slice(0,10);
   }
   calcHonorarios();
 };
