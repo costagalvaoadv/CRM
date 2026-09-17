@@ -194,13 +194,26 @@ window.fecharModalEquipe=()=>document.getElementById('modal-equipe').style.displ
 
 // ─── DISTRIBUIÇÃO EM LOTE: leads sem atendente ───
 const STATUS_ATIVOS_DIST=['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'];
-window.abrirModalDistribuir=function(){
-  const semAtendente=allLeads.filter(l=>!l.assignee&&STATUS_ATIVOS_DIST.includes(l.status));
-  const total=semAtendente.length;
-  if(!total)return showToast('Não há leads sem atendente no momento.','warn');
-  const nomes=[...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).filter(Boolean))];
-  if(!nomes.length)return showToast('Cadastre atendentes em Equipe antes de distribuir.','error');
+let distEscopo='atrasados';
+function getPoolDistribuir(){
+  const now=new Date();const todayEnd=new Date(now);todayEnd.setHours(23,59,59,999);
+  return allLeads.filter(l=>{
+    if(l.assignee||!STATUS_ATIVOS_DIST.includes(l.status))return false;
+    if(distEscopo==='todos')return true;
+    return leadEstaAtrasadoHoje(l,todayEnd);
+  });
+}
+window.setEscopoDistribuir=function(escopo){
+  distEscopo=escopo;
+  document.getElementById('dist-tab-atrasados').classList.toggle('active',escopo==='atrasados');
+  document.getElementById('dist-tab-todos').classList.toggle('active',escopo==='todos');
+  montarLinhasDistribuir();
+};
+function montarLinhasDistribuir(){
+  const total=getPoolDistribuir().length;
   document.getElementById('dist-total').textContent=total;
+  const nomes=[...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).filter(Boolean))];
+  if(!nomes.length){document.getElementById('dist-rows').innerHTML='';return showToast('Cadastre atendentes em Equipe antes de distribuir.','error');}
   const base=Math.floor(total/nomes.length);
   let resto=total-base*nomes.length;
   const rows=nomes.map(n=>{
@@ -210,6 +223,13 @@ window.abrirModalDistribuir=function(){
   }).join('');
   document.getElementById('dist-rows').innerHTML=rows;
   atualizarRestanteDistribuir(total);
+}
+window.abrirModalDistribuir=function(){
+  if(!getPoolDistribuir().length&&!allLeads.some(l=>!l.assignee&&STATUS_ATIVOS_DIST.includes(l.status)))return showToast('Não há leads sem atendente no momento.','warn');
+  distEscopo='atrasados';
+  document.getElementById('dist-tab-atrasados').classList.add('active');
+  document.getElementById('dist-tab-todos').classList.remove('active');
+  montarLinhasDistribuir();
   document.getElementById('modal-distribuir').style.display='flex';
 };
 window.fecharModalDistribuir=()=>document.getElementById('modal-distribuir').style.display='none';
@@ -226,21 +246,21 @@ window.atualizarRestanteDistribuir=function(total){
 window.confirmarDistribuicao=async function(){
   const inputs=[...document.querySelectorAll('.dist-input')];
   const plano=inputs.map(i=>({nome:i.dataset.nome,qtd:parseInt(i.value)||0})).filter(p=>p.qtd>0);
-  const semAtendente=allLeads.filter(l=>!l.assignee&&STATUS_ATIVOS_DIST.includes(l.status))
-    .sort((a,b)=>{
+  const pool=getPoolDistribuir().sort((a,b)=>{
       const da=a.createdAt?.toDate?a.createdAt.toDate():new Date(a.createdAt||0);
       const dbb=b.createdAt?.toDate?b.createdAt.toDate():new Date(b.createdAt||0);
       return da-dbb;
     });
   const totalPlano=plano.reduce((s,p)=>s+p.qtd,0);
-  if(totalPlano!==semAtendente.length)return showToast('A soma das quantidades não bate com o total sem atendente.','error');
+  if(totalPlano!==pool.length)return showToast('A soma das quantidades não bate com o total selecionado.','error');
   const btn=document.getElementById('btn-dist-confirmar');
-  btn.disabled=true;const labelOriginal=btn.textContent;btn.textContent='Distribuindo...';
+  btn.disabled=true;const labelOriginal=btn.textContent;
   let idx=0,ok=0,falha=0;
   for(const p of plano){
     for(let i=0;i<p.qtd;i++){
-      const lead=semAtendente[idx];idx++;
+      const lead=pool[idx];idx++;
       if(!lead)continue;
+      btn.textContent=`Distribuindo... ${idx} de ${pool.length}`;
       try{
         await updateDoc(doc(db,'leads',lead.id),{
           assignee:p.nome,
@@ -3222,7 +3242,8 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
 .pulsing{animation:pulseGlow 2s ease-in-out infinite}
 @keyframes pulseGlowRed{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}50%{box-shadow:0 0 0 12px rgba(239,68,68,.3)}}
-.pulsing-red{animation:pulseGlowRed 1.6s ease-in-out infinite}
+@keyframes shakeCard{0%,100%{transform:translateX(0) rotate(0)}10%{transform:translateX(-2px) rotate(-.3deg)}20%{transform:translateX(2px) rotate(.3deg)}30%{transform:translateX(-2px)}40%{transform:translateX(2px)}50%{transform:translateX(-1px)}60%{transform:translateX(1px)}70%{transform:translateX(-1px)}80%{transform:translateX(1px)}90%{transform:translateX(0)}}
+.pulsing-red{animation:pulseGlowRed 1.6s ease-in-out infinite,shakeCard 3.5s ease-in-out infinite}
 /* TAREFA DO DIA (destaque) */
 .tarefa-hoje-card{background:#1A1013;border:1px solid #EF4444;border-radius:12px;margin-bottom:1.25rem;padding:.85rem 1.25rem;flex-direction:column;gap:.6rem}
 .tarefa-hoje-header{display:flex;align-items:center;gap:.6rem}
@@ -4457,7 +4478,11 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
   <div class="modal-box" style="max-width:440px">
     <div class="modal-head"><span class="modal-title">🔀 Distribuir leads sem atendente</span><button class="modal-close" onclick="fecharModalDistribuir()">✕</button></div>
     <div class="modal-body">
-      <div style="font-size:.78rem;color:#9CA3AF;margin-bottom:.75rem">Total sem atendente (leads ativos): <strong id="dist-total" style="color:#F1F3F9">0</strong></div>
+      <div style="display:flex;gap:.4rem;margin-bottom:.75rem">
+        <button id="dist-tab-atrasados" class="fu-filter-btn active" onclick="setEscopoDistribuir('atrasados')" style="flex:1">Só atrasados hoje</button>
+        <button id="dist-tab-todos" class="fu-filter-btn" onclick="setEscopoDistribuir('todos')" style="flex:1">Todos sem atendente</button>
+      </div>
+      <div style="font-size:.78rem;color:#9CA3AF;margin-bottom:.75rem">Total nessa seleção: <strong id="dist-total" style="color:#F1F3F9">0</strong></div>
       <div id="dist-rows" style="display:flex;flex-direction:column;gap:.6rem"></div>
       <div style="margin-top:.75rem;font-size:.8rem;display:flex;justify-content:space-between;border-top:1px solid #2A2F45;padding-top:.6rem">
         <span>Restante a distribuir:</span><strong id="dist-restante">0</strong>
