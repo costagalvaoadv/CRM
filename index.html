@@ -826,13 +826,39 @@ function checkAlarmes(){
     if(dt<=now&&!agAlertados.has(c.id)){agAlertados.add(c.id);dispararAlarme(c);}
   });
 }
-function popularLeadSelect(nomeAtendente,selectedId){
-  const sel=document.getElementById('ag-lead');if(!sel)return;
-  const leadsDoAtendente=allLeads.filter(l=>l.assignee===nomeAtendente);
-  sel.innerHTML='<option value="">Nenhum · lembrete avulso</option>'
-    +leadsDoAtendente.map(l=>`<option value="${l.id}">${l.name||'Sem nome'}</option>`).join('');
-  if(selectedId)sel.value=selectedId;
+function filtrarLeadAgenda(){
+  const box=document.getElementById('ag-lead-suggestions');if(!box)return;
+  const atSel=document.getElementById('ag-atendente');
+  const atendente=atSel?atSel.value:'';
+  const termo=(document.getElementById('ag-lead-search')?.value||'').trim();
+  let lista=allLeads.filter(l=>l.assignee===atendente);
+  if(termo){
+    const q=termo.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const qDigits=termo.replace(/\D/g,'');
+    lista=lista.filter(l=>{
+      const nameNorm=(l.name||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+      const phoneDigits=(l.phone||'').replace(/\D/g,'');
+      return nameNorm.includes(q)||(qDigits.length>=3&&phoneDigits.includes(qDigits));
+    });
+  }
+  lista=lista.slice(0,8);
+  box.innerHTML=lista.length
+    ?lista.map(l=>`<div class="ag-lead-suggestion" onmousedown="selecionarLeadAgenda('${l.id}')"><span>${l.name||'Sem nome'}</span><span class="ag-lead-suggestion-phone">${l.phone||''}</span></div>`).join('')
+    :`<div class="ag-lead-suggestion" style="cursor:default;color:#6B7280">Nenhum lead encontrado</div>`;
+  box.classList.add('show');
 }
+window.filtrarLeadAgenda=filtrarLeadAgenda;
+window.selecionarLeadAgenda=function(id){
+  const l=allLeads.find(x=>x.id===id);if(!l)return;
+  document.getElementById('ag-lead').value=id;
+  document.getElementById('ag-lead-search').value=l.name||'';
+  document.getElementById('ag-lead-suggestions').classList.remove('show');
+};
+window.limparLeadAgenda=function(){
+  document.getElementById('ag-lead').value='';
+  document.getElementById('ag-lead-search').value='';
+  document.getElementById('ag-lead-suggestions')?.classList.remove('show');
+};
 window.abrirModalAgenda=function(fixedLeadId){
   document.getElementById('ag-id').value='';
   document.getElementById('ag-modal-title').textContent='Novo Compromisso';
@@ -852,10 +878,13 @@ window.abrirModalAgenda=function(fixedLeadId){
   if(fixedLead){
     leadRow.innerHTML=`<label class="f-label">Vinculado ao lead</label><input class="f-input" type="text" value="${fixedLead.name||''}" disabled/><input type="hidden" id="ag-lead" value="${fixedLead.id}"/>`;
   }else{
-    leadRow.innerHTML=`<label class="f-label">Vincular a um lead (opcional)</label><select id="ag-lead" class="f-select"><option value="">Nenhum · lembrete avulso</option></select>`;
-    popularLeadSelect(atSel.value);
+    leadRow.innerHTML=`<label class="f-label">Vincular a um lead (opcional)</label>
+      <input type="text" id="ag-lead-search" class="f-input" placeholder="Buscar por nome ou telefone..." autocomplete="off" oninput="filtrarLeadAgenda()" onfocus="filtrarLeadAgenda()" onblur="setTimeout(()=>document.getElementById('ag-lead-suggestions')?.classList.remove('show'),150)"/>
+      <input type="hidden" id="ag-lead" value=""/>
+      <div id="ag-lead-suggestions" class="ag-lead-suggestions"></div>
+      <span class="ag-lead-clear" onmousedown="limparLeadAgenda()">Limpar seleção</span>`;
   }
-  atSel.onchange=()=>{if(!fixedLead)popularLeadSelect(atSel.value);};
+  atSel.onchange=()=>{if(!fixedLead)limparLeadAgenda();};
   document.getElementById('ag-data').value=localDateStr(new Date());
   document.getElementById('ag-hora').value='';
   document.getElementById('ag-nota').value='';
@@ -3504,6 +3533,14 @@ body.light-theme .kanban-panel-title{color:#1A1D2E}
 .ag-list{display:flex;flex-direction:column;gap:.6rem}
 .ag-list .fu-card2{cursor:default}
 .ag-list .fu-card2[onclick]{cursor:pointer}
+.ag-lead-suggestions{position:absolute;top:100%;left:0;right:0;background:#1E2235;border:1px solid #2A2F45;border-radius:7px;margin-top:.25rem;max-height:180px;overflow-y:auto;z-index:20;display:none}
+.ag-lead-suggestions.show{display:block}
+.ag-lead-suggestion{padding:.5rem .8rem;font-size:.8rem;cursor:pointer;display:flex;justify-content:space-between;gap:.5rem}
+.ag-lead-suggestion:hover{background:#2A2F45}
+.ag-lead-suggestion-phone{color:#6B7280;font-size:.72rem}
+.ag-lead-clear{font-size:.7rem;color:#6B7280;cursor:pointer;margin-top:.3rem;display:inline-block}
+body.light-theme .ag-lead-suggestions{background:#F4F5F8;border-color:#E2E5EE}
+body.light-theme .ag-lead-suggestion:hover{background:#E2E5EE}
 .fu-empty-all{font-size:.82rem;color:#374151;padding:.5rem}
 .fu-stage-col{background:#1A1D2E;border:1px solid #2A2F45;border-radius:10px;width:260px;flex-shrink:0;overflow:hidden;display:flex;flex-direction:column}
 .fu-stage-header{padding:.65rem .85rem;border-bottom:1px solid #2A2F45;display:flex;align-items:center;gap:.4rem;background:#13161F;border-radius:10px 10px 0 0;}
@@ -4712,9 +4749,11 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div class="modal-body" style="display:flex;flex-direction:column;gap:.9rem">
       <input type="hidden" id="ag-id"/>
       <div class="f-group"><label class="f-label">Atendente</label><select id="ag-atendente" class="f-select"></select></div>
-      <div class="f-group" id="ag-lead-row">
+      <div class="f-group" id="ag-lead-row" style="position:relative">
         <label class="f-label">Vincular a um lead (opcional)</label>
-        <select id="ag-lead" class="f-select"><option value="">Nenhum · lembrete avulso</option></select>
+        <input type="text" id="ag-lead-search" class="f-input" placeholder="Buscar por nome ou telefone..." autocomplete="off" oninput="filtrarLeadAgenda()" onfocus="filtrarLeadAgenda()" onblur="setTimeout(()=>document.getElementById('ag-lead-suggestions')?.classList.remove('show'),150)"/>
+        <input type="hidden" id="ag-lead" value=""/>
+        <div id="ag-lead-suggestions" class="ag-lead-suggestions"></div>
       </div>
       <div class="f-group"><label class="f-label">Data</label><input id="ag-data" class="f-input" type="date"/></div>
       <div class="f-group"><label class="f-label">Horário</label><input id="ag-hora" class="f-input" type="time"/></div>
