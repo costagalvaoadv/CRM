@@ -49,6 +49,11 @@ const STATUS_META={
   'SEM RESPOSTA':         {color:'#F5A623',bg:'rgba(245,166,35,0.12)',  label:'Sem Resposta'},
 };
 
+// Um lead é considerado "qualificado ou posterior" se o status atual já passou pela etapa
+// de Qualificado no funil (inclui quem avançou para Ag.Documentos, Ag.Assinatura ou Contrato Fechado)
+const STATUS_QUALIFICADO_OU_POSTERIOR=['QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA','CONTRATO FECHADO'];
+function isQualificadoOuPosterior(status){return STATUS_QUALIFICADO_OU_POSTERIOR.includes(status);}
+
 // Trilha: cada prazo é APÓS o follow-up anterior ter sido feito
 const TRILHA_SM_LABELS    = ['FUP 24h','FUP 3d','FUP 7d','FUP 15d','Mensal'];
 const TRILHA_GERAL_LABELS = ['FUP 24h','FUP 3d','FUP 7d','FUP 15d','FUP 30d'];
@@ -1907,16 +1912,57 @@ function getRelDateRange(){
   const now=new Date();let ini,fim;
   if(periodo==='mes-atual'){ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
   else if(periodo==='mes-anterior'){ini=new Date(now.getFullYear(),now.getMonth()-1,1);fim=new Date(now.getFullYear(),now.getMonth(),0,23,59,59);}
+  else if(periodo==='3-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-3);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
   else if(periodo==='6-meses'){ini=new Date(now);ini.setMonth(ini.getMonth()-6);ini.setDate(1);fim=new Date(now);fim.setHours(23,59,59,999);}
   else if(periodo==='especifica'&&ini_&&fim_){ini=new Date(ini_+'T00:00:00');fim=new Date(fim_+'T23:59:59');}
   else{ini=new Date(now.getFullYear(),now.getMonth(),1);fim=new Date(now.getFullYear(),now.getMonth()+1,0,23,59,59);}
   return{ini,fim};
 }
+
+// ── Diagnóstico do Funil: período de comparação equivalente ──
+// Sempre compara com o intervalo anterior de mesma duração/recorte de calendário,
+// nunca com o mês anterior inteiro quando o período atual está em andamento.
+function getRelPeriodoAnterior(periodo,ini,fim){
+  const now=new Date();
+  const fimAtual=(periodo==='mes-atual'&&fim>now)?now:fim;
+  let iniAnt,fimAnt;
+  if(periodo==='mes-atual'){
+    iniAnt=new Date(ini.getFullYear(),ini.getMonth()-1,1);
+    const ultimoDiaMesAnt=new Date(ini.getFullYear(),ini.getMonth(),0).getDate();
+    const diaEquiv=Math.min(fimAtual.getDate(),ultimoDiaMesAnt);
+    fimAnt=new Date(iniAnt.getFullYear(),iniAnt.getMonth(),diaEquiv,23,59,59);
+  }else if(periodo==='mes-anterior'){
+    iniAnt=new Date(ini.getFullYear(),ini.getMonth()-1,1);
+    fimAnt=new Date(ini.getFullYear(),ini.getMonth(),0,23,59,59);
+  }else if(periodo==='3-meses'||periodo==='6-meses'){
+    const nMeses=periodo==='3-meses'?3:6;
+    iniAnt=new Date(ini);iniAnt.setMonth(iniAnt.getMonth()-nMeses);
+    fimAnt=new Date(ini.getTime()-1);
+  }else{
+    const duracaoMs=fimAtual.getTime()-ini.getTime();
+    iniAnt=new Date(ini.getTime()-duracaoMs-86400000);
+    fimAnt=new Date(ini.getTime()-1);
+  }
+  return{iniAtual:ini,fimAtual,iniAnt,fimAnt};
+}
+// Conta os status de uma lista de leads (mesma base de data de entrada, sem filtro de status aplicado)
+function getFunilStatusCounts(leads){
+  const total=leads.length;
+  const qualificados=leads.filter(l=>isQualificadoOuPosterior(l.status)).length;
+  const contratos=leads.filter(l=>l.status==='CONTRATO FECHADO').length;
+  const semResposta=leads.filter(l=>l.status==='SEM RESPOSTA').length;
+  const desqualificados=leads.filter(l=>l.status==='DESQUALIFICADO').length;
+  const taxaQualif=total?Math.round(qualificados/total*100):0;
+  const taxaFechamento=qualificados?Math.round(contratos/qualificados*100):0;
+  const taxaGeral=total?Math.round(contratos/total*100):0;
+  return{total,qualificados,contratos,semResposta,desqualificados,taxaQualif,taxaFechamento,taxaGeral};
+}
 function getLeadsFiltrados(semStatus){
   const statusF=semStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
   const{ini,fim}=getRelDateRange();
   let leads=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=ini&&d<=fim;});
-  if(statusF!=='TODOS')leads=leads.filter(l=>l.status===statusF);
+  if(statusF==='QUALIFICADO_OU_POSTERIOR')leads=leads.filter(l=>isQualificadoOuPosterior(l.status));
+  else if(statusF!=='TODOS')leads=leads.filter(l=>l.status===statusF);
   return leads;
 }
 
@@ -1929,22 +1975,22 @@ window.renderRelatorios=function(){
   });
   const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
   document.getElementById('rel-data-range').style.display=periodo==='especifica'?'flex':'none';
-  const taxa=leads.length?Math.round(leads.filter(l=>['QUALIFICADO','CONTRATO FECHADO'].includes(l.status)).length/leads.length*100):0;
+  const taxa=leads.length?Math.round(leads.filter(l=>isQualificadoOuPosterior(l.status)).length/leads.length*100):0;
   document.getElementById('rel-total').textContent   =leadsAll.length;
-  document.getElementById('rel-qualif').textContent  =leadsAll.filter(l=>l.status==='QUALIFICADO').length;
+  document.getElementById('rel-qualif').textContent  =leadsAll.filter(l=>isQualificadoOuPosterior(l.status)).length;
   document.getElementById('rel-contrato').textContent=contratosPeriodo.length;
   document.getElementById('rel-desq').textContent    =leadsAll.filter(l=>l.status==='DESQUALIFICADO').length;
   document.getElementById('rel-taxa').textContent    =taxa+'%';
   const totalRel=leadsAll.length;
   const pctRel=n=>totalRel?Math.round(n/totalRel*100)+'% do total':'';
-  document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>l.status==='QUALIFICADO').length);
+  document.getElementById('rel-qualif-pct').textContent  =pctRel(leadsAll.filter(l=>isQualificadoOuPosterior(l.status)).length);
   document.getElementById('rel-contrato-pct').textContent=pctRel(contratosPeriodo.length);
   document.getElementById('rel-desq-pct').textContent    =pctRel(leadsAll.filter(l=>l.status==='DESQUALIFICADO').length);
   const fechados=contratosPeriodo;
   const dias=fechados.map(l=>getDiasFechamentoLead(l)).filter(d=>d!==null);
   document.getElementById('rel-maturacao').textContent=dias.length?Math.round(dias.reduce((a,b)=>a+b,0)/dias.length)+' dias':'—';
   document.querySelectorAll('.rel-kpi').forEach(k=>k.classList.remove('kpi-active'));
-  if(relKpiFilter){const map={'QUALIFICADO':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};const el=document.getElementById(map[relKpiFilter]||'');if(el)el.classList.add('kpi-active');}
+  if(relKpiFilter){const map={'QUALIFICADO_OU_POSTERIOR':'kpi-qualif','CONTRATO FECHADO':'kpi-contrato','DESQUALIFICADO':'kpi-desq'};const el=document.getElementById(map[relKpiFilter]||'');if(el)el.classList.add('kpi-active');}
   const sc={};Object.keys(STATUS_META).forEach(s=>sc[s]=0);leadsAll.forEach(l=>{if(sc[l.status]!==undefined)sc[l.status]++;});
   renderChart('chart-status','doughnut',Object.values(STATUS_META).map(s=>s.label),Object.keys(STATUS_META).map(s=>sc[s]),Object.values(STATUS_META).map(s=>s.color));
   const tipos={SM:0,Geral:0};leadsAll.forEach(l=>{if(l.tipo==='SM')tipos.SM++;else tipos.Geral++;});
@@ -1958,7 +2004,65 @@ window.renderRelatorios=function(){
     const d=l.createdAt?.toDate?l.createdAt.toDate():null;
     return `<tr><td>${d?formatDate(d):'—'}</td><td>${l.name||'Sem Nome'}</td><td>${l.phone||'—'}</td><td>${l.tipo==='SM'?'SM':'Geral'}</td><td>${l.campaign||'—'}</td><td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td><td>${l.assignee||'—'}</td></tr>`;
   }).join('');
+  renderFunilDiagnostico(periodo);
 };
+
+// ── Diagnóstico do Funil ──
+function renderFunilDiagnostico(periodo){
+  const cardEl=document.getElementById('funil-diag-card');if(!cardEl)return;
+  const{ini,fim}=getRelDateRange();
+  const{iniAtual,fimAtual,iniAnt,fimAnt}=getRelPeriodoAnterior(periodo,ini,fim);
+  const leadsAtual=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAtual&&d<=fimAtual;});
+  const leadsAnt=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAnt&&d<=fimAnt;});
+  const cAtual=getFunilStatusCounts(leadsAtual);
+  const cAnt=getFunilStatusCounts(leadsAnt);
+  const fmtDia=d=>d.toLocaleDateString('pt-BR');
+  document.getElementById('funil-diag-periodo-label').textContent=
+    `${fmtDia(iniAtual)} a ${fmtDia(fimAtual)}  vs.  ${fmtDia(iniAnt)} a ${fmtDia(fimAnt)}`;
+  const taxaCard=(label,atualVal,antVal)=>{
+    const diff=atualVal-antVal;
+    const seta=diff>0?'▲':diff<0?'▼':'▬';
+    const cor=diff>0?'#10B981':diff<0?'#EF4444':'#6B7280';
+    return `<div class="funil-taxa-card">
+      <div class="funil-taxa-label">${label}</div>
+      <div class="funil-taxa-val" style="color:${cor}">${atualVal}%</div>
+      <div class="funil-taxa-comp" style="color:${cor}">${seta} ${diff>0?'+':''}${diff}pp vs ${antVal}%</div>
+    </div>`;
+  };
+  document.getElementById('funil-diag-taxas').innerHTML=
+    taxaCard('Taxa de Qualificação',cAtual.taxaQualif,cAnt.taxaQualif)+
+    taxaCard('Taxa de Fechamento',cAtual.taxaFechamento,cAnt.taxaFechamento)+
+    taxaCard('Taxa Geral',cAtual.taxaGeral,cAnt.taxaGeral);
+  const dQ=cAtual.taxaQualif-cAnt.taxaQualif;
+  const dF=cAtual.taxaFechamento-cAnt.taxaFechamento;
+  const LIMIAR=2;
+  const mudouQ=Math.abs(dQ)>=LIMIAR,mudouF=Math.abs(dF)>=LIMIAR;
+  const pp=n=>`${n>0?'+':''}${n}pp`;
+  let texto;
+  if(!mudouQ&&!mudouF){
+    texto='📊 As taxas do funil estão estáveis em relação ao período anterior, sem variação relevante na qualificação ou no fechamento.';
+  }else if(mudouQ&&mudouF&&Math.sign(dQ)===Math.sign(dF)){
+    texto=`${dQ>0?'📈':'📉'} A ${dQ>0?'melhora':'piora'} veio das duas etapas do funil: qualificação (${pp(dQ)}) e fechamento (${pp(dF)}).`;
+  }else if(mudouQ&&!mudouF){
+    texto=`${dQ>0?'📈':'📉'} A ${dQ>0?'melhora':'piora'} veio principalmente da entrada do funil (qualificação: ${pp(dQ)}). A taxa de fechamento se manteve estável.`;
+  }else if(!mudouQ&&mudouF){
+    texto=`${dF>0?'📈':'📉'} A ${dF>0?'melhora':'piora'} veio principalmente do fechamento (${pp(dF)}). A qualificação de entrada se manteve estável.`;
+  }else{
+    texto=`⚖️ As etapas se moveram em direções opostas: qualificação ${dQ>0?'melhorou':'piorou'} (${pp(dQ)}) enquanto o fechamento ${dF>0?'melhorou':'piorou'} (${pp(dF)}).`;
+  }
+  document.getElementById('funil-diag-texto').textContent=texto;
+  const ctx=document.getElementById('chart-funil-comp');
+  if(ctx){
+    if(chartInstances['chart-funil-comp'])chartInstances['chart-funil-comp'].destroy();
+    chartInstances['chart-funil-comp']=new Chart(ctx,{type:'bar',data:{
+      labels:['Leads','Qualificados','Contratos','Sem Resposta','Desqualificados'],
+      datasets:[
+        {label:'Período anterior',data:[cAnt.total,cAnt.qualificados,cAnt.contratos,cAnt.semResposta,cAnt.desqualificados],backgroundColor:'#2A2F4599',borderColor:'#2A2F45',borderWidth:1,borderRadius:5},
+        {label:'Período atual',data:[cAtual.total,cAtual.qualificados,cAtual.contratos,cAtual.semResposta,cAtual.desqualificados],backgroundColor:'#4F6EF799',borderColor:'#4F6EF7',borderWidth:1,borderRadius:5}
+      ]
+    },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'},beginAtZero:true}}}});
+  }
+}
 window.clickKpi=function(s){relKpiFilter=relKpiFilter===s?null:s;renderRelatorios();};
 window.getLeadsFiltrados=getLeadsFiltrados;
 window.getContratosFechadosPeriodo=function(){
@@ -1972,7 +2076,7 @@ window.getContratosFechadosPeriodo=function(){
 function renderChart(id,type,labels,data,colors){
   const canvas=document.getElementById(id);if(!canvas)return;
   if(chartInstances[id])chartInstances[id].destroy();
-  chartInstances[id]=new Chart(canvas,{type,data:{labels,datasets:[{data,backgroundColor:type==='doughnut'?colors:colors,borderColor:'transparent',borderRadius:type==='bar'?6:0,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:type==='bar'?{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}}}:{}}});
+  chartInstances[id]=new Chart(canvas,{type,data:{labels,datasets:[{data,backgroundColor:type==='doughnut'?colors:colors,borderColor:'transparent',borderRadius:type==='bar'?6:0,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:type!=='bar',labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:type==='bar'?{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}}}:{}}});
 }
 window.exportarExcel=function(){
   const leads=getLeadsFiltrados(false);
@@ -3691,6 +3795,12 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .chart-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:1.1rem}
 .chart-title{font-size:.72rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.85rem}
 .chart-container{height:200px;position:relative}
+.funil-diag-periodo{font-size:.68rem;color:#6B7280;font-weight:600}
+.funil-diag-taxas{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem}
+.funil-taxa-card{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.85rem 1rem;text-align:center}
+.funil-taxa-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.3rem}
+.funil-taxa-val{font-size:1.6rem;font-weight:800;line-height:1}
+.funil-taxa-comp{font-size:.68rem;font-weight:600;margin-top:.3rem}
 /* ESTRATÉGIA */
 #estrategia-content{display:flex;flex-direction:column;gap:1.25rem}
 .est-section{background:#13161F;border:1px solid #1E2235;border-radius:12px;padding:1.25rem}
@@ -3805,7 +3915,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 @media print{header,.fu-panel,.tarefa-hoje-card,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast,#ag-panel{display:none!important}body{background:#fff;color:#000}}
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
+@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}.funil-diag-taxas{grid-template-columns:1fr}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
 
 
@@ -3868,6 +3978,8 @@ body.light-theme .filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;colo
 body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .rel-kpi{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
+body.light-theme .funil-taxa-card{background:#F9FAFC;border-color:#E2E5EE}
+body.light-theme .funil-taxa-label,body.light-theme .funil-diag-periodo{color:#8B92A8}
 body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .est-section-title{color:#1A1D2E}
 body.light-theme .est-alert,body.light-theme .est-pipe-card{background:#F8F9FC}
@@ -4531,7 +4643,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     </div>
     <div id="view-relatorios" class="hidden">
       <div class="rel-controls">
-        <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
+        <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="3-meses">Últimos 3 Meses</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
         <div class="rel-group" id="rel-data-range" style="display:none;gap:.4rem;flex-direction:row;align-items:flex-end">
           <div class="rel-group"><label class="rel-label">De</label><input id="rel-data-ini" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
           <div class="rel-group"><label class="rel-label">Até</label><input id="rel-data-fim" class="rel-date" type="date" onchange="renderRelatorios()"/></div>
@@ -4541,7 +4653,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="rel-kpis">
         <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO')"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='QUALIFICADO').map(l=>l.id),'Qualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO_OU_POSTERIOR')" title="Inclui leads que avançaram no funil (Ag. Documentos, Ag. Assinatura, Contrato Fechado)"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>isQualificadoOuPosterior(l.status)).map(l=>l.id),'Qualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getContratosFechadosPeriodo().map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="rel-kpi-pct" id="rel-desq-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
@@ -4552,6 +4664,15 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div class="chart-card"><div class="chart-title">Leads por Tipo</div><div class="chart-container"><canvas id="chart-tipo"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
+      </div>
+      <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil</div>
+          <div class="funil-diag-periodo" id="funil-diag-periodo-label"></div>
+        </div>
+        <div class="funil-diag-taxas" id="funil-diag-taxas"></div>
+        <div class="est-insight" id="funil-diag-texto" style="margin:.85rem 0"></div>
+        <div class="chart-container" style="height:240px"><canvas id="chart-funil-comp"></canvas></div>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin:1rem 0 .4rem">
         <span style="font-size:.75rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em">📋 Lista de contatos</span>
