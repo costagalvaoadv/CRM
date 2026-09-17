@@ -191,6 +191,69 @@ window.abrirModalEquipe=function(uid){
   document.getElementById('modal-equipe').style.display='flex';
 };
 window.fecharModalEquipe=()=>document.getElementById('modal-equipe').style.display='none';
+
+// ─── DISTRIBUIÇÃO EM LOTE: leads sem atendente ───
+const STATUS_ATIVOS_DIST=['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'];
+window.abrirModalDistribuir=function(){
+  const semAtendente=allLeads.filter(l=>!l.assignee&&STATUS_ATIVOS_DIST.includes(l.status));
+  const total=semAtendente.length;
+  if(!total)return showToast('Não há leads sem atendente no momento.','warn');
+  const nomes=[...new Set(allUsers.filter(u=>u.ativo!==false).map(u=>u.nome).filter(Boolean))];
+  if(!nomes.length)return showToast('Cadastre atendentes em Equipe antes de distribuir.','error');
+  document.getElementById('dist-total').textContent=total;
+  const base=Math.floor(total/nomes.length);
+  let resto=total-base*nomes.length;
+  const rows=nomes.map(n=>{
+    const val=base+(resto>0?1:0);
+    if(resto>0)resto--;
+    return `<div class="dist-row"><label class="f-label" style="margin:0">${n}</label><input type="number" min="0" class="f-input dist-input" data-nome="${n}" value="${val}" style="width:80px;text-align:center" oninput="atualizarRestanteDistribuir(${total})"/></div>`;
+  }).join('');
+  document.getElementById('dist-rows').innerHTML=rows;
+  atualizarRestanteDistribuir(total);
+  document.getElementById('modal-distribuir').style.display='flex';
+};
+window.fecharModalDistribuir=()=>document.getElementById('modal-distribuir').style.display='none';
+window.atualizarRestanteDistribuir=function(total){
+  const inputs=[...document.querySelectorAll('.dist-input')];
+  const soma=inputs.reduce((s,i)=>s+(parseInt(i.value)||0),0);
+  const restante=total-soma;
+  const el=document.getElementById('dist-restante');
+  el.textContent=restante;
+  el.style.color=restante===0?'#10B981':'#EF4444';
+  const btn=document.getElementById('btn-dist-confirmar');
+  if(btn)btn.disabled=restante!==0;
+};
+window.confirmarDistribuicao=async function(){
+  const inputs=[...document.querySelectorAll('.dist-input')];
+  const plano=inputs.map(i=>({nome:i.dataset.nome,qtd:parseInt(i.value)||0})).filter(p=>p.qtd>0);
+  const semAtendente=allLeads.filter(l=>!l.assignee&&STATUS_ATIVOS_DIST.includes(l.status))
+    .sort((a,b)=>{
+      const da=a.createdAt?.toDate?a.createdAt.toDate():new Date(a.createdAt||0);
+      const dbb=b.createdAt?.toDate?b.createdAt.toDate():new Date(b.createdAt||0);
+      return da-dbb;
+    });
+  const totalPlano=plano.reduce((s,p)=>s+p.qtd,0);
+  if(totalPlano!==semAtendente.length)return showToast('A soma das quantidades não bate com o total sem atendente.','error');
+  const btn=document.getElementById('btn-dist-confirmar');
+  btn.disabled=true;const labelOriginal=btn.textContent;btn.textContent='Distribuindo...';
+  let idx=0,ok=0,falha=0;
+  for(const p of plano){
+    for(let i=0;i<p.qtd;i++){
+      const lead=semAtendente[idx];idx++;
+      if(!lead)continue;
+      try{
+        await updateDoc(doc(db,'leads',lead.id),{
+          assignee:p.nome,
+          log:arrayUnion({user:'Sistema',note:`Atendente atribuído(a) via distribuição em lote de leads sem atendente: ${p.nome}`,ts:new Date().toISOString(),statusChange:null})
+        });
+        ok++;
+      }catch(e){falha++;}
+    }
+  }
+  btn.disabled=false;btn.textContent=labelOriginal;
+  showToast(`✅ ${ok} leads distribuídos!${falha?` (${falha} falharam)`:''}`);
+  fecharModalDistribuir();
+};
 window.salvarColaboradora=async function(){
   const uid=document.getElementById('eq-uid').value;
   const nomeAntigo=allUsers.find(x=>x.id===uid)?.nome||'';
@@ -3418,6 +3481,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .modal-body{padding:1.4rem 1.4rem 0 1.4rem;display:flex;flex-direction:column;gap:1.1rem;flex:1;overflow-y:auto;}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
 .f-group{display:flex;flex-direction:column;gap:.35rem}
+.dist-row{display:flex;align-items:center;justify-content:space-between;gap:.6rem}
 .f-group.full{grid-column:1/-1}
 .f-label{font-size:.68rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em}
 .f-input,.f-select,.f-textarea{background:#1E2235;border:1px solid #2A2F45;border-radius:7px;padding:.55rem .8rem;color:#F1F3F9;font-size:.82rem;font-family:'Inter',sans-serif;outline:none;transition:border-color .2s;width:100%}
@@ -4245,7 +4309,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div id="estrategia-content"></div>
     </div>
     <div id="view-equipe" class="hidden">
-      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div>
+      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn-hdr" onclick="abrirModalDistribuir()">🔀 Distribuir sem atendente</button><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div></div>
       <div id="equipe-lista"></div>
     </div>
     <!-- INDICAÇÃO VIEW -->
@@ -4388,7 +4452,24 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     </div>
   </div>
 </div>
-<!-- MODAL DECISÃO FINAL TRILHA -->
+<!-- MODAL DISTRIBUIR SEM ATENDENTE -->
+<div id="modal-distribuir" class="modal-overlay">
+  <div class="modal-box" style="max-width:440px">
+    <div class="modal-head"><span class="modal-title">🔀 Distribuir leads sem atendente</span><button class="modal-close" onclick="fecharModalDistribuir()">✕</button></div>
+    <div class="modal-body">
+      <div style="font-size:.78rem;color:#9CA3AF;margin-bottom:.75rem">Total sem atendente (leads ativos): <strong id="dist-total" style="color:#F1F3F9">0</strong></div>
+      <div id="dist-rows" style="display:flex;flex-direction:column;gap:.6rem"></div>
+      <div style="margin-top:.75rem;font-size:.8rem;display:flex;justify-content:space-between;border-top:1px solid #2A2F45;padding-top:.6rem">
+        <span>Restante a distribuir:</span><strong id="dist-restante">0</strong>
+      </div>
+      <div style="font-size:.68rem;color:#6B7280;margin-top:.4rem">Os leads mais antigos (por data de criação) são distribuídos primeiro, na ordem em que você preencher as quantidades abaixo.</div>
+    </div>
+    <div class="modal-foot">
+      <div></div>
+      <div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharModalDistribuir()">Cancelar</button><button id="btn-dist-confirmar" class="btn-save" onclick="confirmarDistribuicao()">Distribuir agora</button></div>
+    </div>
+  </div>
+</div>
 <div id="modal-decisao" class="modal-overlay">
   <div class="modal-box" style="max-width:460px">
     <div class="modal-head">
