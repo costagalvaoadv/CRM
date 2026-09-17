@@ -29,6 +29,7 @@ const auth=getAuth(app);
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
 let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
+let fuAlertInterval=null,primeiraCargaFeita=false;
 let activeQuickNotes=new Set(),presenceInterval=null;
 let dashPeriodo='mes-atual',dashDataIni='',dashDataFim='',estPeriodo='mes-atual',estDataIni='',estDataFim='';
 
@@ -97,10 +98,15 @@ function showApp(){
   ['tab-relatorios','tab-equipe'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
   const tabEst=document.getElementById('tab-estrategia');
   if(tabEst)tabEst.style.display='inline-block';
+  // Painel de Follow-up: atendente entra já filtrado nos próprios leads; gestora vê todos
+  fuFilter=isG?'TODOS':(currentUser.nome||'TODOS');
+  primeiraCargaFeita=false;
   startLeadsListener();startPresence();
   if(isG)startUsersListener();
   carregarCampanhas();
   if(isG)carregarPlanos().then(()=>{ if(currentTab==='estrategia')renderEstrategia(); });
+  if(fuAlertInterval)clearInterval(fuAlertInterval);
+  fuAlertInterval=setInterval(checkFuAlertaPessoal,45*60*1000);
 }
 
 // ─── SETUP / LOGIN ───
@@ -132,7 +138,8 @@ window.fazerLogin=async function(){
 window.fazerLogout=async function(){
   if(!confirm('Deseja sair?'))return;
   if(currentUser)await setDoc(doc(db,'presence',currentUser.uid),{online:false,nome:currentUser.nome,lastSeen:serverTimestamp()}).catch(()=>{});
-  clearInterval(presenceInterval);await signOut(auth);
+  clearInterval(presenceInterval);clearInterval(fuAlertInterval);primeiraCargaFeita=false;
+  await signOut(auth);
 };
 
 // ─── PRESENÇA ───
@@ -247,7 +254,9 @@ function startLeadsListener(){
   onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));renderAll();});
 }
 function renderAll(){
-  renderMetrics();renderFollowups();
+  renderFuFilterBtns();
+  renderMetrics();renderFollowups();renderTarefaHoje();
+  if(!primeiraCargaFeita){primeiraCargaFeita=true;setTimeout(checkFuAlertaPessoal,500);}
   if(currentTab==='kanban')renderKanban();
   else if(currentTab==='table')renderTable();
   else if(currentTab==='equipe')renderEquipe();
@@ -536,6 +545,71 @@ function fuCard(l,todayStart){
       <button onclick="event.stopPropagation();avancarEtapa('${l.id}')" class="btn-done">✓ Feito</button>
     </div>
   </div>`;
+}
+
+// ─── TAREFA DO DIA (destaque para atendente / equipe) ───
+function leadEstaAtrasadoHoje(l,todayEnd){
+  if(!['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l.status))return false;
+  if(!l.nextFollowup)return false;
+  const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+  return d<=todayEnd;
+}
+function renderTarefaHoje(){
+  const card=document.getElementById('tarefa-hoje-card');if(!card)return;
+  const titleEl=document.getElementById('tarefa-hoje-title');
+  const countEl=document.getElementById('tarefa-hoje-count');
+  const bodyEl=document.getElementById('tarefa-hoje-body');
+  const now=new Date();
+  const todayStart=new Date(now);todayStart.setHours(0,0,0,0);
+  const todayEnd=new Date(now);todayEnd.setHours(23,59,59,999);
+  const isG=currentUser?.role==='gestora';
+
+  if(!isG){
+    const meus=allLeads.filter(l=>l.assignee===currentUser?.nome&&leadEstaAtrasadoHoje(l,todayEnd));
+    titleEl.textContent='⏰ Minhas tarefas de hoje';
+    countEl.textContent=meus.length;
+    card.style.display=meus.length?'flex':'none';
+    card.classList.toggle('pulsing-red',meus.length>0);
+    bodyEl.innerHTML=meus.slice(0,8).map(l=>{
+      const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
+      const late=Math.floor((todayStart-d)/(1000*60*60*24));
+      const label=late<=0?'Vence hoje':`${late} dia${late>1?'s':''} em atraso`;
+      return `<div class="th-item" onclick="openLead('${l.id}')"><span class="th-name">${l.name||'Sem Nome'}</span><span class="th-late">${label}</span></div>`;
+    }).join('')+(meus.length>8?`<div class="th-more">+ ${meus.length-8} outro${meus.length-8>1?'s':''}...</div>`:'');
+  }else{
+    const porAtendente={};
+    allLeads.filter(l=>leadEstaAtrasadoHoje(l,todayEnd)).forEach(l=>{
+      const a=l.assignee||'Sem atendente';
+      porAtendente[a]=(porAtendente[a]||0)+1;
+    });
+    const entries=Object.entries(porAtendente).sort((a,b)=>b[1]-a[1]);
+    const total=entries.reduce((s,[,c])=>s+c,0);
+    titleEl.textContent='⏰ Atrasos da equipe hoje';
+    countEl.textContent=total;
+    card.style.display=total?'flex':'none';
+    card.classList.toggle('pulsing-red',total>0);
+    bodyEl.innerHTML=entries.map(([nome,count])=>
+      `<div class="th-item" onclick="irParaFollowup('${nome}')"><span class="th-name">${nome}</span><span class="th-late">${count} atrasado${count>1?'s':''}</span></div>`
+    ).join('');
+  }
+}
+window.irParaFollowup=function(nome){
+  if(nome)window.setFuFilter(nome);
+  const wrap=document.getElementById('fu-stages-wrap');
+  if(wrap&&wrap.classList.contains('fu-collapsed'))window.toggleFuPanel();
+  document.getElementById('fu-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
+};
+function checkFuAlertaPessoal(){
+  if(!currentUser)return;
+  const now=new Date();const todayEnd=new Date(now);todayEnd.setHours(23,59,59,999);
+  const isG=currentUser.role==='gestora';
+  if(!isG){
+    const n=allLeads.filter(l=>l.assignee===currentUser.nome&&leadEstaAtrasadoHoje(l,todayEnd)).length;
+    if(n>0)showToast(`⏰ Você tem ${n} follow-up${n>1?'s':''} atrasado${n>1?'s':''} hoje!`,'warn');
+  }else{
+    const n=allLeads.filter(l=>leadEstaAtrasadoHoje(l,todayEnd)).length;
+    if(n>0)showToast(`⏰ A equipe tem ${n} follow-up${n>1?'s':''} atrasado${n>1?'s':''} hoje!`,'warn');
+  }
 }
 
 // ─── GERAR MENSAGEM FUP COM IA ───
@@ -1417,8 +1491,13 @@ window.importarExcel=async function(input){
       const ws=wb.Sheets[wb.SheetNames[0]];
       const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});
       const dataRows=rows.slice(1).filter(r=>r[1]&&String(r[1]).trim());
-      let imp=0,err=0,dupCount=0;
+      let imp=0,err=0,dupCount=0,semAtend=0;
       const seenPhones=new Set(allLeads.map(l=>normalizePhone(l.phone)).filter(Boolean));
+      // Nomes de atendentes conhecidos: cadastro de Equipe (se disponível) + já usados em leads existentes
+      const nomesConhecidos=[...new Set([
+        ...(allUsers||[]).filter(u=>u.ativo!==false).map(u=>u.nome),
+        ...allLeads.map(l=>l.assignee)
+      ].filter(Boolean))];
       showToast(`Importando ${dataRows.length} leads...`,'warn');
       for(const row of dataRows){
         const ds=parseFloat(row[0]);
@@ -1430,7 +1509,9 @@ window.importarExcel=async function(input){
         let camp='';for(let c=4;c<=9;c++){if(row[c]&&String(row[c]).trim()){camp=String(row[c]).trim();break;}}
         const obs=String(row[11]||'').trim();
         const obsL=obs.toLowerCase();
-        const atend=obsL.startsWith('joelma')?'Joelma':'Isabel';
+        const atendMatch=nomesConhecidos.find(n=>obsL.startsWith(String(n).toLowerCase()));
+        const atend=atendMatch||'';
+        if(!atend)semAtend++;
         const tipo=(camp.toUpperCase().includes('SM')||obsL.includes('salário maternidade'))?'SM':'GERAL';
         let cAt=new Date();
         if(ds>0){const ep=new Date(1899,11,30);cAt=new Date(ep.getTime()+ds*86400000);}
@@ -1446,7 +1527,7 @@ window.importarExcel=async function(input){
           if(telNorm)seenPhones.add(telNorm);
         }catch(er){err++;}
       }
-      showToast(`✅ ${imp} leads importados!${dupCount?` (${dupCount} duplicados ignorados)`:''}${err?` (${err} erros)`:''}`);
+      showToast(`✅ ${imp} leads importados!${dupCount?` (${dupCount} duplicados ignorados)`:''}${semAtend?` (⚠️ ${semAtend} sem atendente identificado, revise na Tabela)`:''}${err?` (${err} erros)`:''}`);
     }catch(er){showToast('Erro: '+er.message,'error');}
   };
   reader.readAsArrayBuffer(file);
@@ -3067,6 +3148,22 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .fu-panel{background:#13161F;border:1px solid #1E2235;border-radius:12px;margin-bottom:1.25rem;overflow:hidden}
 @keyframes pulseGlow{0%,100%{box-shadow:0 0 0 0 rgba(245,166,35,0)}50%{box-shadow:0 0 0 12px rgba(245,166,35,.25)}}
 .pulsing{animation:pulseGlow 2s ease-in-out infinite}
+@keyframes pulseGlowRed{0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}50%{box-shadow:0 0 0 12px rgba(239,68,68,.3)}}
+.pulsing-red{animation:pulseGlowRed 1.6s ease-in-out infinite}
+/* TAREFA DO DIA (destaque) */
+.tarefa-hoje-card{background:#1A1013;border:1px solid #EF4444;border-radius:12px;margin-bottom:1.25rem;padding:.85rem 1.25rem;flex-direction:column;gap:.6rem}
+.tarefa-hoje-header{display:flex;align-items:center;gap:.6rem}
+.tarefa-hoje-icon{font-size:1.05rem}
+.tarefa-hoje-title{font-size:.9rem;font-weight:800;color:#EF4444}
+.tarefa-hoje-count{background:#EF4444;color:#fff;font-size:.72rem;font-weight:800;border-radius:999px;padding:.15rem .55rem;margin-left:auto}
+.tarefa-hoje-body{display:flex;flex-wrap:wrap;gap:.5rem}
+.th-item{background:#13161F;border:1px solid #2A2F45;border-radius:8px;padding:.4rem .7rem;display:flex;align-items:center;gap:.5rem;cursor:pointer;transition:border-color .15s;font-size:.78rem}
+.th-item:hover{border-color:#EF4444}
+.th-name{font-weight:700}
+.th-late{color:#EF4444;font-weight:700;font-size:.72rem;white-space:nowrap}
+.th-more{align-self:center;font-size:.75rem;color:#6B7280}
+body.light-theme .tarefa-hoje-card{background:#FFF5F5;border-color:#EF4444}
+body.light-theme .th-item{background:#FFFFFF;border-color:#E2E5EE}
 .fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
 .fu-panel-title{font-size:.88rem;font-weight:700}
 .fu-search-input{background:#0B0D14;border:1px solid #2A2F45;border-radius:6px;padding:.25rem .65rem;color:#F1F3F9;font-size:.72rem;outline:none;width:160px;transition:border-color .2s;flex-shrink:0}
@@ -3343,7 +3440,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 ::-webkit-scrollbar-track{background:#13161F}
 ::-webkit-scrollbar-thumb{background:#2A2F45;border-radius:99px;border:2px solid #13161F}
 ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
-@media print{header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast{display:none!important}body{background:#fff;color:#000}}
+@media print{header,.fu-panel,.tarefa-hoje-card,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast{display:none!important}body{background:#fff;color:#000}}
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
@@ -3560,7 +3657,7 @@ body.light-theme ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 
 /* Print */
 @media print{
-  header,.fu-panel,.tabs-row,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast,
+  header,.fu-panel,.tarefa-hoje-card,.tabs-row,#view-kanban,#view-table,#view-equipe,.modal-overlay,.toast,
   .meta-module-actions,.btn-meta,.est-section,.estrategia-period-bar{display:none!important;}
   body{background:#fff!important;color:#000!important;}
   .meta-module{background:#fff!important;border:1px solid #ddd!important;color:#000!important;}
@@ -3994,6 +4091,14 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div><div class="metric-pct" id="m-contrato-pct"></div></div>
       <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div><div class="metric-pct" id="m-semresp-pct"></div></div>
       <div class="metric-card mc-slate clickable-card" onclick="abrirMetricaLeads('DESQUALIFICADO')"><div class="metric-label">Desqualificados</div><div class="metric-value" id="m-desq">—</div><div class="metric-pct" id="m-desq-pct"></div></div>
+    </div>
+    <div class="tarefa-hoje-card" id="tarefa-hoje-card" style="display:none">
+      <div class="tarefa-hoje-header">
+        <span class="tarefa-hoje-icon">⏰</span>
+        <span class="tarefa-hoje-title" id="tarefa-hoje-title">Minhas tarefas de hoje</span>
+        <span class="tarefa-hoje-count" id="tarefa-hoje-count">0</span>
+      </div>
+      <div class="tarefa-hoje-body" id="tarefa-hoje-body"></div>
     </div>
     <div class="fu-panel" id="fu-panel">
       <div class="fu-panel-header">
