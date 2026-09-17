@@ -778,31 +778,72 @@ function renderAgenda(){
   lista.sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora));
 
   const now=new Date();
+  const hojeStr=localDateStr(now);
+  const amanhaDate=new Date(now);amanhaDate.setDate(amanhaDate.getDate()+1);
+  const amanhaStr=localDateStr(amanhaDate);
+
   const atrasados=lista.filter(c=>new Date(`${c.data}T${c.hora}:00`)<now);
   const badge=document.getElementById('ag-badge');
   badge.textContent=atrasados.length;badge.style.display=atrasados.length?'flex':'none';
   document.getElementById('ag-panel').classList.toggle('pulsing',atrasados.length>0);
 
-  el.innerHTML=lista.length
-    ?lista.map(c=>agCard(c,now)).join('')
-    :`<div class="fu-stage-empty">Nenhum compromisso pendente</div>`;
+  // Agrupa por dia (atrasados ganham coluna própria, à parte)
+  const atrasadosIds=new Set(atrasados.map(c=>c.id));
+  const porDia={};
+  lista.filter(c=>!atrasadosIds.has(c.id)).forEach(c=>{(porDia[c.data]=porDia[c.data]||[]).push(c);});
+  if(!porDia[hojeStr])porDia[hojeStr]=[];
+  if(!porDia[amanhaStr])porDia[amanhaStr]=[];
+  const todasDatas=Object.keys(porDia).sort();
+
+  const diasSemana=['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+  const diaLabel=dStr=>{
+    if(dStr===hojeStr)return'Hoje';
+    if(dStr===amanhaStr)return'Amanhã';
+    const d=new Date(dStr+'T00:00:00');
+    return `${diasSemana[d.getDay()]}, ${formatDate(dStr+'T00:00:00')}`;
+  };
+
+  const cols=[];
+  if(atrasados.length){
+    cols.push(`
+    <div class="fu-stage-col">
+      <div class="fu-stage-header">
+        <span class="fu-stage-title" style="color:#EF4444">⚠️ Atrasados</span>
+        <span class="fu-stage-count" style="background:rgba(239,68,68,.15);color:#EF4444">${atrasados.length}</span>
+      </div>
+      <div class="fu-stage-body">
+        ${atrasados.map(c=>agCardCompact(c,now,true)).join('')}
+      </div>
+    </div>`);
+  }
+  todasDatas.forEach(dStr=>{
+    const itens=porDia[dStr]||[];
+    cols.push(`
+    <div class="fu-stage-col">
+      <div class="fu-stage-header">
+        <span class="fu-stage-title">${diaLabel(dStr)}</span>
+        <span class="fu-stage-count" style="${itens.length?'':'opacity:.4'}">${itens.length}</span>
+      </div>
+      <div class="fu-stage-body">
+        ${itens.length?itens.map(c=>agCardCompact(c,now,false)).join(''):`<div class="fu-stage-empty">Nada agendado</div>`}
+      </div>
+    </div>`);
+  });
+
+  el.innerHTML=cols.length?cols.join(''):`<div class="fu-stage-empty">Nenhum compromisso pendente</div>`;
 }
-function agCard(c,now){
+function agCardCompact(c,now,mostrarData){
   const atrasado=new Date(`${c.data}T${c.hora}:00`)<now;
-  const isHoje=c.data===localDateStr(now);
   return `
   <div class="fu-card2 ${atrasado?'fu-late':''}" ${c.leadId?`onclick="openLead('${c.leadId}')"`:''}>
     <div class="fu2-header">
-      <span class="fu2-name">${c.nota||c.leadNome||'Compromisso'}</span>
-      ${atrasado?`<span class="status-pill" style="color:#EF4444;background:rgba(239,68,68,.12)">Atrasado</span>`
-        :isHoje?`<span class="status-pill" style="color:#4F6EF7;background:rgba(79,110,247,.12)">Hoje</span>`:''}
+      <span class="fu2-name">${c.hora} · ${c.nota||c.leadNome||'Compromisso'}</span>
     </div>
     <div class="fu2-meta">
       <span class="fu2-resp">${c.atendente||''}</span>
       ${c.leadNome?`<span class="tipo-tag tipo-geral">${c.leadNome}</span>`:''}
     </div>
-    <div class="fua-data">📅 ${formatDate(c.data+'T00:00:00')} às ${c.hora}</div>
-    ${c.leadNome&&c.nota?`<div class="fu2-note">${c.nota}</div>`:''}
+    ${mostrarData?`<div class="fua-data">📅 ${formatDate(c.data+'T00:00:00')} às ${c.hora}</div>`:''}
     <div class="fu2-actions">
       <button onclick="event.stopPropagation();marcarCompromissoFeito('${c.id}')" class="btn-done">✓ Feito</button>
       <button onclick="event.stopPropagation();abrirRemarcar('${c.id}')" class="btn-wa">↻ Remarcar</button>
@@ -3660,9 +3701,9 @@ body.light-theme .th-item{background:#FFFFFF;border-color:#E2E5EE}
 .kanban-board.kanban-collapsed{max-height:0;opacity:0}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px;}
-.ag-list{display:flex;flex-direction:column;gap:.6rem}
-.ag-list .fu-card2{cursor:default}
-.ag-list .fu-card2[onclick]{cursor:pointer}
+.ag-list{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px}
+.ag-list .fu-stage-col .fu-card2{cursor:default}
+.ag-list .fu-stage-col .fu-card2[onclick]{cursor:pointer}
 .ag-lead-suggestions{position:absolute;top:100%;left:0;right:0;background:#1E2235;border:1px solid #2A2F45;border-radius:7px;margin-top:.25rem;max-height:180px;overflow-y:auto;z-index:20;display:none}
 .ag-lead-suggestions.show{display:block}
 .ag-lead-suggestion{padding:.5rem .8rem;font-size:.8rem;cursor:pointer;display:flex;justify-content:space-between;gap:.5rem}
