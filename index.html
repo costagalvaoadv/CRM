@@ -662,12 +662,18 @@ function renderTarefaHoje(){
     countEl.textContent=meus.length;
     card.style.display=meus.length?'flex':'none';
     card.classList.toggle('pulsing-red',meus.length>0);
-    bodyEl.innerHTML=meus.slice(0,8).map(l=>{
-      const d=l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup);
-      const late=Math.floor((todayStart-d)/(1000*60*60*24));
-      const label=late<=0?'Vence hoje':`${late} dia${late>1?'s':''} em atraso`;
-      return `<div class="th-item" onclick="openLead('${l.id}')"><span class="th-name">${l.name||'Sem Nome'}</span><span class="th-late">${label}</span></div>`;
-    }).join('')+(meus.length>8?`<div class="th-more">+ ${meus.length-8} outro${meus.length-8>1?'s':''}...</div>`:'');
+    const ALL_STAGES_TH=['FUP 24h','FUP 3d','FUP 7d','FUP 15d','FUP 30d','Mensal'];
+    const porEtapa={};ALL_STAGES_TH.forEach(s=>porEtapa[s]=0);
+    meus.forEach(l=>{
+      const trilhaLabels=getTrilha(l.tipo||'SM');
+      const etapa=l.etapaFollowup||0;
+      const label=trilhaLabels[etapa]||(l.tipo==='SM'?'Mensal':'FUP 30d');
+      if(porEtapa[label]!==undefined)porEtapa[label]++;else porEtapa['Mensal']++;
+    });
+    bodyEl.innerHTML=`
+      <div class="th-total">${meus.length} lead${meus.length>1?'s':''} atrasado${meus.length>1?'s':''} no total</div>
+      <div class="th-etapas">${ALL_STAGES_TH.map(s=>`${s}: <strong>${porEtapa[s]}</strong>${porEtapa[s]>0?' ⚠️':''}`).join(' &nbsp;·&nbsp; ')}</div>
+    `;
   }else{
     const porAtendente={};
     allLeads.filter(l=>leadEstaAtrasadoHoje(l,todayEnd)).forEach(l=>{
@@ -3256,6 +3262,9 @@ body.light-theme .clickable-card:hover{box-shadow:0 4px 12px rgba(0,0,0,.08)}
 .th-name{font-weight:700}
 .th-late{color:#EF4444;font-weight:700;font-size:.72rem;white-space:nowrap}
 .th-more{align-self:center;font-size:.75rem;color:#6B7280}
+.th-total{font-size:.9rem;font-weight:800;color:#F1F3F9;width:100%}
+.th-etapas{font-size:.76rem;color:#9CA3AF;width:100%;line-height:1.6}
+body.light-theme .th-total{color:#1A1D2E}
 body.light-theme .tarefa-hoje-card{background:#FFF5F5;border-color:#EF4444}
 body.light-theme .th-item{background:#FFFFFF;border-color:#E2E5EE}
 .fu-panel-header{padding:.85rem 1.25rem;border-bottom:1px solid #1E2235;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
