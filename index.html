@@ -11,7 +11,7 @@
 <script type="module">
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getFirestore, collection, addDoc, updateDoc, deleteDoc, doc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion, Timestamp, getDoc, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
-import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 const firebaseConfig = {
   apiKey: "AIzaSyC2Jc8KUg9QBlGwuqwlN3tQ6C_B1zZi7QU",
@@ -141,6 +141,16 @@ window.fazerLogin=async function(){
   try{setBtnLoading('btn-login',true);await setPersistence(auth,browserLocalPersistence);await signInWithEmailAndPassword(auth,email,senha);}
   catch(e){showToast(fbErr(e.code),'error');}
   finally{setBtnLoading('btn-login',false);}
+};
+window.recuperarSenha=async function(){
+  const email=document.getElementById('login-email').value.trim();
+  if(!email)return showToast('Digite seu e-mail no campo acima primeiro','error');
+  try{
+    setBtnLoading('btn-esqueci-senha',true);
+    await sendPasswordResetEmail(auth,email);
+    showToast('E-mail de redefinição enviado! Confira sua caixa de entrada.');
+  }catch(e){showToast(fbErr(e.code),'error');}
+  finally{setBtnLoading('btn-esqueci-senha',false);}
 };
 window.fazerLogout=async function(){
   if(!confirm('Deseja sair?'))return;
@@ -3443,6 +3453,8 @@ body{font-family:'Inter',sans-serif;background:#0B0D14;color:#F1F3F9;min-height:
 .auth-input{background:#1E2235;border:1px solid #2A2F45;border-radius:8px;padding:.7rem .9rem;color:#F1F3F9;font-size:.88rem;font-family:'Inter',sans-serif;outline:none;width:100%;transition:border-color .2s}
 .auth-input:focus{border-color:#4F6EF7}
 .btn-primary{background:#4F6EF7;color:#fff;border:none;border-radius:10px;padding:.8rem;font-size:.9rem;font-weight:700;cursor:pointer;width:100%;transition:all .2s}
+.auth-link-btn{background:none;border:none;color:#4F6EF7;font-size:.78rem;font-weight:600;cursor:pointer;text-align:center;margin-top:-.75rem;padding:.3rem}
+.auth-link-btn:hover{text-decoration:underline}
 .btn-primary:hover{background:#3B5BDB}
 .btn-primary:disabled{opacity:.6;cursor:not-allowed}
 header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1rem;height:auto;min-height:52px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;gap:.5rem;flex-wrap:wrap;padding-top:.4rem;padding-bottom:.4rem}
@@ -4392,6 +4404,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div class="auth-field"><label class="auth-label">E-mail</label><input id="login-email" class="auth-input" type="email" placeholder="seu@email.com"/></div>
     <div class="auth-field"><label class="auth-label">Senha</label><input id="login-senha" class="auth-input" type="password" placeholder="Sua senha" onkeydown="if(event.key==='Enter')fazerLogin()"/></div>
     <button id="btn-login" class="btn-primary" onclick="fazerLogin()">Entrar</button>
+    <button id="btn-esqueci-senha" class="auth-link-btn" onclick="recuperarSenha()">Esqueci minha senha</button>
   </div>
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
