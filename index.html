@@ -808,7 +808,7 @@ function beep(){
   try{
     const ctx=new (window.AudioContext||window.webkitAudioContext)();
     const t=ctx.currentTime;
-    [0,.35,.7].forEach(off=>{
+    [0,.35,.7,1.05].forEach(off=>{
       const o=ctx.createOscillator(),g=ctx.createGain();
       o.type='sine';o.frequency.value=880;
       g.gain.setValueAtTime(.0001,t+off);
@@ -821,7 +821,7 @@ function beep(){
 }
 function dispararAlarme(c){
   beep();
-  showToast(`⏰ Compromisso: ${c.nota||c.leadNome||'lembrete'}`,'warn');
+  showToast(`⏰ Compromisso: ${c.nota||c.leadNome||'lembrete'}`,'warn',8000,true);
   if(window.Notification&&Notification.permission==='granted'){
     try{
       new Notification('⏰ Compromisso agendado',{body:`${c.hora} · ${c.nota||c.leadNome||''}`});
@@ -3436,7 +3436,7 @@ function formatPhone(p){if(!p)return '';return '55'+p.replace(/\D/g,'').replace(
 function normalizePhone(p){if(!p)return '';return p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function formatDate(d){return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';}
 function formatDatetime(d){return d?new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
-function showToast(msg,type='success'){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type;setTimeout(()=>t.className='toast',3500);}
+function showToast(msg,type='success',duration=3500,big=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type+(big?' toast-big':'');setTimeout(()=>t.className='toast',duration);}
 function setBtnLoading(id,l){const b=document.getElementById(id);if(!b)return;b.disabled=l;if(l)b.dataset.label=b.textContent;b.textContent=l?'Aguarde...':(b.dataset.label||b.textContent);}
 function fbErr(code){return({'auth/email-already-in-use':'E-mail já em uso.','auth/invalid-email':'E-mail inválido.','auth/wrong-password':'Senha incorreta.','auth/user-not-found':'Usuário não encontrado.','auth/weak-password':'Senha fraca.','auth/invalid-credential':'E-mail ou senha incorretos.'}[code]||'Erro: '+code);}
 </script>
@@ -3795,6 +3795,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .toast.show{opacity:1;transform:translateY(0)}
 .toast.warn{border-left-color:#F5A623}
 .toast.error{border-left-color:#EF4444}
+.toast.toast-big{max-width:380px;padding:1.05rem 1.4rem;font-size:1rem;font-weight:600;border-left-width:5px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
 .msg-spinner{width:36px;height:36px;border:3px solid #2A2F45;border-top-color:#8B5CF6;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hidden{display:none!important}
