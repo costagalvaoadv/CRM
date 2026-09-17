@@ -28,7 +28,7 @@ const auth=getAuth(app);
 
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
-let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
+let chartInstances={},fuFilter='TODOS',relKpiFilter=null,funilCompManual=false;
 let fuAlertInterval=null,primeiraCargaFeita=false;
 let activeQuickNotes=new Set(),presenceInterval=null;
 let dashPeriodo='mes-atual',dashDataIni='',dashDataFim='',estPeriodo='mes-atual',estDataIni='',estDataFim='';
@@ -2004,21 +2004,35 @@ window.renderRelatorios=function(){
     const d=l.createdAt?.toDate?l.createdAt.toDate():null;
     return `<tr><td>${d?formatDate(d):'—'}</td><td>${l.name||'Sem Nome'}</td><td>${l.phone||'—'}</td><td>${l.tipo==='SM'?'SM':'Geral'}</td><td>${l.campaign||'—'}</td><td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td><td>${l.assignee||'—'}</td></tr>`;
   }).join('');
-  renderFunilDiagnostico(periodo);
+  renderFunilDiagnostico();
 };
 
 // ── Diagnóstico do Funil ──
-function renderFunilDiagnostico(periodo){
+function renderFunilDiagnostico(){
   const cardEl=document.getElementById('funil-diag-card');if(!cardEl)return;
+  const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
   const{ini,fim}=getRelDateRange();
-  const{iniAtual,fimAtual,iniAnt,fimAnt}=getRelPeriodoAnterior(periodo,ini,fim);
+  const auto=getRelPeriodoAnterior(periodo,ini,fim);
+  const iniAtual=auto.iniAtual,fimAtual=auto.fimAtual;
+  const iniInput=document.getElementById('funil-comp-ini');
+  const fimInput=document.getElementById('funil-comp-fim');
+  const toInputVal=d=>{const p=n=>String(n).padStart(2,'0');return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;};
+  let iniAnt,fimAnt;
+  if(funilCompManual&&iniInput?.value&&fimInput?.value){
+    iniAnt=new Date(iniInput.value+'T00:00:00');
+    fimAnt=new Date(fimInput.value+'T23:59:59');
+    if(fimAnt<iniAnt){const t=iniAnt;iniAnt=fimAnt;fimAnt=t;}
+  }else{
+    iniAnt=auto.iniAnt;fimAnt=auto.fimAnt;
+    if(iniInput)iniInput.value=toInputVal(iniAnt);
+    if(fimInput)fimInput.value=toInputVal(fimAnt);
+  }
   const leadsAtual=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAtual&&d<=fimAtual;});
   const leadsAnt=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAnt&&d<=fimAnt;});
   const cAtual=getFunilStatusCounts(leadsAtual);
   const cAnt=getFunilStatusCounts(leadsAnt);
   const fmtDia=d=>d.toLocaleDateString('pt-BR');
-  document.getElementById('funil-diag-periodo-label').textContent=
-    `${fmtDia(iniAtual)} a ${fmtDia(fimAtual)}  vs.  ${fmtDia(iniAnt)} a ${fmtDia(fimAnt)}`;
+  document.getElementById('funil-diag-atual-label').textContent=`${fmtDia(iniAtual)} a ${fmtDia(fimAtual)}`;
   const taxaCard=(label,atualVal,antVal)=>{
     const diff=atualVal-antVal;
     const seta=diff>0?'▲':diff<0?'▼':'▬';
@@ -3796,6 +3810,11 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .chart-title{font-size:.72rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.85rem}
 .chart-container{height:200px;position:relative}
 .funil-diag-periodo{font-size:.68rem;color:#6B7280;font-weight:600}
+.funil-diag-comp-controls{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.funil-diag-vs{font-size:.68rem;color:#6B7280;font-weight:600}
+.funil-comp-date{padding:.3rem .5rem;font-size:.72rem}
+.funil-comp-reset{background:transparent;border:1px solid #2A2F45;color:#9CA3AF;font-size:.65rem;padding:.25rem .55rem;border-radius:6px;cursor:pointer;white-space:nowrap;transition:all .15s;font-family:'Inter',sans-serif}
+.funil-comp-reset:hover{border-color:#4F6EF7;color:#4F6EF7}
 .funil-diag-taxas{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem}
 .funil-taxa-card{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.85rem 1rem;text-align:center}
 .funil-taxa-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.3rem}
@@ -3979,7 +3998,8 @@ body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .re
 body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
 body.light-theme .funil-taxa-card{background:#F9FAFC;border-color:#E2E5EE}
-body.light-theme .funil-taxa-label,body.light-theme .funil-diag-periodo{color:#8B92A8}
+body.light-theme .funil-taxa-label,body.light-theme .funil-diag-periodo,body.light-theme .funil-diag-vs{color:#8B92A8}
+body.light-theme .funil-comp-reset{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563}
 body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .est-section-title{color:#1A1D2E}
 body.light-theme .est-alert,body.light-theme .est-pipe-card{background:#F8F9FC}
@@ -4668,7 +4688,14 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
           <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil</div>
-          <div class="funil-diag-periodo" id="funil-diag-periodo-label"></div>
+          <div class="funil-diag-comp-controls">
+            <span class="funil-diag-periodo" id="funil-diag-atual-label"></span>
+            <span class="funil-diag-vs">vs.</span>
+            <input type="date" id="funil-comp-ini" class="rel-date funil-comp-date" onchange="funilCompManual=true;renderRelatorios()">
+            <span class="funil-diag-vs">a</span>
+            <input type="date" id="funil-comp-fim" class="rel-date funil-comp-date" onchange="funilCompManual=true;renderRelatorios()">
+            <button type="button" class="funil-comp-reset" onclick="funilCompManual=false;renderRelatorios()" title="Voltar ao cálculo automático">↺ Automático</button>
+          </div>
         </div>
         <div class="funil-diag-taxas" id="funil-diag-taxas"></div>
         <div class="est-insight" id="funil-diag-texto" style="margin:.85rem 0"></div>
