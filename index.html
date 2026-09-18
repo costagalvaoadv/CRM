@@ -4741,12 +4741,12 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil</div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-17c</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
-            <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()">
+            <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
             <span class="funil-diag-vs">vs. Mês B</span>
-            <input type="month" id="funil-mes-b" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()">
+            <input type="month" id="funil-mes-b" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
             <button type="button" class="funil-comp-reset" onclick="resetFunilMeses()" title="Mês atual vs mês anterior">↺ Atual x Anterior</button>
           </div>
         </div>
