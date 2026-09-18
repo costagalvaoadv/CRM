@@ -3874,6 +3874,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .funil-comp-date{padding:.3rem .5rem;font-size:.72rem}
 .funil-comp-reset{background:transparent;border:1px solid #2A2F45;color:#9CA3AF;font-size:.65rem;padding:.25rem .55rem;border-radius:6px;cursor:pointer;white-space:nowrap;transition:all .15s;font-family:'Inter',sans-serif}
 .funil-comp-reset:hover{border-color:#4F6EF7;color:#4F6EF7}
+.funil-comp-buscar{background:#4F6EF7;border:1px solid #4F6EF7;color:#fff;font-size:.65rem;font-weight:700;padding:.25rem .65rem;border-radius:6px;cursor:pointer;white-space:nowrap;transition:all .15s;font-family:'Inter',sans-serif}
+.funil-comp-buscar:hover{background:#3D5AE0}
 .funil-diag-taxas{overflow-x:auto}
 /* ESTRATÉGIA */
 #estrategia-content{display:flex;flex-direction:column;gap:1.25rem}
@@ -4747,6 +4749,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
             <span class="funil-diag-vs">vs. Mês B</span>
             <input type="month" id="funil-mes-b" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
+            <button type="button" class="funil-comp-buscar" onclick="renderFunilDiagnostico()" title="Atualizar com os meses selecionados">🔍 Buscar</button>
             <button type="button" class="funil-comp-reset" onclick="resetFunilMeses()" title="Mês atual vs mês anterior">↺ Atual x Anterior</button>
           </div>
         </div>
