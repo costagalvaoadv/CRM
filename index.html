@@ -2136,6 +2136,7 @@ function renderFunilDiagnostico(){
     },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'},beginAtZero:true}}}});
   }
 }
+window.renderFunilDiagnostico=renderFunilDiagnostico;
 window.clickKpi=function(s){relKpiFilter=relKpiFilter===s?null:s;renderRelatorios();};
 window.getLeadsFiltrados=getLeadsFiltrados;
 window.getContratosFechadosPeriodo=function(){
@@ -4743,7 +4744,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-17c</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-17d</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
