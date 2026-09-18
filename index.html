@@ -28,7 +28,7 @@ const auth=getAuth(app);
 
 let currentUser=null,allLeads=[],allUsers=[],editingLeadId=null;
 let currentTab='kanban',filterStatus='ALL',searchQuery='';
-let chartInstances={},fuFilter='TODOS',relKpiFilter=null,funilCompManual=false;
+let chartInstances={},fuFilter='TODOS',relKpiFilter=null;
 let fuAlertInterval=null,primeiraCargaFeita=false;
 let activeQuickNotes=new Set(),presenceInterval=null;
 let dashPeriodo='mes-atual',dashDataIni='',dashDataFim='',estPeriodo='mes-atual',estDataIni='',estDataFim='';
@@ -1960,32 +1960,26 @@ function getRelDateRange(){
   return{ini,fim};
 }
 
-// ── Diagnóstico do Funil: período de comparação equivalente ──
-// Sempre compara com o intervalo anterior de mesma duração/recorte de calendário,
-// nunca com o mês anterior inteiro quando o período atual está em andamento.
-function getRelPeriodoAnterior(periodo,ini,fim){
+// ── Diagnóstico do Funil: intervalo de um mês a partir de "YYYY-MM" ──
+function getMesRange(mesStr){
+  const[y,m]=mesStr.split('-').map(Number);
   const now=new Date();
-  const fimAtual=(periodo==='mes-atual'&&fim>now)?now:fim;
-  let iniAnt,fimAnt;
-  if(periodo==='mes-atual'){
-    iniAnt=new Date(ini.getFullYear(),ini.getMonth()-1,1);
-    const ultimoDiaMesAnt=new Date(ini.getFullYear(),ini.getMonth(),0).getDate();
-    const diaEquiv=Math.min(fimAtual.getDate(),ultimoDiaMesAnt);
-    fimAnt=new Date(iniAnt.getFullYear(),iniAnt.getMonth(),diaEquiv,23,59,59);
-  }else if(periodo==='mes-anterior'){
-    iniAnt=new Date(ini.getFullYear(),ini.getMonth()-1,1);
-    fimAnt=new Date(ini.getFullYear(),ini.getMonth(),0,23,59,59);
-  }else if(periodo==='3-meses'||periodo==='6-meses'){
-    const nMeses=periodo==='3-meses'?3:6;
-    iniAnt=new Date(ini);iniAnt.setMonth(iniAnt.getMonth()-nMeses);
-    fimAnt=new Date(ini.getTime()-1);
-  }else{
-    const duracaoMs=fimAtual.getTime()-ini.getTime();
-    iniAnt=new Date(ini.getTime()-duracaoMs-86400000);
-    fimAnt=new Date(ini.getTime()-1);
-  }
-  return{iniAtual:ini,fimAtual,iniAnt,fimAnt};
+  const ini=new Date(y,m-1,1);
+  let fim=new Date(y,m,0,23,59,59);
+  const emAndamento=(y===now.getFullYear()&&m===(now.getMonth()+1));
+  if(emAndamento&&fim>now)fim=now;
+  return{ini,fim,emAndamento};
 }
+function mesStrOffset(offsetMeses){
+  const d=new Date();d.setDate(1);d.setMonth(d.getMonth()+offsetMeses);
+  return`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+window.resetFunilMeses=function(){
+  const a=document.getElementById('funil-mes-a'),b=document.getElementById('funil-mes-b');
+  if(a)a.value=mesStrOffset(0);
+  if(b)b.value=mesStrOffset(-1);
+  renderFunilDiagnostico();
+};
 // Conta os status de uma lista de leads (mesma base de data de entrada, sem filtro de status aplicado)
 function getFunilStatusCounts(leads){
   const total=leads.length;
@@ -1996,7 +1990,9 @@ function getFunilStatusCounts(leads){
   const taxaQualif=total?Math.round(qualificados/total*100):0;
   const taxaFechamento=qualificados?Math.round(contratos/qualificados*100):0;
   const taxaGeral=total?Math.round(contratos/total*100):0;
-  return{total,qualificados,contratos,semResposta,desqualificados,taxaQualif,taxaFechamento,taxaGeral};
+  const taxaSemResposta=total?Math.round(semResposta/total*100):0;
+  const taxaDesqualificados=total?Math.round(desqualificados/total*100):0;
+  return{total,qualificados,contratos,semResposta,desqualificados,taxaQualif,taxaFechamento,taxaGeral,taxaSemResposta,taxaDesqualificados};
 }
 function getLeadsFiltrados(semStatus){
   const statusF=semStatus?'TODOS':(relKpiFilter||document.getElementById('rel-status')?.value||'TODOS');
@@ -2051,51 +2047,71 @@ window.renderRelatorios=function(){
 // ── Diagnóstico do Funil ──
 function renderFunilDiagnostico(){
   const cardEl=document.getElementById('funil-diag-card');if(!cardEl)return;
-  const periodo=document.getElementById('rel-periodo')?.value||'mes-atual';
-  const{ini,fim}=getRelDateRange();
-  const auto=getRelPeriodoAnterior(periodo,ini,fim);
-  const iniAtual=auto.iniAtual,fimAtual=auto.fimAtual;
-  const iniInput=document.getElementById('funil-comp-ini');
-  const fimInput=document.getElementById('funil-comp-fim');
-  const toInputVal=d=>{const p=n=>String(n).padStart(2,'0');return`${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;};
-  let iniAnt,fimAnt;
-  if(funilCompManual&&iniInput?.value&&fimInput?.value){
-    iniAnt=new Date(iniInput.value+'T00:00:00');
-    fimAnt=new Date(fimInput.value+'T23:59:59');
-    if(fimAnt<iniAnt){const t=iniAnt;iniAnt=fimAnt;fimAnt=t;}
-  }else{
-    iniAnt=auto.iniAnt;fimAnt=auto.fimAnt;
-    if(iniInput)iniInput.value=toInputVal(iniAnt);
-    if(fimInput)fimInput.value=toInputVal(fimAnt);
-  }
-  const leadsAtual=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAtual&&d<=fimAtual;});
-  const leadsAnt=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=iniAnt&&d<=fimAnt;});
-  const cAtual=getFunilStatusCounts(leadsAtual);
-  const cAnt=getFunilStatusCounts(leadsAnt);
-  const fmtDia=d=>d.toLocaleDateString('pt-BR');
-  document.getElementById('funil-diag-atual-label').textContent=`${fmtDia(iniAtual)} a ${fmtDia(fimAtual)}`;
-  const taxaCard=(label,atualVal,antVal)=>{
-    const diff=atualVal-antVal;
-    const seta=diff>0?'▲':diff<0?'▼':'▬';
-    const cor=diff>0?'#10B981':diff<0?'#EF4444':'#6B7280';
-    return `<div class="funil-taxa-card">
-      <div class="funil-taxa-label">${label}</div>
-      <div class="funil-taxa-val" style="color:${cor}">${atualVal}%</div>
-      <div class="funil-taxa-comp" style="color:${cor}">${seta} ${diff>0?'+':''}${diff}pp vs ${antVal}%</div>
-    </div>`;
+  const aInput=document.getElementById('funil-mes-a');
+  const bInput=document.getElementById('funil-mes-b');
+  if(aInput&&!aInput.value)aInput.value=mesStrOffset(0);
+  if(bInput&&!bInput.value)bInput.value=mesStrOffset(-1);
+  const mesAStr=aInput?.value||mesStrOffset(0);
+  const mesBStr=bInput?.value||mesStrOffset(-1);
+  const rangeA=getMesRange(mesAStr);
+  const rangeB=getMesRange(mesBStr);
+  const leadsA=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=rangeA.ini&&d<=rangeA.fim;});
+  const leadsB=allLeads.filter(l=>{const d=l.createdAt?.toDate?.();return d&&d>=rangeB.ini&&d<=rangeB.fim;});
+  const cA=getFunilStatusCounts(leadsA);
+  const cB=getFunilStatusCounts(leadsB);
+
+  const MESES=['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  const mesLabel=s=>{const[y,m]=s.split('-').map(Number);return`${MESES[m-1]}/${String(y).slice(2)}`;};
+  const labelA=mesLabel(mesAStr),labelB=mesLabel(mesBStr);
+
+  // ── Tabela comparativa ──
+  const rows=[];
+  const volDiff=cA.total-cB.total;
+  let volVar,volCor;
+  if(volDiff===0){volVar='Estável';volCor='#6B7280';}
+  else if(volDiff>0){volVar='Cresceu';volCor='#10B981';}
+  else if(rangeA.emAndamento){volVar='Volume menor (mês ainda em curso)';volCor='#6B7280';}
+  else{volVar='Caiu';volCor='#EF4444';}
+  rows.push({label:'Leads no período',valA:cA.total,valB:cB.total,varTxt:volVar,varCor:volCor});
+
+  const rateRow=(label,valA,valB,fracA,fracB)=>{
+    const diff=valA-valB;
+    const varTxt=diff>0?'Melhorou':diff<0?'Piorou':'Estável';
+    const varCor=diff>0?'#10B981':diff<0?'#EF4444':'#6B7280';
+    rows.push({label,valA:`${valA}% (${fracA})`,valB:`${valB}% (${fracB})`,varTxt,varCor});
   };
-  document.getElementById('funil-diag-taxas').innerHTML=
-    taxaCard('Taxa de Qualificação',cAtual.taxaQualif,cAnt.taxaQualif)+
-    taxaCard('Taxa de Fechamento',cAtual.taxaFechamento,cAnt.taxaFechamento)+
-    taxaCard('Taxa Geral',cAtual.taxaGeral,cAnt.taxaGeral);
-  const dQ=cAtual.taxaQualif-cAnt.taxaQualif;
-  const dF=cAtual.taxaFechamento-cAnt.taxaFechamento;
+  rateRow('Taxa de qualificação',cA.taxaQualif,cB.taxaQualif,`${cA.qualificados}/${cA.total}`,`${cB.qualificados}/${cB.total}`);
+  rateRow('Taxa de fechamento',cA.taxaFechamento,cB.taxaFechamento,`${cA.contratos}/${cA.qualificados}`,`${cB.contratos}/${cB.qualificados}`);
+  rateRow('Taxa geral',cA.taxaGeral,cB.taxaGeral,`${cA.contratos}/${cA.total}`,`${cB.contratos}/${cB.total}`);
+
+  const perdaRow=(label,valA,valB,pctA,pctB)=>{
+    const diff=pctA-pctB;
+    const varTxt=diff<0?'Melhorou (menos perda)':diff>0?'Piorou (mais perda)':'Estável';
+    const varCor=diff<0?'#10B981':diff>0?'#EF4444':'#6B7280';
+    rows.push({label,valA:`${valA} (${pctA}%)`,valB:`${valB} (${pctB}%)`,varTxt,varCor});
+  };
+  perdaRow('Sem resposta',cA.semResposta,cB.semResposta,cA.taxaSemResposta,cB.taxaSemResposta);
+  perdaRow('Desqualificados',cA.desqualificados,cB.desqualificados,cA.taxaDesqualificados,cB.taxaDesqualificados);
+
+  document.getElementById('funil-diag-taxas').innerHTML=`
+    <div class="est-table-wrap">
+    <table class="est-table">
+      <thead><tr><th>Métrica</th><th>${labelA}</th><th>${labelB}</th><th>Variação</th></tr></thead>
+      <tbody>
+        ${rows.map(r=>`<tr><td class="est-camp-name">${r.label}</td><td>${r.valA}</td><td>${r.valB}</td><td style="color:${r.varCor};font-weight:700">${r.varTxt}</td></tr>`).join('')}
+      </tbody>
+    </table>
+    </div>`;
+
+  // ── Texto de diagnóstico automático ──
+  const dQ=cA.taxaQualif-cB.taxaQualif;
+  const dF=cA.taxaFechamento-cB.taxaFechamento;
   const LIMIAR=2;
   const mudouQ=Math.abs(dQ)>=LIMIAR,mudouF=Math.abs(dF)>=LIMIAR;
   const pp=n=>`${n>0?'+':''}${n}pp`;
   let texto;
   if(!mudouQ&&!mudouF){
-    texto='📊 As taxas do funil estão estáveis em relação ao período anterior, sem variação relevante na qualificação ou no fechamento.';
+    texto=`📊 As taxas do funil estão estáveis entre ${labelA} e ${labelB}, sem variação relevante na qualificação ou no fechamento.`;
   }else if(mudouQ&&mudouF&&Math.sign(dQ)===Math.sign(dF)){
     texto=`${dQ>0?'📈':'📉'} A ${dQ>0?'melhora':'piora'} veio das duas etapas do funil: qualificação (${pp(dQ)}) e fechamento (${pp(dF)}).`;
   }else if(mudouQ&&!mudouF){
@@ -2106,14 +2122,16 @@ function renderFunilDiagnostico(){
     texto=`⚖️ As etapas se moveram em direções opostas: qualificação ${dQ>0?'melhorou':'piorou'} (${pp(dQ)}) enquanto o fechamento ${dF>0?'melhorou':'piorou'} (${pp(dF)}).`;
   }
   document.getElementById('funil-diag-texto').textContent=texto;
+
+  // ── Gráfico comparativo ──
   const ctx=document.getElementById('chart-funil-comp');
   if(ctx){
     if(chartInstances['chart-funil-comp'])chartInstances['chart-funil-comp'].destroy();
     chartInstances['chart-funil-comp']=new Chart(ctx,{type:'bar',data:{
       labels:['Leads','Qualificados','Contratos','Sem Resposta','Desqualificados'],
       datasets:[
-        {label:'Período anterior',data:[cAnt.total,cAnt.qualificados,cAnt.contratos,cAnt.semResposta,cAnt.desqualificados],backgroundColor:'#2A2F4599',borderColor:'#2A2F45',borderWidth:1,borderRadius:5},
-        {label:'Período atual',data:[cAtual.total,cAtual.qualificados,cAtual.contratos,cAtual.semResposta,cAtual.desqualificados],backgroundColor:'#4F6EF799',borderColor:'#4F6EF7',borderWidth:1,borderRadius:5}
+        {label:labelB,data:[cB.total,cB.qualificados,cB.contratos,cB.semResposta,cB.desqualificados],backgroundColor:'#2A2F4599',borderColor:'#2A2F45',borderWidth:1,borderRadius:5},
+        {label:labelA,data:[cA.total,cA.qualificados,cA.contratos,cA.semResposta,cA.desqualificados],backgroundColor:'#4F6EF799',borderColor:'#4F6EF7',borderWidth:1,borderRadius:5}
       ]
     },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9CA3AF',font:{family:'Inter',size:11}}}},scales:{x:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'}},y:{ticks:{color:'#9CA3AF'},grid:{color:'#1E2130'},beginAtZero:true}}}});
   }
@@ -3856,11 +3874,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .funil-comp-date{padding:.3rem .5rem;font-size:.72rem}
 .funil-comp-reset{background:transparent;border:1px solid #2A2F45;color:#9CA3AF;font-size:.65rem;padding:.25rem .55rem;border-radius:6px;cursor:pointer;white-space:nowrap;transition:all .15s;font-family:'Inter',sans-serif}
 .funil-comp-reset:hover{border-color:#4F6EF7;color:#4F6EF7}
-.funil-diag-taxas{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem}
-.funil-taxa-card{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.85rem 1rem;text-align:center}
-.funil-taxa-label{font-size:.65rem;color:#6B7280;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.3rem}
-.funil-taxa-val{font-size:1.6rem;font-weight:800;line-height:1}
-.funil-taxa-comp{font-size:.68rem;font-weight:600;margin-top:.3rem}
+.funil-diag-taxas{overflow-x:auto}
 /* ESTRATÉGIA */
 #estrategia-content{display:flex;flex-direction:column;gap:1.25rem}
 .est-section{background:#13161F;border:1px solid #1E2235;border-radius:12px;padding:1.25rem}
@@ -3975,7 +3989,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 ::-webkit-scrollbar-thumb:hover{background:#4F6EF7}
 @media print{header,.fu-panel,.tarefa-hoje-card,.tabs-row,#view-kanban,#view-table,#view-equipe,#view-estrategia,.modal-overlay,.toast,#ag-panel{display:none!important}body{background:#fff;color:#000}}
 @media(max-width:1200px){.metrics-grid{grid-template-columns:repeat(4,1fr)}.kanban-board{grid-template-columns:repeat(4,1fr)}.est-alerts-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}.funil-diag-taxas{grid-template-columns:1fr}}
+@media(max-width:800px){.metrics-grid{grid-template-columns:repeat(2,1fr)}.kanban-board{grid-template-columns:repeat(2,1fr)};.form-grid{grid-template-columns:1fr}.charts-grid{grid-template-columns:1fr}.fu-cols{grid-template-columns:1fr}.fu-col:first-child{border-right:none;border-bottom:1px solid #1E2235}}
 @media(max-width:500px){.kanban-board{grid-template-columns:1fr}}
 
 
@@ -4038,8 +4052,7 @@ body.light-theme .filter-btn.active{background:#4F6EF7;border-color:#4F6EF7;colo
 body.light-theme .rel-controls,body.light-theme .chart-card,body.light-theme .rel-kpi{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .rel-select,body.light-theme .rel-date{background:#F4F5F8;border-color:#E2E5EE;color:#1A1D2E}
 body.light-theme .rel-kpi-label,body.light-theme .chart-title{color:#8B92A8}
-body.light-theme .funil-taxa-card{background:#F9FAFC;border-color:#E2E5EE}
-body.light-theme .funil-taxa-label,body.light-theme .funil-diag-periodo,body.light-theme .funil-diag-vs{color:#8B92A8}
+body.light-theme .funil-diag-periodo,body.light-theme .funil-diag-vs{color:#8B92A8}
 body.light-theme .funil-comp-reset{background:#F4F5F8;border-color:#E2E5EE;color:#4B5563}
 body.light-theme .est-section{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .est-section-title{color:#1A1D2E}
@@ -4730,12 +4743,11 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
           <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil</div>
           <div class="funil-diag-comp-controls">
-            <span class="funil-diag-periodo" id="funil-diag-atual-label"></span>
-            <span class="funil-diag-vs">vs.</span>
-            <input type="date" id="funil-comp-ini" class="rel-date funil-comp-date" onchange="funilCompManual=true;renderRelatorios()">
-            <span class="funil-diag-vs">a</span>
-            <input type="date" id="funil-comp-fim" class="rel-date funil-comp-date" onchange="funilCompManual=true;renderRelatorios()">
-            <button type="button" class="funil-comp-reset" onclick="funilCompManual=false;renderRelatorios()" title="Voltar ao cálculo automático">↺ Automático</button>
+            <span class="funil-diag-vs">Mês A</span>
+            <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()">
+            <span class="funil-diag-vs">vs. Mês B</span>
+            <input type="month" id="funil-mes-b" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()">
+            <button type="button" class="funil-comp-reset" onclick="resetFunilMeses()" title="Mês atual vs mês anterior">↺ Atual x Anterior</button>
           </div>
         </div>
         <div class="funil-diag-taxas" id="funil-diag-taxas"></div>
