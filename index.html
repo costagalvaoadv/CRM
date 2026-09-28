@@ -834,16 +834,18 @@ function renderAgenda(){
 }
 function agCardCompact(c,now,mostrarData){
   const atrasado=new Date(`${c.data}T${c.hora}:00`)<now;
+  const delegada=!!c.criadoPor&&c.criadoPor!==c.atendente;
   return `
   <div class="fu-card2 ${atrasado?'fu-late':''}" ${c.leadId?`onclick="openLead('${c.leadId}')"`:''}>
     <div class="fu2-header">
       <span class="fu2-name">${c.hora} · ${c.nota||c.leadNome||'Compromisso'}</span>
     </div>
+    ${delegada?`<div class="ag-delegada">📌 Atribuída por ${c.criadoPor}</div>`:''}
     <div class="fu2-meta">
       <span class="fu2-resp">${c.atendente||''}</span>
       ${c.leadNome?`<span class="tipo-tag tipo-geral">${c.leadNome}</span>`:''}
     </div>
-    ${mostrarData?`<div class="fua-data">📅 ${formatDate(c.data+'T00:00:00')} às ${c.hora}</div>`:''}
+    ${(mostrarData||delegada)?`<div class="fua-data">${delegada?'⏳ Prazo: ':'📅 '}${formatDate(c.data+'T00:00:00')} às ${c.hora}</div>`:''}
     <div class="fu2-actions">
       <button onclick="event.stopPropagation();marcarCompromissoFeito('${c.id}')" class="btn-done">✓ Feito</button>
       <button onclick="event.stopPropagation();abrirRemarcar('${c.id}')" class="btn-wa">↻ Remarcar</button>
@@ -867,7 +869,7 @@ function beep(){
 }
 function dispararAlarme(c){
   beep();
-  showToast(`⏰ Compromisso: ${c.nota||c.leadNome||'lembrete'}`,'warn',8000,true);
+  showToast(`⏰ Compromisso${c.criadoPor&&c.criadoPor!==c.atendente?' (enviado por '+c.criadoPor+')':''}: ${c.nota||c.leadNome||'lembrete'}`,'warn',8000,true);
   if(window.Notification&&Notification.permission==='granted'){
     try{
       new Notification('⏰ Compromisso agendado',{body:`${c.hora} · ${c.nota||c.leadNome||''}`});
@@ -963,7 +965,7 @@ window.salvarCompromisso=async function(){
   if(!nota&&!leadId)return showToast('Escreva uma nota ou vincule a um lead','error');
   try{
     setBtnLoading('btn-ag-save',true);
-    await addDoc(collection(db,'compromissos'),{atendente,leadId,leadNome,data,hora,nota,status:'pendente',historico:[],createdAt:serverTimestamp()});
+    await addDoc(collection(db,'compromissos'),{atendente,leadId,leadNome,data,hora,nota,status:'pendente',historico:[],criadoPor:currentUser?.nome||null,createdAt:serverTimestamp()});
     showToast('Compromisso agendado!');
     fecharModalAgenda();
   }catch(e){showToast('Erro ao salvar: '+e.message,'error');}
@@ -3721,6 +3723,7 @@ body.light-theme .th-item{background:#FFFFFF;border-color:#E2E5EE}
 body.light-theme .kanban-panel-title{color:#1A1D2E}
 .fu-stages{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px;}
 .ag-list{display:flex;gap:.85rem;min-width:max-content;align-items:flex-start;padding-bottom:4px}
+.ag-delegada{font-size:.65rem;font-weight:700;color:#F5A623;background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.3);border-radius:6px;padding:.2rem .5rem;align-self:flex-start}
 .ag-list .fu-stage-col .fu-card2{cursor:default}
 .ag-list .fu-stage-col .fu-card2[onclick]{cursor:pointer}
 .ag-lead-suggestions{position:absolute;top:100%;left:0;right:0;background:#1E2235;border:1px solid #2A2F45;border-radius:7px;margin-top:.25rem;max-height:180px;overflow-y:auto;z-index:20;display:none}
@@ -4744,7 +4747,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-17d</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28e</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
