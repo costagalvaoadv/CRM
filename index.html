@@ -836,7 +836,7 @@ function agCardCompact(c,now,mostrarData){
   const atrasado=new Date(`${c.data}T${c.hora}:00`)<now;
   const delegada=!!c.criadoPor&&c.criadoPor!==c.atendente;
   return `
-  <div class="fu-card2 ${atrasado?'fu-late':''}" ${c.leadId?`onclick="openLead('${c.leadId}')"`:''}>
+  <div class="fu-card2 ${atrasado?'fu-late':''}" onclick="editarCompromisso('${c.id}')">
     <div class="fu2-header">
       <span class="fu2-name">${c.hora} · ${c.nota||c.leadNome||'Compromisso'}</span>
     </div>
@@ -849,6 +849,7 @@ function agCardCompact(c,now,mostrarData){
     <div class="fu2-actions">
       <button onclick="event.stopPropagation();marcarCompromissoFeito('${c.id}')" class="btn-done">✓ Feito</button>
       <button onclick="event.stopPropagation();abrirRemarcar('${c.id}')" class="btn-wa">↻ Remarcar</button>
+      ${c.leadId?`<button onclick="event.stopPropagation();openLead('${c.leadId}')" class="btn-wa" style="background:transparent;border:1px solid #2A2F45;color:#9CA3AF">📋 Ver lead</button>`:''}
     </div>
   </div>`;
 }
@@ -917,14 +918,15 @@ window.limparLeadAgenda=function(){
   document.getElementById('ag-lead-search').value='';
   document.getElementById('ag-lead-suggestions')?.classList.remove('show');
 };
-window.abrirModalAgenda=function(fixedLeadId){
-  document.getElementById('ag-id').value='';
-  document.getElementById('ag-modal-title').textContent='Novo Compromisso';
+window.abrirModalAgenda=function(fixedLeadId,compromissoId){
+  const editando=compromissoId?allCompromissos.find(c=>c.id===compromissoId):null;
+  document.getElementById('ag-id').value=editando?editando.id:'';
+  document.getElementById('ag-modal-title').textContent=editando?'Editar Compromisso':'Novo Compromisso';
   const isG=currentUser.role==='gestora';
   const atSel=document.getElementById('ag-atendente');
   const nomes=[...new Set(allUsers.map(u=>u.nome).filter(Boolean))];
   const fixedLead=fixedLeadId?allLeads.find(l=>l.id===fixedLeadId):null;
-  const atendentePadrao=fixedLead?.assignee||currentUser.nome;
+  const atendentePadrao=editando?editando.atendente:(fixedLead?.assignee||currentUser.nome);
   if(isG){
     atSel.innerHTML=nomes.map(n=>`<option value="${n}">${n}</option>`).join('');
     atSel.value=atendentePadrao;atSel.disabled=false;
@@ -932,9 +934,12 @@ window.abrirModalAgenda=function(fixedLeadId){
     atSel.innerHTML=`<option value="${currentUser.nome}">${currentUser.nome}</option>`;
     atSel.value=currentUser.nome;atSel.disabled=true;
   }
+  const leadIdAtual=editando?editando.leadId:null;
+  const leadAtual=leadIdAtual?allLeads.find(l=>l.id===leadIdAtual):null;
   const leadRow=document.getElementById('ag-lead-row');
-  if(fixedLead){
-    leadRow.innerHTML=`<label class="f-label">Vinculado ao lead</label><input class="f-input" type="text" value="${fixedLead.name||''}" disabled/><input type="hidden" id="ag-lead" value="${fixedLead.id}"/>`;
+  if(fixedLead||leadAtual){
+    const lv=fixedLead||leadAtual;
+    leadRow.innerHTML=`<label class="f-label">Vinculado ao lead</label><input class="f-input" type="text" value="${lv.name||''}" disabled/><input type="hidden" id="ag-lead" value="${lv.id}"/>`;
   }else{
     leadRow.innerHTML=`<label class="f-label">Vincular a um lead (opcional)</label>
       <input type="text" id="ag-lead-search" class="f-input" placeholder="Buscar por nome ou telefone..." autocomplete="off" oninput="filtrarLeadAgenda()" onfocus="filtrarLeadAgenda()" onblur="setTimeout(()=>document.getElementById('ag-lead-suggestions')?.classList.remove('show'),150)"/>
@@ -942,18 +947,27 @@ window.abrirModalAgenda=function(fixedLeadId){
       <div id="ag-lead-suggestions" class="ag-lead-suggestions"></div>
       <span class="ag-lead-clear" onmousedown="limparLeadAgenda()">Limpar seleção</span>`;
   }
-  atSel.onchange=()=>{if(!fixedLead)limparLeadAgenda();};
-  document.getElementById('ag-data').value=localDateStr(new Date());
-  document.getElementById('ag-hora').value='';
-  document.getElementById('ag-nota').value='';
+  atSel.onchange=()=>{if(!fixedLead&&!editando)limparLeadAgenda();};
+  document.getElementById('ag-data').value=editando?editando.data:localDateStr(new Date());
+  document.getElementById('ag-hora').value=editando?(editando.hora||''):'';
+  document.getElementById('ag-nota').value=editando?(editando.nota||''):'';
+  const origemEl=document.getElementById('ag-origem-info');
+  if(origemEl){
+    if(editando&&editando.criadoPor&&editando.criadoPor!==editando.atendente){
+      origemEl.textContent=`📌 Atribuída por ${editando.criadoPor}`;
+      origemEl.style.display='block';
+    }else origemEl.style.display='none';
+  }
   document.getElementById('modal-agenda').style.display='flex';
 };
+window.editarCompromisso=function(id){abrirModalAgenda(null,id);};
 window.abrirModalAgendaDoLead=function(){
   if(!editingLeadId||editingLeadId==='new'){showToast('Salve o lead antes de agendar','error');return;}
   abrirModalAgenda(editingLeadId);
 };
 window.fecharModalAgenda=()=>document.getElementById('modal-agenda').style.display='none';
 window.salvarCompromisso=async function(){
+  const id=document.getElementById('ag-id').value;
   const atendente=document.getElementById('ag-atendente').value;
   const leadSel=document.getElementById('ag-lead');
   const leadId=leadSel?leadSel.value||null:null;
@@ -965,8 +979,13 @@ window.salvarCompromisso=async function(){
   if(!nota&&!leadId)return showToast('Escreva uma nota ou vincule a um lead','error');
   try{
     setBtnLoading('btn-ag-save',true);
-    await addDoc(collection(db,'compromissos'),{atendente,leadId,leadNome,data,hora,nota,status:'pendente',historico:[],criadoPor:currentUser?.nome||null,createdAt:serverTimestamp()});
-    showToast('Compromisso agendado!');
+    if(id){
+      await updateDoc(doc(db,'compromissos',id),{atendente,leadId,leadNome,data,hora,nota});
+      showToast('Compromisso atualizado!');
+    }else{
+      await addDoc(collection(db,'compromissos'),{atendente,leadId,leadNome,data,hora,nota,status:'pendente',historico:[],criadoPor:currentUser?.nome||null,createdAt:serverTimestamp()});
+      showToast('Compromisso agendado!');
+    }
     fecharModalAgenda();
   }catch(e){showToast('Erro ao salvar: '+e.message,'error');}
   finally{setBtnLoading('btn-ag-save',false);}
@@ -4747,7 +4766,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28e</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28f</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -4970,6 +4989,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div class="modal-head"><span class="modal-title" id="ag-modal-title">Novo Compromisso</span><button class="modal-close" onclick="fecharModalAgenda()">✕</button></div>
     <div class="modal-body" style="display:flex;flex-direction:column;gap:.9rem">
       <input type="hidden" id="ag-id"/>
+      <div id="ag-origem-info" style="display:none;font-size:.72rem;font-weight:700;color:#F5A623;background:rgba(245,166,35,.1);border:1px solid rgba(245,166,35,.3);border-radius:6px;padding:.45rem .65rem"></div>
       <div class="f-group"><label class="f-label">Atendente</label><select id="ag-atendente" class="f-select"></select></div>
       <div class="f-group" id="ag-lead-row" style="position:relative">
         <label class="f-label">Vincular a um lead (opcional)</label>
