@@ -849,8 +849,8 @@ function agCardCompact(c,now,mostrarData){
     <div class="fu2-actions">
       <button onclick="event.stopPropagation();marcarCompromissoFeito('${c.id}')" class="btn-done">✓ Feito</button>
       <button onclick="event.stopPropagation();abrirRemarcar('${c.id}')" class="btn-wa">↻ Remarcar</button>
-      ${c.leadId?`<button onclick="event.stopPropagation();openLead('${c.leadId}')" class="btn-wa" style="background:transparent;border:1px solid #2A2F45;color:#9CA3AF">📋 Ver lead</button>`:''}
     </div>
+    ${c.leadId?`<button onclick="event.stopPropagation();openLead('${c.leadId}')" class="btn-lead">📋 Ver lead</button>`:''}
   </div>`;
 }
 function beep(){
@@ -3963,6 +3963,7 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .tipo-geral{background:rgba(79,110,247,.12);color:#4F6EF7}
 .btn-wa{background:#1DAA61;color:#fff;border:none;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer;text-decoration:none;white-space:nowrap}
 .btn-done{background:transparent;color:#10B981;border:1px solid #10B981;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer}
+.btn-lead{background:transparent;color:#4F6EF7;border:1px solid #4F6EF7;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer;width:100%}
 .btn-done:hover{background:rgba(16,185,129,.12)}
 .btn-gerar-msg{background:rgba(139,92,246,.15);color:#8B5CF6;border:1px solid #8B5CF6;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
 .btn-gerar-msg:hover{background:rgba(139,92,246,.3)}
@@ -4766,7 +4767,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28f</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28g</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
