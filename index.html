@@ -102,7 +102,7 @@ function showApp(){
   document.getElementById('header-name').textContent=currentUser.nome||currentUser.email;
   document.getElementById('header-role').textContent=currentUser.role==='gestora'?'Gestora':'Atendente';
   const isG=currentUser.role==='gestora';
-  ['tab-relatorios','tab-equipe'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
+  ['tab-relatorios','tab-equipe','tab-autoauditorias'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
   const tabEst=document.getElementById('tab-estrategia');
   if(tabEst)tabEst.style.display='inline-block';
   // Painel de Follow-up: atendente entra já filtrado nos próprios leads; gestora vê todos
@@ -369,6 +369,7 @@ function renderAll(){
   else if(currentTab==='equipe')renderEquipe();
   else if(currentTab==='relatorios')renderRelatorios();
   else if(currentTab==='estrategia')renderEstrategia();
+  else if(currentTab==='autoauditorias')renderPainelAutoauditorias();
 }
 function getDateRange(periodo, dataIni, dataFim){
   const now=new Date();
@@ -707,18 +708,20 @@ function renderTarefaHoje(){
     const total=entries.reduce((s,[,c])=>s+c,0);
     // Fase 2: tarefas da Agenda vencidas há mais de 24h, por atendente
     const venc24={};
-    allCompromissos.filter(c=>ehTarefa(c)&&c.status==='pendente'&&(now-dtCompromisso(c))>86400000)
+    allCompromissos.filter(c=>ehTarefa(c)&&c.tipo!=='autoauditoria'&&c.status==='pendente'&&(now-dtCompromisso(c))>86400000)
       .forEach(c=>{const a=c.atendente||'—';venc24[a]=(venc24[a]||0)+1;});
     const v24=Object.entries(venc24).sort((a,b)=>b[1]-a[1]);
     const totalV24=v24.reduce((s,[,c])=>s+c,0);
+    // Fase 3: autoauditorias com prazo vencido
+    const aaAtraso=allCompromissos.filter(c=>c.tipo==='autoauditoria'&&c.status==='pendente'&&now>prazoAutoauditoria(c));
     titleEl.textContent='⏰ Atrasos da equipe hoje';
-    countEl.textContent=total+totalV24;
-    card.style.display=(total||totalV24)?'flex':'none';
-    card.classList.toggle('pulsing-red',(total+totalV24)>0);
+    countEl.textContent=total+totalV24+aaAtraso.length;
+    card.style.display=(total||totalV24||aaAtraso.length)?'flex':'none';
+    card.classList.toggle('pulsing-red',(total+totalV24+aaAtraso.length)>0);
     bodyEl.innerHTML=(total?`<div class="th-total" style="font-size:.76rem">🔥 Follow-ups atrasados</div>`:'')+entries.map(([chave,count])=>{
       const label=chave===SEM_ATENDENTE_KEY?'Sem atendente':chave;
       return `<div class="th-item" onclick="irParaFollowup('${chave}')"><span class="th-name">${label}</span><span class="th-late">${count} atrasado${count>1?'s':''}</span></div>`;
-    }).join('')+(totalV24?`<div class="th-total" style="font-size:.76rem;margin-top:.2rem">📋 Tarefas da Agenda vencidas há mais de 24h</div>`+v24.map(([nome,count])=>`<div class="th-item" onclick="irParaAgenda('${escHtml(nome)}')"><span class="th-name">${escHtml(nome)}</span><span class="th-late">${count} tarefa${count>1?'s':''}</span></div>`).join(''):'');
+    }).join('')+(totalV24?`<div class="th-total" style="font-size:.76rem;margin-top:.2rem">📋 Tarefas da Agenda vencidas há mais de 24h</div>`+v24.map(([nome,count])=>`<div class="th-item" onclick="irParaAgenda('${escHtml(nome)}')"><span class="th-name">${escHtml(nome)}</span><span class="th-late">${count} tarefa${count>1?'s':''}</span></div>`).join(''):'')+(aaAtraso.length?`<div class="th-total" style="font-size:.76rem;margin-top:.2rem">🪞 Autoauditorias em atraso</div>`+aaAtraso.map(c=>`<div class="th-item" onclick="switchTab('autoauditorias')"><span class="th-name">${escHtml(c.atendente||'')}</span><span class="th-late">desde ${c.hora} de ${dataCurta(c.data)}</span></div>`).join(''):'');
   }
 }
 window.irParaAgenda=function(nome){
@@ -1112,6 +1115,7 @@ function renderAgenda(){
 }
 function agCardCompact(c,now,mostrarData){
   if(c.tipo==='ligacao-dra')return agCardLigacao(c,now,mostrarData);
+  if(c.tipo==='autoauditoria')return agCardAutoauditoria(c,now);
   const tm=c.tipo?TIPO_TAREFA_META[c.tipo]:null;
   if(tm){
     const atrasadoT=compromissoAtrasado(c,now);
@@ -1193,6 +1197,7 @@ function checkAlarmes(){
     showToast(`📋 Você tem ${novosAuto.length} tarefas na Agenda para resolver`,'warn',8000,true);
     if(window.Notification&&Notification.permission==='granted'){try{new Notification('📋 Tarefas na Agenda',{body:`${novosAuto.length} tarefas para resolver`});}catch(e){}}
   }
+  renderAutoauditoriaArea();
 }
 function filtrarLeadAgenda(){
   const box=document.getElementById('ag-lead-suggestions');if(!box)return;
@@ -1301,6 +1306,7 @@ window.salvarCompromisso=async function(){
 };
 window.marcarCompromissoFeito=async function(id){
   const _c=allCompromissos.find(x=>x.id===id);
+  if(_c&&_c.tipo==='autoauditoria'){abrirAutoauditoria(id);return;}
   if(_c&&_c.exigeNota){abrirConcluirTarefa(id);return;}
   try{await updateDoc(doc(db,'compromissos',id),{status:'feito',concluidoEm:serverTimestamp()});showToast('Compromisso concluído!');}
   catch(e){showToast('Erro: '+e.message,'error');}
@@ -1350,7 +1356,9 @@ const TIPO_TAREFA_META={
   'auto-documentos':{label:'📄 Documentos',cor:'#F59E0B'},
   'formalizacao':{label:'⭐ Formalização',cor:'#10B981'},
   'reagendar':{label:'📞 Reagendar ligação',cor:'#8B5CF6'},
-  'aviso':{label:'🔔 Avisar o cliente',cor:'#F5A623'}
+  'aviso':{label:'🔔 Avisar o cliente',cor:'#F5A623'},
+  'acao-semana':{label:'🎯 Ação da autoauditoria',cor:'#EC4899'},
+  'autoauditoria':{label:'🪞 Autoauditoria',cor:'#8B5CF6'}
 };
 const LIG_STATUS_META={
   aguardando:{label:'Aguardando confirmação',cls:'lig-aguardando'},
@@ -1453,6 +1461,8 @@ async function sincronizarTarefasAuto(){
       status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp()
     }).catch(e=>{syncCriando.delete(id);console.error('criar tarefa',e);});
   }
+  // 3) Autoauditoria semanal de cada atendente (Fase 3)
+  await sincronizarAutoauditorias();
 }
 
 // Cria uma tarefa manual na Agenda de uma atendente (formalização, reagendar, aviso)
@@ -1720,6 +1730,539 @@ function agCardLigacao(c,now,mostrarData){
       <button onclick="event.stopPropagation();abrirResultadoLigacao('${c.id}')" class="btn-lead" style="flex:1">📝 Registrar resultado</button>
     </div>
   </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// FASE 3: AUTOAUDITORIA SEMANAL DO ATENDENTE
+// É um compromisso tipo "autoauditoria" na Agenda; as respostas ficam guardadas nele.
+// ═══════════════════════════════════════════════════════
+const CHECKLIST_CONV=[
+  {k:'pasta',label:'Pasta criada no Google Drive'},
+  {k:'docs',label:'Documentos iniciais salvos (RG, CPF e comprovante)'},
+  {k:'contrato',label:'Contrato e procuração assinados e salvos'},
+  {k:'sistemaContratos',label:'Lançada no Sistema de Contratos Fechados'},
+  {k:'maternidadePrev',label:'Lançada no MaternidadePrev',soSM:true}
+];
+const AA_PASSOS={anteriores:'Compromissos anteriores',numeros:'Meus números',conferencia:'Conferência',pendencias:'Pendências',reflexao:'Reflexão',compromissos:'Meus compromissos'};
+let aaState=null,aaFiltroAtendente='TODAS',aaFiltroSemana='TODAS';
+
+function itensChecklist(l){return CHECKLIST_CONV.filter(i=>!i.soSM||l.tipo==='SM');}
+function chegadaLead(l){return tsToDate(l.dataHoraChegada)||tsToDate(l.createdAt);}
+function entrouQualificadoEm(l){
+  const e=(l.log||[]).find(x=>STATUS_QUALIFICADO_OU_POSTERIOR.includes(x.statusChange));
+  return e?new Date(e.ts):null;
+}
+function contarDiasUteis(ini,fim){
+  let n=0;const d=new Date(ini);d.setHours(12,0,0,0);const f=new Date(fim);f.setHours(12,0,0,0);
+  for(let i=0;i<400&&d<=f;i++){if(ehDiaUtil(d))n++;d.setDate(d.getDate()+1);}
+  return n;
+}
+function metaMensal(uid,ref){
+  const d=ref||new Date();
+  const m=(cfgComercial.metas||{})[`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`]||{};
+  return uid?(parseInt(m[uid])||0):Object.values(m).reduce((s,v)=>s+(parseInt(v)||0),0);
+}
+// Ritmo do mês: nome/uid nulos = time inteiro
+function calcRitmoMes(nome,uid,ref){
+  const d=ref||new Date();
+  const ini=new Date(d.getFullYear(),d.getMonth(),1);
+  const fimMes=new Date(d.getFullYear(),d.getMonth()+1,0,23,59,59);
+  const meta=metaMensal(uid,d);
+  const realizado=allLeads.filter(l=>(!nome||l.assignee===nome)&&l.status==='CONTRATO FECHADO'&&(()=>{const f=getDataFechamento(l);return f&&f>=ini&&f<=fimMes;})()).length;
+  const total=contarDiasUteis(ini,fimMes),decorridos=contarDiasUteis(ini,d);
+  const esperado=total?meta*decorridos/total:0;
+  return{meta,realizado,esperado:Math.round(esperado*10)/10,falta:Math.max(0,meta-realizado),diasTotal:total,diasDecorridos:decorridos,diasRestantes:Math.max(0,total-decorridos)};
+}
+// Dia da autoauditoria da semana: sexta; se não for dia útil, o último dia útil antes
+function diaAutoauditoria(ref){
+  const d=new Date(ref);d.setHours(12,0,0,0);
+  const sex=new Date(d);sex.setDate(d.getDate()-((d.getDay()+6)%7)+4);
+  for(let i=0;i<4&&!ehDiaUtil(sex);i++)sex.setDate(sex.getDate()-1);
+  return localDateStr(sex);
+}
+function prazoAutoauditoria(c){return new Date(dtCompromisso(c).getTime()+60*60000);}
+function periodoAutoauditoria(c,agora){
+  const ini=dtCompromisso(c);ini.setDate(ini.getDate()-7);
+  return{ini,fim:agora||new Date()};
+}
+
+// Cria a autoauditoria da semana de cada atendente (visível na Agenda desde segunda)
+async function sincronizarAutoauditorias(){
+  const dia=diaAutoauditoria(new Date());
+  for(const u of allUsers.filter(x=>x.ativo!==false&&x.nome&&x.role!=='gestora')){
+    const hora=cfgComercial.autoauditoria?.[u.id]||'10:30';
+    const id=`autoauditoria-${u.id}-${dia}`;
+    const ex=allCompromissos.find(c=>c.id===id);
+    if(ex){
+      const upd={};
+      if(ex.status==='pendente'&&ex.atendente!==u.nome)upd.atendente=u.nome;
+      if(ex.status==='pendente'&&ex.hora!==hora&&!(ex.historico||[]).length)upd.hora=hora;
+      if(Object.keys(upd).length&&!syncCriando.has('aa-upd-'+id+JSON.stringify(upd))){
+        syncCriando.add('aa-upd-'+id+JSON.stringify(upd));
+        await updateDoc(doc(db,'compromissos',id),upd).catch(()=>{});
+      }
+      continue;
+    }
+    if(syncCriando.has(id))continue;
+    syncCriando.add(id);
+    await setDoc(doc(db,'compromissos',id),{
+      tipo:'autoauditoria',exigeNota:false,atendente:u.nome,atendenteUid:u.id,
+      data:dia,hora,nota:'🪞 Autoauditoria da semana (15 a 20 min)',
+      status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp()
+    }).catch(()=>syncCriando.delete(id));
+  }
+}
+
+// ── Números da semana (nunca mistura atendentes) ──
+function calcNumerosAtendente(nome,ini,fim){
+  const noP=d=>!!d&&d>=ini&&d<=fim;
+  const meus=allLeads.filter(l=>l.assignee===nome);
+  const recebidos=meus.filter(l=>noP(chegadaLead(l)));
+  const qualificados=meus.filter(l=>noP(entrouQualificadoEm(l)));
+  const conversoes=meus.filter(l=>l.status==='CONTRATO FECHADO'&&noP(getDataFechamento(l)));
+  const ligs=allCompromissos.filter(c=>c.tipo==='ligacao-dra'&&c.atendenteLead===nome);
+  const agendadas=ligs.filter(c=>noP(tsToDate(c.createdAt)));
+  const feitas=ligs.filter(c=>c.statusLigacao==='realizada'&&noP(c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)));
+  const comTempo=recebidos.filter(l=>typeof l.tempoRespostaMin==='number'&&l.foraExpediente!==true);
+  const pct=k=>comTempo.length?Math.round(comTempo.filter(l=>faixaTempo(l)===k).length/comTempo.length*100):null;
+  return{
+    recebidos:recebidos.length,qualificados:qualificados.length,
+    ligAgendadas:agendadas.length,
+    ligRealizadas:feitas.filter(c=>c.resultado==='decidiu'||c.resultado==='nao_decidiu').length,
+    ligDecisao:feitas.filter(c=>c.resultado==='decidiu').length,
+    conversoes:conversoes.length,
+    tempoMedio:comTempo.length?Math.round(comTempo.reduce((s,l)=>s+l.tempoRespostaMin,0)/comTempo.length):null,
+    comTempo:comTempo.length,pctVerde:pct('verde'),pctAmarelo:pct('amarelo'),pctVermelho:pct('vermelho'),
+    idsConversoes:conversoes.map(l=>l.id)
+  };
+}
+
+// ── Falhas encontradas automaticamente nos leads da atendente ──
+function calcFalhas(nome,ini,fim){
+  const noP=d=>!!d&&d>=ini&&d<=fim;
+  const ativos=['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'];
+  const lim30=new Date(fim.getTime()-30*86400000),lim60=new Date(fim.getTime()-60*86400000);
+  const f=[];
+  allLeads.filter(l=>l.assignee===nome).forEach(l=>{
+    const log=l.log||[];
+    if(noP(chegadaLead(l))&&(!l.dataHoraChegada||!l.dataHoraInicioAtendimento))
+      f.push({k:`horario-${l.id}`,tipo:'horario',lead:l,txt:'Sem hora de chegada ou sem início do atendimento'});
+    log.forEach(e=>{
+      if(e.user===nome&&e.note==='Atualizado'&&noP(new Date(e.ts))&&!log.some(x=>x.complementa===e.ts))
+        f.push({k:`nota-${l.id}-${e.ts}`,tipo:'nota',lead:l,ts:e.ts,txt:`Contato de ${formatDatetime(new Date(e.ts))} salvo sem nota`});
+    });
+    const qEm=entrouQualificadoEm(l)||tsToDate(l.lastContact);
+    if(l.status==='QUALIFICADO'&&qEm&&qEm>=lim30&&!ligacaoAtiva(l)&&l.ligacaoDra?.status!=='realizada')
+      f.push({k:`semlig-${l.id}`,tipo:'semlig',lead:l,txt:'Qualificado sem ligação da Dra. agendada'});
+    if(ativos.includes(l.status)&&l.ligacaoDra?.status==='realizada'&&l.ligacaoDra?.resultado==='nao_atendeu')
+      f.push({k:`naoatendeu-${l.id}`,tipo:'naoatendeu',lead:l,txt:'Ligação da Dra. "Não atendeu" sem novo agendamento'});
+    if(l.status==='CONTRATO FECHADO'){
+      const fd=getDataFechamento(l);
+      if(fd&&fd>=lim60&&(!l.dataFechamentoContrato||!l.valorHonorarios)){
+        const falta=!l.dataFechamentoContrato&&!l.valorHonorarios?'data de fechamento e sem honorários':!l.dataFechamentoContrato?'data de fechamento':'valor de honorários';
+        f.push({k:`inconsist-${l.id}`,tipo:'inconsistente',lead:l,txt:`Conversão sem ${falta}`});
+      }
+    }
+  });
+  return f;
+}
+function calcPendencias(nome){
+  const todayEnd=new Date();todayEnd.setHours(23,59,59,999);
+  return{
+    fuVencidos:allLeads.filter(l=>l.assignee===nome&&leadEstaAtrasadoHoje(l,todayEnd)),
+    tarefas:allCompromissos.filter(c=>ehTarefa(c)&&c.tipo!=='autoauditoria'&&c.status==='pendente'&&c.atendente===nome).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)),
+    semLigacao:calcFalhas(nome,new Date(0),new Date()).filter(x=>x.tipo==='semlig').map(x=>x.lead)
+  };
+}
+
+// ── Checklist da conversão (modal do lead e autoauditoria) ──
+async function toggleChecklistConversao(leadId,k,origem){
+  const l=allLeads.find(x=>x.id===leadId);if(!l)return null;
+  const item=CHECKLIST_CONV.find(i=>i.k===k);if(!item)return null;
+  const antes=!!l.checklistConversao?.[k],depois=!antes;
+  await updateDoc(doc(db,'leads',leadId),{
+    [`checklistConversao.${k}`]:depois,
+    log:arrayUnion({user:currentUser?.nome||'—',note:`${origem==='aa'?'Correção na autoauditoria. ':''}Conferência da conversão: "${item.label}" ${depois?'marcado':'desmarcado'}.`,ts:new Date().toISOString(),statusChange:null})
+  });
+  return{campo:item.label,antes:antes?'Sim':'Não',depois:depois?'Sim':'Não'};
+}
+function chipsChecklist(l,acao){
+  return itensChecklist(l).map(i=>{
+    const ok=!!l.checklistConversao?.[i.k];
+    return `<button type="button" class="cc-chip ${ok?'ok':''}" onclick="${acao}('${l.id}','${i.k}')">${ok?'✓':'○'} ${i.label}</button>`;
+  }).join('');
+}
+function renderChecklistLead(){
+  const row=document.getElementById('checklist-conv-row');if(!row)return;
+  const st=document.getElementById('f-status')?.value;
+  row.style.display=st==='CONTRATO FECHADO'?'flex':'none';
+  const box=document.getElementById('checklist-conv-itens');if(!box)return;
+  const l=editingLeadId?allLeads.find(x=>x.id===editingLeadId):null;
+  if(!l){box.innerHTML='<span class="cfg-hint">Salve o lead para marcar os itens.</span>';return;}
+  const tipoAtual=document.getElementById('f-tipo')?.value||l.tipo;
+  box.innerHTML=chipsChecklist({...l,tipo:tipoAtual},'toggleChecklistLead');
+}
+window.toggleChecklistLead=async function(leadId,k){
+  try{await toggleChecklistConversao(leadId,k,'modal');renderChecklistLead();}
+  catch(e){showToast('Erro: '+e.message,'error');}
+};
+
+// ── Tela guiada ──
+window.abrirAutoauditoria=function(compId){
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  if(c.atendente!==currentUser?.nome){showToast('A autoauditoria é feita pela própria atendente. O resumo aparece na aba Autoauditorias.','warn');return;}
+  if(c.status!=='pendente')return showToast('Esta autoauditoria já foi concluída.','warn');
+  const agora=new Date();
+  const{ini,fim}=periodoAutoauditoria(c,agora);
+  const anterior=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='feito'&&x.data<c.data).sort((a,b)=>b.data.localeCompare(a.data))[0]||null;
+  const compAnt=(anterior?.resultado?.compromissos||[]).map(t=>({texto:t,status:''}));
+  const ms=7*86400000;
+  aaState={
+    compId,c,ini,fim,anteriorId:anterior?.id||null,compAnt,
+    steps:[...(compAnt.length?['anteriores']:[]),'numeros','conferencia','pendencias','reflexao','compromissos'],idx:0,
+    falhasInicio:calcFalhas(c.atendente,ini,fim).map(f=>({k:f.k,tipo:f.tipo,leadId:f.lead.id,leadNome:f.lead.name||'',txt:f.txt})),
+    correcoes:[],reflexao:{objecao:'',diferente:'',hoje:''},compromissos:['','',''],
+    numeros:calcNumerosAtendente(c.atendente,ini,fim),
+    numerosAnt:calcNumerosAtendente(c.atendente,new Date(ini.getTime()-ms),new Date(fim.getTime()-ms)),
+    ritmo:calcRitmoMes(c.atendente,currentUser.uid,agora)
+  };
+  document.getElementById('modal-autoauditoria').style.display='flex';
+  renderAAStep();
+};
+window.fecharAutoauditoria=function(){
+  if(aaState&&!confirm('Sair agora? O que você já corrigiu fica salvo, mas as respostas da reflexão e dos compromissos serão perdidas.'))return;
+  document.getElementById('modal-autoauditoria').style.display='none';aaState=null;
+};
+window.aaAbrirLead=function(leadId){
+  document.getElementById('modal-autoauditoria').style.display='none';
+  window._aaVoltar=true;openLead(leadId);
+};
+function aaVoltarDoLead(){
+  if(!window._aaVoltar)return;
+  window._aaVoltar=false;
+  if(aaState){document.getElementById('modal-autoauditoria').style.display='flex';renderAAStep();}
+}
+function aaSeta(a,b,menorMelhor){
+  if(a===null||b===null||a===undefined||b===undefined)return '';
+  if(a===b)return '<span class="aa-seta igual" title="Igual à semana anterior">=</span>';
+  const melhorou=menorMelhor?a<b:a>b;
+  return `<span class="aa-seta ${melhorou?'up':'down'}" title="Semana anterior: ${b}">${a>b?'▲':'▼'}</span>`;
+}
+function aaCardNum(label,a,b,fmt,menorMelhor){
+  const f=fmt||(v=>v===null||v===undefined?'—':v);
+  return `<div class="aa-num"><div class="aa-num-val">${f(a)} ${aaSeta(a,b,menorMelhor)}</div><div class="aa-num-label">${label}</div><div class="aa-num-ant">semana anterior: ${f(b)}</div></div>`;
+}
+function aaStepAnteriores(){
+  return `<div class="aa-intro">Vamos começar olhando para os compromissos que você assumiu na semana passada. Seja sincera(o): isso é para o seu desenvolvimento, não para cobrança. 💙</div>
+  <div class="aa-lista">${aaState.compAnt.map((x,i)=>`
+    <div class="aa-item"><div class="aa-item-txt">🎯 ${escHtml(x.texto)}</div>
+      <div class="aa-opcoes">${[['cumprido','✅ Cumprido'],['parcial','🌗 Parcial'],['nao_cumprido','⭕ Não cumprido']].map(([v,lbl])=>`<button type="button" class="aa-opc ${x.status===v?'active '+v:''}" onclick="aaMarcarAnterior(${i},'${v}')">${lbl}</button>`).join('')}</div>
+    </div>`).join('')}</div>`;
+}
+window.aaMarcarAnterior=function(i,v){aaState.compAnt[i].status=v;renderAAStep();};
+window.aaSetReflexao=function(k,v){if(aaState)aaState.reflexao[k]=v;};
+window.aaSetCompromisso=function(i,v){if(aaState)aaState.compromissos[i]=v;};
+function aaStepNumeros(){
+  const n=aaState.numeros,a=aaState.numerosAnt,r=aaState.ritmo;
+  const pct=v=>v===null||v===undefined?'—':v+'%';
+  const dentro=r.meta?(r.realizado>=r.esperado):null;
+  return `<div class="aa-intro">Estes são os seus números de ${formatDatetime(aaState.ini)} até agora, comparados com a semana anterior. ▲ verde é melhora, ▼ vermelho é ponto de atenção.</div>
+  <div class="aa-nums">
+    ${aaCardNum('Leads recebidos',n.recebidos,a.recebidos)}
+    ${aaCardNum('Qualificados',n.qualificados,a.qualificados)}
+    ${aaCardNum('Ligações da Dra. agendadas',n.ligAgendadas,a.ligAgendadas)}
+    ${aaCardNum('Ligações realizadas',n.ligRealizadas,a.ligRealizadas)}
+    ${aaCardNum('Ligações com decisão',n.ligDecisao,a.ligDecisao)}
+    ${aaCardNum('Conversões',n.conversoes,a.conversoes)}
+    ${aaCardNum('Tempo médio de resposta',n.tempoMedio,a.tempoMedio,formatMin,true)}
+    ${aaCardNum('🟢 No verde',n.pctVerde,a.pctVerde,pct)}
+    ${aaCardNum('🟡 No amarelo',n.pctAmarelo,a.pctAmarelo,pct,true)}
+    ${aaCardNum('🔴 No vermelho',n.pctVermelho,a.pctVermelho,pct,true)}
+  </div>
+  <div class="aa-ritmo">
+    <div class="aa-sub">📈 Meu ritmo do mês</div>
+    ${r.meta?`<div class="aa-ritmo-grid">
+      <div><strong>${r.realizado}</strong><span>conversões realizadas</span></div>
+      <div><strong>${r.esperado}</strong><span>esperado até hoje</span></div>
+      <div><strong>${r.falta}</strong><span>faltam para a meta de ${r.meta}</span></div>
+      <div><strong>${r.diasRestantes}</strong><span>dias úteis restantes</span></div>
+    </div>
+    <div class="aa-msg ${dentro?'ok':'atencao'}">${dentro?'Você está no ritmo ou à frente. Continue assim! 💙':`Faltam ${Math.max(0,Math.ceil(r.esperado-r.realizado))} conversão(ões) para o ritmo de hoje. Vamos transformar isso em ação na próxima semana.`}</div>`
+    :'<div class="cfg-hint">Sua meta do mês ainda não foi definida pela gestora.</div>'}
+  </div>`;
+}
+function aaFormFalha(f,i){
+  const l=f.lead;
+  if(f.tipo==='horario'){
+    const cheg=tsToDate(l.dataHoraChegada),ini=tsToDate(l.dataHoraInicioAtendimento);
+    const dia=l.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l.createdAt?toDateInput(l.createdAt):'');
+    return `<div class="aa-fix">
+      <label>Chegada em ${dia?formatDate(dia+'T12:00:00'):'—'} às <input type="time" id="aa-h-${i}" class="f-input" value="${cheg?horaStr(cheg):''}"/></label>
+      <label>Início do atendimento <input type="datetime-local" id="aa-i-${i}" class="f-input" value="${ini?localDatetimeInput(ini):''}"/></label>
+      <button class="btn-done" onclick="aaCorrigirHorario(${i},'${l.id}','${dia}')">💾 Salvar</button></div>`;
+  }
+  if(f.tipo==='nota')return `<div class="aa-fix"><textarea id="aa-n-${i}" class="f-textarea" style="min-height:48px" placeholder="O que aconteceu nesse contato?"></textarea><button class="btn-done" onclick="aaComplementarNota(${i},'${l.id}','${f.ts}')">💾 Salvar nota</button></div>`;
+  if(f.tipo==='inconsistente'){
+    return `<div class="aa-fix">
+      <label>Data de fechamento <input type="date" id="aa-df-${i}" class="f-input" value="${l.dataFechamentoContrato?toDateInput(l.dataFechamentoContrato):''}"/></label>
+      <label>Honorários (R$) <input type="number" id="aa-hon-${i}" class="f-input" min="0" step="0.01" value="${l.valorHonorarios||''}"/></label>
+      <button class="btn-done" onclick="aaCorrigirFechamento(${i},'${l.id}')">💾 Salvar</button></div>`;
+  }
+  return `<div class="aa-fix"><button class="btn-lead" style="width:auto" onclick="aaAbrirLead('${l.id}')">📋 Abrir lead e ${f.tipo==='semlig'?'agendar a ligação':'reagendar a ligação'}</button></div>`;
+}
+function aaStepConferencia(){
+  const c=aaState.c;
+  aaState.falhasAtuais=calcFalhas(c.atendente,aaState.ini,new Date());
+  const fs=aaState.falhasAtuais;
+  const conv=allLeads.filter(l=>l.assignee===c.atendente&&l.status==='CONTRATO FECHADO'&&(()=>{const d=getDataFechamento(l);return d&&d>=aaState.ini;})());
+  return `<div class="aa-sub">a) Registros para ajustar</div>
+  ${fs.length?`<div class="aa-intro">Encontramos ${fs.length} ponto(s) para ajustar. Você corrige aqui mesmo, e tudo fica registrado no histórico do lead.</div>`:'<div class="aa-msg ok">Tudo certo! Nenhum registro para ajustar. 🎉</div>'}
+  <div class="aa-lista">${fs.map((f,i)=>`<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${f.lead.id}')">${escHtml(f.lead.name||'Sem nome')}</span><span class="aa-falha">${escHtml(f.txt)}</span></div>${aaFormFalha(f,i)}</div>`).join('')}</div>
+  <div class="aa-sub" style="margin-top:1rem">b) Conferência das conversões da semana</div>
+  ${conv.length?`<div class="aa-lista">${conv.map(l=>{const its=itensChecklist(l);const okN=its.filter(i=>l.checklistConversao?.[i.k]).length;return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${l.id}')">${escHtml(l.name||'Sem nome')}</span><span class="${okN===its.length?'aa-ok':'aa-falha'}">${okN} de ${its.length} itens</span></div><div class="cc-chips">${chipsChecklist(l,'aaToggleChecklist')}</div></div>`;}).join('')}</div>`:'<div class="cfg-hint">Nenhuma conversão registrada na semana.</div>'}`;
+}
+function aaRegistrarCorrecao(l,campo,antes,depois){
+  aaState.correcoes.push({leadId:l.id,leadNome:l.name||'',campo,antes:String(antes??'—'),depois:String(depois??'—'),por:currentUser?.nome||'—',em:new Date().toISOString()});
+}
+window.aaCorrigirHorario=async function(i,leadId,dia){
+  const l=allLeads.find(x=>x.id===leadId);if(!l)return;
+  const h=document.getElementById('aa-h-'+i)?.value,iv=document.getElementById('aa-i-'+i)?.value;
+  if(!h||!iv)return showToast('Preencha a hora da chegada e o início do atendimento','error');
+  if(!dia)return showToast('Este lead está sem data do primeiro contato. Abra o lead para preencher.','error');
+  const cheg=new Date(`${dia}T${h}:00`),ini=new Date(iv);
+  if(ini<cheg)return showToast('O início do atendimento não pode ser antes da chegada','error');
+  const antesC=tsToDate(l.dataHoraChegada),antesI=tsToDate(l.dataHoraInicioAtendimento);
+  const tempo=Math.round((ini-cheg)/60000),fora=calcForaExpediente(cheg);
+  try{
+    await updateDoc(doc(db,'leads',leadId),{
+      dataHoraChegada:Timestamp.fromDate(cheg),dataHoraInicioAtendimento:Timestamp.fromDate(ini),tempoRespostaMin:tempo,foraExpediente:fora,
+      log:arrayUnion({user:currentUser?.nome||'—',note:`Correção na autoauditoria. Chegada: "${formatDataHora(antesC)}" → "${formatDataHora(cheg)}". Início do atendimento: "${formatDataHora(antesI)}" → "${formatDataHora(ini)}".`,ts:new Date().toISOString(),statusChange:null})
+    });
+    aaRegistrarCorrecao(l,'Chegada do lead',formatDataHora(antesC),formatDataHora(cheg));
+    aaRegistrarCorrecao(l,'Início do atendimento',formatDataHora(antesI),formatDataHora(ini));
+    showToast('✅ Horários corrigidos!');renderAAStep();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
+window.aaComplementarNota=async function(i,leadId,ts){
+  const l=allLeads.find(x=>x.id===leadId);if(!l)return;
+  const txt=document.getElementById('aa-n-'+i)?.value.trim();
+  if(!txt||txt.length<5)return showToast('Escreva o que aconteceu nesse contato','error');
+  try{
+    await updateDoc(doc(db,'leads',leadId),{log:arrayUnion({user:currentUser?.nome||'—',note:`Correção na autoauditoria. Nota do contato de ${formatDatetime(new Date(ts))}: ${txt}`,ts:new Date().toISOString(),statusChange:null,complementa:ts})});
+    aaRegistrarCorrecao(l,`Nota do contato de ${formatDatetime(new Date(ts))}`,'Atualizado (sem nota)',txt);
+    showToast('✅ Nota registrada!');renderAAStep();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
+window.aaCorrigirFechamento=async function(i,leadId){
+  const l=allLeads.find(x=>x.id===leadId);if(!l)return;
+  const dv=document.getElementById('aa-df-'+i)?.value,hv=parseFloat(document.getElementById('aa-hon-'+i)?.value);
+  if(!dv||!(hv>0))return showToast('Preencha a data de fechamento e o valor dos honorários','error');
+  const antesD=l.dataFechamentoContrato?formatDate(tsToDate(l.dataFechamentoContrato)):'—',antesH=l.valorHonorarios||'—';
+  try{
+    await updateDoc(doc(db,'leads',leadId),{
+      dataFechamentoContrato:Timestamp.fromDate(new Date(dv+'T12:00:00')),valorHonorarios:hv,
+      log:arrayUnion({user:currentUser?.nome||'—',note:`Correção na autoauditoria. Data de fechamento: "${antesD}" → "${formatDate(dv+'T12:00:00')}". Honorários: "${antesH}" → "${hv}".`,ts:new Date().toISOString(),statusChange:null})
+    });
+    aaRegistrarCorrecao(l,'Data de fechamento',antesD,formatDate(dv+'T12:00:00'));
+    aaRegistrarCorrecao(l,'Honorários (R$)',antesH,hv);
+    showToast('✅ Conversão corrigida!');renderAAStep();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
+window.aaToggleChecklist=async function(leadId,k){
+  const l=allLeads.find(x=>x.id===leadId);
+  try{const r=await toggleChecklistConversao(leadId,k,'aa');if(r&&l)aaRegistrarCorrecao(l,r.campo,r.antes,r.depois);renderAAStep();}
+  catch(e){showToast('Erro: '+e.message,'error');}
+};
+function aaStepPendencias(){
+  const p=calcPendencias(aaState.c.atendente);
+  const item=(l,extra)=>`<div class="aa-item aa-item-link" onclick="aaAbrirLead('${l.id}')"><div class="aa-item-head"><span class="aa-item-nome">${escHtml(l.name||'Sem nome')}</span><span class="aa-falha">${extra}</span></div></div>`;
+  return `<div class="aa-intro">Estas são as ações que estão esperando por você. Clique em qualquer item para abrir o lead e resolver na hora.</div>
+  <div class="aa-sub">🔥 Follow-ups vencidos (${p.fuVencidos.length})</div>
+  <div class="aa-lista">${p.fuVencidos.length?p.fuVencidos.map(l=>{const fu=tsToDate(l.nextFollowup);return item(l,`${getTrilha(l.tipo||'SM')[l.etapaFollowup||0]||'Mensal'} · venceu ${formatDate(fu)}`);}).join(''):'<div class="aa-msg ok">Nenhum follow-up vencido. 🎉</div>'}</div>
+  <div class="aa-sub">📋 Tarefas abertas na Agenda (${p.tarefas.length})</div>
+  <div class="aa-lista">${p.tarefas.length?p.tarefas.map(c=>{const tm=TIPO_TAREFA_META[c.tipo]||{label:'Tarefa'};return `<div class="aa-item ${c.leadId?'aa-item-link':''}" ${c.leadId?`onclick="aaAbrirLead('${c.leadId}')"`:''}><div class="aa-item-head"><span class="aa-item-nome">${escHtml(c.leadNome||tm.label)}</span><span class="aa-falha">${tm.label} · ${dataCurta(c.data)}</span></div><div class="aa-item-txt">${escHtml(c.nota||'')}</div></div>`;}).join(''):'<div class="aa-msg ok">Nenhuma tarefa aberta. 🎉</div>'}</div>
+  <div class="aa-sub">📞 Qualificados sem ligação da Dra. (${p.semLigacao.length})</div>
+  <div class="aa-lista">${p.semLigacao.length?p.semLigacao.map(l=>item(l,'Agendar ligação')).join(''):'<div class="aa-msg ok">Todos os qualificados recentes têm ligação. 🎉</div>'}</div>`;
+}
+function aaStepReflexao(){
+  const r=aaState.reflexao;
+  const q=(k,t,ph)=>`<div class="f-group"><label class="f-label aa-pergunta">${t}</label><textarea class="f-textarea" style="min-height:60px" placeholder="${ph}" oninput="aaSetReflexao('${k}',this.value)">${escHtml(r[k])}</textarea></div>`;
+  return `<div class="aa-intro">Agora é com você. Respostas curtas e sinceras ajudam mais que respostas longas.</div>
+  ${q('objecao','1. Qual objeção mais apareceu esta semana?','Ex: Medo de golpe por ser atendimento online')}
+  ${q('diferente','2. O que vou fazer diferente na próxima semana?','Ex: Mandar o vídeo da Dra. explicando como funciona logo no primeiro contato')}
+  ${q('hoje','3. O que já posso fazer hoje para mudar isso?','Ex: Gravar um áudio padrão respondendo essa objeção')}
+  <div class="cfg-hint">A resposta 3 vira uma tarefa na sua Agenda para hoje.</div>`;
+}
+function aaStepCompromissos(){
+  return `<div class="aa-intro">Para fechar: de 1 a 3 compromissos para a próxima semana. Eles vão ficar num card na sua tela durante toda a semana.</div>
+  ${[0,1,2].map(i=>`<div class="f-group"><label class="f-label">Compromisso ${i+1}${i===0?' (obrigatório)':' (opcional)'}</label><input class="f-input" maxlength="160" value="${escHtml(aaState.compromissos[i])}" oninput="aaSetCompromisso(${i},this.value)" placeholder="${['Ex: Responder todo lead novo em até 5 minutos','Ex: Agendar a ligação da Dra. para todo lead qualificado no mesmo dia','Ex: Zerar os follow-ups vencidos até quarta'][i]}"/></div>`).join('')}`;
+}
+function renderAAStep(){
+  if(!aaState)return;
+  const st=aaState.steps,idx=aaState.idx,passo=st[idx];
+  document.getElementById('aa-progresso').innerHTML=st.map((s,i)=>`<div class="aa-passo ${i<idx?'feito':i===idx?'atual':''}"><div class="aa-passo-num">${i<idx?'✓':i+1}</div><div class="aa-passo-label">${AA_PASSOS[s]}</div></div>`).join('<div class="aa-passo-linha"></div>');
+  document.getElementById('aa-periodo').textContent=`${aaState.c.atendente} · ${formatDatetime(aaState.ini)} até agora`;
+  const html={anteriores:aaStepAnteriores,numeros:aaStepNumeros,conferencia:aaStepConferencia,pendencias:aaStepPendencias,reflexao:aaStepReflexao,compromissos:aaStepCompromissos}[passo]();
+  const body=document.getElementById('aa-conteudo');body.innerHTML=`<div class="aa-titulo-passo">${AA_PASSOS[passo]}</div>`+html;body.scrollTop=0;
+  document.getElementById('btn-aa-voltar').style.visibility=idx>0?'visible':'hidden';
+  const ultimo=idx===st.length-1;
+  const prox=document.getElementById('btn-aa-proximo');
+  prox.textContent=ultimo?'✅ Concluir autoauditoria':'Próximo →';
+}
+window.aaNavegar=function(dir){
+  if(!aaState)return;
+  const passo=aaState.steps[aaState.idx];
+  if(dir>0){
+    if(passo==='anteriores'&&aaState.compAnt.some(x=>!x.status))return showToast('Marque como ficou cada compromisso','error');
+    if(passo==='reflexao'){const r=aaState.reflexao;if([r.objecao,r.diferente,r.hoje].some(v=>!v||v.trim().length<3))return showToast('Responda as três perguntas','error');}
+    if(aaState.idx===aaState.steps.length-1)return concluirAutoauditoria();
+  }
+  aaState.idx=Math.max(0,Math.min(aaState.steps.length-1,aaState.idx+dir));
+  renderAAStep();
+};
+async function concluirAutoauditoria(){
+  const comps=aaState.compromissos.map(x=>x.trim()).filter(Boolean);
+  if(!comps.length)return showToast('Escreva pelo menos um compromisso para a próxima semana','error');
+  const btn=document.getElementById('btn-aa-proximo');if(btn.disabled)return;
+  btn.disabled=true;btn.textContent='Salvando...';
+  const c=aaState.c,agora=new Date();
+  const falhasFim=calcFalhas(c.atendente,aaState.ini,agora);
+  const kFim=new Set(falhasFim.map(f=>f.k));
+  const p=calcPendencias(c.atendente);
+  const tira=n=>{const{idsConversoes,...r}=n;return r;};
+  const conv=(aaState.numeros.idsConversoes||[]).map(id=>allLeads.find(l=>l.id===id)).filter(Boolean);
+  const resultado={
+    periodo:{ini:aaState.ini.toISOString(),fim:agora.toISOString()},
+    numeros:tira(aaState.numeros),numerosAnt:tira(aaState.numerosAnt),ritmo:aaState.ritmo,
+    compromissosAnteriores:aaState.compAnt,
+    falhasInicio:aaState.falhasInicio,
+    falhasCorrigidas:aaState.falhasInicio.filter(f=>!kFim.has(f.k)),
+    falhasPendentes:falhasFim.map(f=>({k:f.k,tipo:f.tipo,leadId:f.lead.id,leadNome:f.lead.name||'',txt:f.txt})),
+    correcoes:aaState.correcoes,
+    conferenciaConversoes:conv.map(l=>({leadId:l.id,nome:l.name||'',tipo:l.tipo||'',itens:Object.fromEntries(itensChecklist(l).map(i=>[i.k,!!l.checklistConversao?.[i.k]]))})),
+    pendencias:{fuVencidos:p.fuVencidos.length,tarefasAbertas:p.tarefas.length,qualifSemLigacao:p.semLigacao.length},
+    reflexao:{objecao:aaState.reflexao.objecao.trim(),diferente:aaState.reflexao.diferente.trim(),hoje:aaState.reflexao.hoje.trim()},
+    compromissos:comps,
+    noPrazo:agora<=prazoAutoauditoria(c)
+  };
+  try{
+    await updateDoc(doc(db,'compromissos',aaState.compId),{status:'feito',resultado,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:agora.toISOString()});
+    if(aaState.anteriorId)await updateDoc(doc(db,'compromissos',aaState.anteriorId),{avaliacaoCompromissos:aaState.compAnt}).catch(()=>{});
+    await criarTarefaAgenda('acao-semana',null,c.atendente,`🎯 Ação de hoje: ${resultado.reflexao.hoje}`);
+    document.getElementById('modal-autoauditoria').style.display='none';aaState=null;
+    showToast('💙 Autoauditoria concluída! Sua ação de hoje já está na Agenda.','success',6000,true);
+  }catch(e){showToast('Erro ao salvar: '+e.message,'error');}
+  finally{btn.disabled=false;}
+}
+
+// ── Destaque na tela da atendente: hora da autoauditoria + compromissos da semana ──
+function renderAutoauditoriaArea(){
+  const el=document.getElementById('aa-area');if(!el)return;
+  if(!currentUser||currentUser.role==='gestora'){el.innerHTML='';return;}
+  const now=new Date();
+  const minhas=allCompromissos.filter(c=>c.tipo==='autoauditoria'&&c.atendente===currentUser.nome);
+  const pend=minhas.filter(c=>c.status==='pendente'&&dtCompromisso(c)<=now).sort((a,b)=>a.data.localeCompare(b.data))[0];
+  const ult=minhas.filter(c=>c.status==='feito'&&c.resultado?.compromissos?.length).sort((a,b)=>b.data.localeCompare(a.data))[0];
+  let html='';
+  if(pend){
+    const atraso=now>prazoAutoauditoria(pend);
+    html+=`<div class="aa-banner ${atraso?'atraso':''}"><div><div class="aa-banner-titulo">🪞 Hora da sua autoauditoria semanal</div><div class="aa-banner-sub">${atraso?'O prazo passou, mas ainda dá tempo. ':''}São 15 a 20 minutos para olhar a sua semana, ajustar registros e planejar a próxima.</div></div><button class="btn-save" onclick="abrirAutoauditoria('${pend.id}')">▶ Começar agora</button></div>`;
+  }
+  if(ult){
+    html+=`<div class="aa-compromissos-card"><div class="aa-banner-titulo">🎯 Meus compromissos da semana</div><ul>${ult.resultado.compromissos.map(t=>`<li>${escHtml(t)}</li>`).join('')}</ul></div>`;
+  }
+  el.innerHTML=html;
+}
+function agCardAutoauditoria(c,now){
+  const prazo=prazoAutoauditoria(c);
+  const atraso=now>prazo;
+  const minha=c.atendente===currentUser?.nome;
+  return `
+  <div class="fu-card2 aa-card ${atraso?'fu-late':''}" ${minha?`onclick="abrirAutoauditoria('${c.id}')"`:''}>
+    <div class="fu2-header"><span class="fu2-name">${c.hora} · 🪞 Autoauditoria da semana</span></div>
+    <div class="ag-tarefa-desc">15 a 20 minutos para olhar a semana, ajustar registros e planejar a próxima.</div>
+    ${atraso?'<div class="ag-venc24">⏰ Em atraso (prazo: 1h após o horário)</div>':`<div class="fua-data">⏳ Prazo: ${dataCurta(c.data)} até ${horaStr(prazo)}</div>`}
+    <div class="fu2-meta"><span class="fu2-resp">${escHtml(c.atendente||'')}</span></div>
+    ${minha&&dtCompromisso(c)<=now?`<div class="fu2-actions"><button class="btn-done" onclick="event.stopPropagation();abrirAutoauditoria('${c.id}')">▶ Começar</button></div>`:''}
+  </div>`;
+}
+
+// ── Painel da gestora: aba Autoauditorias ──
+function normObjecao(t){return String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^\w\s]/g,'').replace(/\s+/g,' ').trim();}
+window.setAAFiltro=function(tipo,v){if(tipo==='atendente')aaFiltroAtendente=v;else aaFiltroSemana=v;renderPainelAutoauditorias();};
+function renderPainelAutoauditorias(){
+  const el=document.getElementById('aa-painel');if(!el)return;
+  const docs=allCompromissos.filter(c=>c.tipo==='autoauditoria');
+  const semanas=[...new Set(docs.map(c=>c.data))].sort().reverse();
+  const nomes=[...new Set(docs.map(c=>c.atendente).filter(Boolean))].sort();
+  let lista=docs.slice();
+  if(aaFiltroAtendente!=='TODAS')lista=lista.filter(c=>c.atendente===aaFiltroAtendente);
+  if(aaFiltroSemana!=='TODAS')lista=lista.filter(c=>c.data===aaFiltroSemana);
+  lista.sort((a,b)=>b.data.localeCompare(a.data)||String(a.atendente).localeCompare(String(b.atendente)));
+  const now=new Date();
+  const statusAA=c=>{
+    if(c.status==='feito')return c.resultado?.noPrazo?['ok','✅ Concluída no prazo']:['tarde','🕒 Concluída com atraso'];
+    if(now>prazoAutoauditoria(c))return['atraso','⏰ Em atraso'];
+    return['pend','⏳ Agendada'];
+  };
+  const pctT=v=>v===null||v===undefined?'—':v+'%';
+  const linhaNum=(lbl,a,b,fmt,menor)=>{const f=fmt||(v=>v??'—');return `<tr><td>${lbl}</td><td><strong>${f(a)}</strong> ${aaSeta(a,b,menor)}</td><td>${f(b)}</td></tr>`;};
+  const card=c=>{
+    const [cls,txt]=statusAA(c);
+    const r=c.resultado;
+    let corpo='';
+    if(r){
+      const n=r.numeros||{},a=r.numerosAnt||{},rt=r.ritmo||{};
+      const statusComp={cumprido:'✅ Cumprido',parcial:'🌗 Parcial',nao_cumprido:'⭕ Não cumprido'};
+      corpo=`
+      <div class="aa-g-grid">
+        <div class="aa-g-bloco"><div class="aa-sub">📊 Números da semana</div>
+          <table class="est-table"><thead><tr><th></th><th>Semana</th><th>Anterior</th></tr></thead><tbody>
+          ${linhaNum('Leads recebidos',n.recebidos,a.recebidos)}${linhaNum('Qualificados',n.qualificados,a.qualificados)}
+          ${linhaNum('Ligações agendadas',n.ligAgendadas,a.ligAgendadas)}${linhaNum('Ligações realizadas',n.ligRealizadas,a.ligRealizadas)}
+          ${linhaNum('Com decisão',n.ligDecisao,a.ligDecisao)}${linhaNum('Conversões',n.conversoes,a.conversoes)}
+          ${linhaNum('Tempo médio',n.tempoMedio,a.tempoMedio,formatMin,true)}${linhaNum('% no verde',n.pctVerde,a.pctVerde,pctT)}
+          </tbody></table>
+          ${rt.meta?`<div class="cfg-hint" style="margin-top:.4rem">Ritmo do mês: ${rt.realizado} de ${rt.meta} (esperado até o dia: ${rt.esperado})</div>`:''}
+        </div>
+        <div class="aa-g-bloco"><div class="aa-sub">💭 Reflexão</div>
+          <div class="aa-g-q"><span>Objeção mais frequente</span>${escHtml(r.reflexao?.objecao||'—')}</div>
+          <div class="aa-g-q"><span>Vai fazer diferente</span>${escHtml(r.reflexao?.diferente||'—')}</div>
+          <div class="aa-g-q"><span>Ação do dia</span>${escHtml(r.reflexao?.hoje||'—')}</div>
+          <div class="aa-sub" style="margin-top:.6rem">🎯 Compromissos assumidos</div>
+          <ul class="aa-g-ul">${(r.compromissos||[]).map(t=>`<li>${escHtml(t)}</li>`).join('')}</ul>
+          ${(r.compromissosAnteriores||[]).length?`<div class="aa-sub" style="margin-top:.6rem">↩️ Compromissos da semana anterior</div><ul class="aa-g-ul">${r.compromissosAnteriores.map(x=>`<li>${escHtml(x.texto)} <strong>${statusComp[x.status]||''}</strong></li>`).join('')}</ul>`:''}
+        </div>
+      </div>
+      <div class="aa-g-bloco"><div class="aa-sub">🔍 Conferência dos registros</div>
+        <div class="cfg-hint">Encontradas: ${(r.falhasInicio||[]).length} · Corrigidas: ${(r.falhasCorrigidas||[]).length} · Ainda pendentes: ${(r.falhasPendentes||[]).length}</div>
+        ${(r.falhasPendentes||[]).length?`<ul class="aa-g-ul">${r.falhasPendentes.map(f=>`<li><a class="aa-link" onclick="openLead('${f.leadId}')">${escHtml(f.leadNome)}</a>: ${escHtml(f.txt)}</li>`).join('')}</ul>`:''}
+        ${(r.correcoes||[]).length?`<div class="est-table-wrap" style="margin-top:.4rem"><table class="est-table"><thead><tr><th>Lead</th><th>Campo</th><th>Antes</th><th>Depois</th><th>Quando</th></tr></thead><tbody>${r.correcoes.map(x=>`<tr><td><a class="aa-link" onclick="openLead('${x.leadId}')">${escHtml(x.leadNome)}</a></td><td>${escHtml(x.campo)}</td><td>${escHtml(x.antes)}</td><td>${escHtml(x.depois)}</td><td>${formatDatetime(new Date(x.em))}</td></tr>`).join('')}</tbody></table></div>`:''}
+      </div>
+      ${(r.conferenciaConversoes||[]).length?`<div class="aa-g-bloco"><div class="aa-sub">✅ Conferência das conversões</div><div class="est-table-wrap"><table class="est-table"><thead><tr><th>Lead</th>${CHECKLIST_CONV.map(i=>`<th title="${i.label}">${i.label.split(' ').slice(0,2).join(' ')}</th>`).join('')}</tr></thead><tbody>${r.conferenciaConversoes.map(x=>`<tr><td><a class="aa-link" onclick="openLead('${x.leadId}')">${escHtml(x.nome)}</a></td>${CHECKLIST_CONV.map(i=>`<td>${i.k in (x.itens||{})?(x.itens[i.k]?'✅':'❌'):'—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`:''}
+      <div class="cfg-hint">Pendências no momento da conclusão: ${r.pendencias?.fuVencidos??0} follow-ups vencidos · ${r.pendencias?.tarefasAbertas??0} tarefas abertas · ${r.pendencias?.qualifSemLigacao??0} qualificados sem ligação</div>`;
+    }
+    return `<details class="aa-g-card" ${lista.length<=3&&r?'open':''}><summary><span class="aa-g-nome">${escHtml(c.atendente||'')}</span><span class="aa-g-semana">Semana de ${dataCurta(c.data)} · ${c.hora}</span><span class="aa-g-status ${cls}">${txt}</span></summary>${corpo||'<div class="cfg-hint" style="padding:.6rem 0">Ainda não concluída.</div>'}</details>`;
+  };
+  // Objeções reunidas: autoauditorias + ligações da Dra.
+  const fontes=[];
+  docs.filter(c=>c.status==='feito'&&c.resultado?.reflexao?.objecao&&(aaFiltroAtendente==='TODAS'||c.atendente===aaFiltroAtendente))
+    .forEach(c=>fontes.push({t:c.resultado.reflexao.objecao,origem:`Autoauditoria · ${c.atendente}`,data:c.data}));
+  allCompromissos.filter(c=>c.tipo==='ligacao-dra'&&c.objecao&&(aaFiltroAtendente==='TODAS'||c.atendenteLead===aaFiltroAtendente))
+    .forEach(c=>fontes.push({t:c.objecao,origem:`Ligação da Dra. · ${c.leadNome||''}`,data:c.data}));
+  const grupos={};
+  fontes.forEach(f=>{const k=normObjecao(f.t);if(!k)return;(grupos[k]=grupos[k]||{texto:f.t,itens:[]}).itens.push(f);});
+  const objs=Object.values(grupos).sort((a,b)=>b.itens.length-a.itens.length);
+  el.innerHTML=`
+    <div class="aa-g-filtros">
+      <select class="search-input" style="width:auto" onchange="setAAFiltro('atendente',this.value)"><option value="TODAS">👤 Todas as atendentes</option>${nomes.map(n=>`<option ${aaFiltroAtendente===n?'selected':''}>${escHtml(n)}</option>`).join('')}</select>
+      <select class="search-input" style="width:auto" onchange="setAAFiltro('semana',this.value)"><option value="TODAS">📅 Todas as semanas</option>${semanas.map(s=>`<option value="${s}" ${aaFiltroSemana===s?'selected':''}>Semana de ${formatDate(s+'T12:00:00')}</option>`).join('')}</select>
+    </div>
+    ${lista.length?lista.map(card).join(''):'<div class="est-section"><div class="cfg-hint">Nenhuma autoauditoria encontrada com esses filtros. A primeira é criada automaticamente na Agenda de cada atendente nesta semana.</div></div>'}
+    <div class="est-section" style="margin-top:1rem">
+      <div class="est-section-title">🗣 Objeções reunidas (autoauditorias e ligações da Dra.)</div>
+      ${objs.length?`<div class="aa-lista">${objs.map(g=>`<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome">${escHtml(g.texto)}</span><span class="aa-falha">${g.itens.length}×</span></div><div class="cfg-hint">${g.itens.map(i=>`${escHtml(i.origem)} (${dataCurta(i.data)})`).join(' · ')}</div></div>`).join('')}</div>`:'<div class="cfg-hint">Nenhuma objeção registrada ainda.</div>'}
+    </div>`;
 }
 
 // ─── GERAR MENSAGEM FUP COM IA ───
@@ -2454,6 +2997,7 @@ window.openLead=function(id){
 window.closeLead=()=>{
   document.getElementById('modal-lead').style.display='none';
   editingLeadId=null;
+  aaVoltarDoLead();
   // Always reset save button state
   const btn=document.getElementById('btn-salvar-lead');
   if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
@@ -3838,6 +4382,7 @@ window.toggleHonorariosField=function(){
     rowF.style.display=isClosed?'flex':'none';
   }
   calcHonorarios();
+  renderChecklistLead();
 };
 
 // ── Financial Panel render ──
@@ -4376,7 +4921,7 @@ window.trocarPlano=function(id){
 window.switchTab=function(tab){
   currentTab=tab;
   window.scrollTo({top:0,behavior:'smooth'});
-  ['kanban','table','equipe','relatorios','estrategia','indicacao'].forEach(t=>{
+  ['kanban','table','equipe','relatorios','estrategia','indicacao','autoauditorias'].forEach(t=>{
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
     document.getElementById('view-'+t)?.classList.toggle('hidden',t!==tab);
   });
@@ -5457,6 +6002,96 @@ body.light-theme .lig-janela-btn.active{background:#4F6EF7;color:#fff}
 body.light-theme .lig-remarcada{color:#3B5BDB}
 body.light-theme .lig-cancelada{color:#6B7280}
 
+
+/* ═══ FASE 3: AUTOAUDITORIA ═══ */
+.aa-modal{max-width:860px}
+.aa-periodo{font-size:.7rem;color:#6B7280;margin-top:.15rem}
+.aa-progresso{display:flex;align-items:flex-start;padding:.85rem 1.4rem;border-bottom:1px solid #1E2235;overflow-x:auto;gap:0}
+.aa-passo{display:flex;flex-direction:column;align-items:center;gap:.25rem;min-width:78px;flex-shrink:0}
+.aa-passo-num{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;border:2px solid #2A2F45;color:#6B7280;background:#13161F}
+.aa-passo-label{font-size:.6rem;font-weight:700;color:#6B7280;text-align:center;line-height:1.2}
+.aa-passo.feito .aa-passo-num{background:#10B981;border-color:#10B981;color:#fff}
+.aa-passo.feito .aa-passo-label{color:#10B981}
+.aa-passo.atual .aa-passo-num{background:#4F6EF7;border-color:#4F6EF7;color:#fff;box-shadow:0 0 0 4px rgba(79,110,247,.2)}
+.aa-passo.atual .aa-passo-label{color:#4F6EF7}
+.aa-passo-linha{flex:1;min-width:14px;height:2px;background:#2A2F45;margin-top:12px}
+.aa-conteudo{padding-bottom:1.2rem}
+.aa-titulo-passo{font-size:1rem;font-weight:800;color:#F1F3F9}
+.aa-intro{font-size:.8rem;color:#9CA3AF;line-height:1.55;background:rgba(79,110,247,.06);border:1px solid rgba(79,110,247,.18);border-radius:8px;padding:.65rem .85rem}
+.aa-sub{font-size:.74rem;font-weight:700;color:#C4C9D8;text-transform:uppercase;letter-spacing:.04em}
+.aa-pergunta{font-size:.78rem;text-transform:none;letter-spacing:0;color:#F1F3F9}
+.aa-nums{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.6rem}
+.aa-num{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.7rem .8rem}
+.aa-num-val{font-size:1.35rem;font-weight:800;color:#F1F3F9;display:flex;align-items:center;gap:.35rem}
+.aa-num-label{font-size:.68rem;color:#9CA3AF;margin-top:.15rem}
+.aa-num-ant{font-size:.6rem;color:#6B7280;margin-top:.1rem}
+.aa-seta{font-size:.72rem;font-weight:800}
+.aa-seta.up{color:#10B981}.aa-seta.down{color:#EF4444}.aa-seta.igual{color:#6B7280}
+.aa-ritmo{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.85rem 1rem;display:flex;flex-direction:column;gap:.6rem}
+.aa-ritmo-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem}
+.aa-ritmo-grid div{display:flex;flex-direction:column;text-align:center}
+.aa-ritmo-grid strong{font-size:1.3rem;color:#4F6EF7}
+.aa-ritmo-grid span{font-size:.64rem;color:#9CA3AF}
+.aa-msg{font-size:.78rem;font-weight:600;border-radius:8px;padding:.55rem .8rem}
+.aa-msg.ok{background:rgba(16,185,129,.1);color:#10B981}
+.aa-msg.atencao{background:rgba(245,166,35,.1);color:#F5A623}
+.aa-lista{display:flex;flex-direction:column;gap:.5rem}
+.aa-item{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.65rem .8rem;display:flex;flex-direction:column;gap:.45rem}
+.aa-item-link{cursor:pointer;transition:border-color .15s}
+.aa-item-link:hover{border-color:#4F6EF7}
+.aa-item-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.aa-item-nome{font-size:.84rem;font-weight:700;color:#F1F3F9;cursor:pointer}
+.aa-item-txt{font-size:.78rem;color:#D1D5DB}
+.aa-falha{font-size:.68rem;font-weight:700;color:#F5A623;background:rgba(245,166,35,.1);border-radius:999px;padding:.12rem .55rem}
+.aa-ok{font-size:.68rem;font-weight:700;color:#10B981;background:rgba(16,185,129,.1);border-radius:999px;padding:.12rem .55rem}
+.aa-fix{display:flex;align-items:flex-end;gap:.5rem;flex-wrap:wrap}
+.aa-fix label{display:flex;flex-direction:column;gap:.25rem;font-size:.66rem;font-weight:700;color:#9CA3AF}
+.aa-fix .f-input{width:auto}
+.aa-fix textarea{flex:1;min-width:220px}
+.aa-opcoes{display:flex;gap:.35rem;flex-wrap:wrap}
+.aa-opc{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:7px;padding:.3rem .65rem;font-size:.72rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif}
+.aa-opc.active.cumprido{background:rgba(16,185,129,.15);border-color:#10B981;color:#10B981}
+.aa-opc.active.parcial{background:rgba(245,166,35,.15);border-color:#F5A623;color:#F5A623}
+.aa-opc.active.nao_cumprido{background:rgba(239,68,68,.12);border-color:#EF4444;color:#EF4444}
+.cc-chips{display:flex;gap:.35rem;flex-wrap:wrap}
+.cc-chip{background:#1E2235;border:1px solid #2A2F45;color:#9CA3AF;border-radius:999px;padding:.28rem .7rem;font-size:.7rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:all .15s}
+.cc-chip:hover{border-color:#10B981}
+.cc-chip.ok{background:rgba(16,185,129,.14);border-color:#10B981;color:#10B981}
+.aa-banner{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;background:linear-gradient(135deg,rgba(139,92,246,.16),rgba(79,110,247,.12));border:1px solid #8B5CF6;border-radius:12px;padding:.9rem 1.2rem;margin-bottom:1rem;animation:pulseGlow 2.4s ease-in-out infinite}
+.aa-banner.atraso{border-color:#EF4444}
+.aa-banner-titulo{font-size:.9rem;font-weight:800;color:#F1F3F9}
+.aa-banner-sub{font-size:.74rem;color:#9CA3AF;margin-top:.15rem}
+.aa-compromissos-card{background:#13161F;border:1px solid #1E2235;border-left:3px solid #EC4899;border-radius:12px;padding:.8rem 1.2rem;margin-bottom:1rem}
+.aa-compromissos-card ul,.aa-g-ul{margin:.35rem 0 0 1.1rem;font-size:.78rem;color:#D1D5DB;line-height:1.6}
+.aa-card{border-left:3px solid #8B5CF6}
+.aa-g-filtros{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem}
+.aa-g-card{background:#13161F;border:1px solid #1E2235;border-radius:12px;padding:.85rem 1.1rem;margin-bottom:.65rem}
+.aa-g-card summary{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;cursor:pointer;list-style:none}
+.aa-g-card summary::-webkit-details-marker{display:none}
+.aa-g-card[open] summary{margin-bottom:.85rem}
+.aa-g-nome{font-size:.9rem;font-weight:800;color:#F1F3F9}
+.aa-g-semana{font-size:.72rem;color:#9CA3AF}
+.aa-g-status{margin-left:auto;font-size:.68rem;font-weight:700;border-radius:999px;padding:.15rem .6rem}
+.aa-g-status.ok{background:rgba(16,185,129,.14);color:#10B981}
+.aa-g-status.tarde{background:rgba(245,166,35,.14);color:#F5A623}
+.aa-g-status.atraso{background:rgba(239,68,68,.14);color:#EF4444}
+.aa-g-status.pend{background:rgba(107,114,128,.16);color:#9CA3AF}
+.aa-g-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem}
+.aa-g-bloco{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.75rem .9rem;margin-bottom:.6rem;display:flex;flex-direction:column;gap:.4rem}
+.aa-g-q{font-size:.78rem;color:#D1D5DB;line-height:1.45}
+.aa-g-q span{display:block;font-size:.62rem;font-weight:700;color:#6B7280;text-transform:uppercase;letter-spacing:.04em}
+.aa-link{color:#4F6EF7;cursor:pointer;font-weight:600}
+@media(max-width:700px){.aa-g-grid{grid-template-columns:1fr}.aa-ritmo-grid{grid-template-columns:1fr 1fr}}
+body.light-theme .aa-progresso{border-bottom-color:#E2E5EE}
+body.light-theme .aa-passo-num{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .aa-titulo-passo,body.light-theme .aa-num-val,body.light-theme .aa-item-nome,body.light-theme .aa-banner-titulo,body.light-theme .aa-g-nome,body.light-theme .aa-pergunta{color:#1A1D2E}
+body.light-theme .aa-num,body.light-theme .aa-ritmo,body.light-theme .aa-item,body.light-theme .aa-g-bloco{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .aa-item-txt,body.light-theme .aa-g-q,body.light-theme .aa-compromissos-card ul,body.light-theme .aa-g-ul{color:#374151}
+body.light-theme .aa-sub{color:#4B5563}
+body.light-theme .aa-opc,body.light-theme .cc-chip{background:#FFFFFF;border-color:#E2E5EE;color:#4B5563}
+body.light-theme .cc-chip.ok{background:rgba(16,185,129,.12);border-color:#10B981;color:#059669}
+body.light-theme .aa-compromissos-card,body.light-theme .aa-g-card{background:#FFFFFF;border-color:#E2E5EE}
+
 </style>
 </head>
 <body>
@@ -5506,6 +6141,7 @@ body.light-theme .lig-cancelada{color:#6B7280}
         <button id="tab-estrategia" class="tab-btn"            onclick="switchTab('estrategia')" style="display:none">🎯 Estratégia</button>
         <button id="tab-equipe"     class="tab-btn"            onclick="switchTab('equipe')" style="display:none">👥 Equipe</button>
         <button id="tab-indicacao"  class="tab-btn"            onclick="switchTab('indicacao')">🤝 Indicação</button>
+        <button id="tab-autoauditorias" class="tab-btn"        onclick="switchTab('autoauditorias')" style="display:none">🪞 Autoauditorias</button>
       </div>
     </div>
     <div class="period-bar" id="dash-period-bar">
@@ -5531,6 +6167,7 @@ body.light-theme .lig-cancelada{color:#6B7280}
       <div class="metric-card mc-red clickable-card" onclick="abrirMetricaLeads('SEM RESPOSTA')">   <div class="metric-label">Sem Resposta</div>  <div class="metric-value" id="m-semresp">—</div><div class="metric-pct" id="m-semresp-pct"></div></div>
       <div class="metric-card mc-slate clickable-card" onclick="abrirMetricaLeads('DESQUALIFICADO')"><div class="metric-label">Desqualificados</div><div class="metric-value" id="m-desq">—</div><div class="metric-pct" id="m-desq-pct"></div></div>
     </div>
+    <div id="aa-area"></div>
     <div class="tarefa-hoje-card" id="tarefa-hoje-card" style="display:none">
       <div class="tarefa-hoje-header">
         <span class="tarefa-hoje-icon">⏰</span>
@@ -5638,7 +6275,7 @@ body.light-theme .lig-cancelada{color:#6B7280}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20c</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20d</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -5715,6 +6352,14 @@ body.light-theme .lig-cancelada{color:#6B7280}
       <div id="equipe-lista"></div>
       <div id="cfg-comercial-wrap" class="est-section" style="margin-top:1.25rem;display:none"></div>
     </div>
+    <!-- FASE 3: AUTOAUDITORIAS (GESTORA) -->
+    <div id="view-autoauditorias" class="hidden">
+      <div style="margin-bottom:1rem">
+        <div style="font-size:.95rem;font-weight:700">🪞 Autoauditorias da equipe</div>
+        <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Resumo semanal de cada atendente: números, correções feitas, conferência das conversões, reflexão e compromissos</div>
+      </div>
+      <div id="aa-painel"></div>
+    </div>
     <!-- INDICAÇÃO VIEW -->
     <div id="view-indicacao" class="hidden">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
@@ -5780,6 +6425,11 @@ body.light-theme .lig-cancelada{color:#6B7280}
         <div class="f-group" id="fechamento-row" style="display:none">
           <label class="f-label">📅 Data de Fechamento do Contrato</label>
           <input id="f-data-fechamento" class="f-input" type="date" title="Data em que o contrato foi efetivamente fechado"/>
+        </div>
+        <div class="f-group full" id="checklist-conv-row" style="display:none">
+          <label class="f-label">✅ Conferência da conversão</label>
+          <div class="cc-chips" id="checklist-conv-itens"></div>
+          <div class="cfg-hint">Marque cada item no momento em que fizer. Na autoauditoria de sexta você só confere o que faltou.</div>
         </div>
         <div class="f-group full">
           <label class="f-label">Nova Nota</label>
@@ -6106,6 +6756,22 @@ body.light-theme .lig-cancelada{color:#6B7280}
         <div class="f-group" style="margin-top:.3rem"><label class="f-label">Objeção do cliente (obrigatória em "Não decidiu")</label><textarea id="lr-objecao" class="f-textarea" placeholder="Ex: Quer conversar com o marido antes; medo de ser golpe"></textarea></div>
         <button class="lig-res-btn lig-res-naodecidiu" onclick="registrarResultadoLigacao('nao_decidiu')"><span>🤔</span><div><div>Não decidiu</div><small>A objeção vai para o histórico e o lead segue a trilha de follow-up</small></div></button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- FASE 3: AUTOAUDITORIA GUIADA -->
+<div id="modal-autoauditoria" class="modal-overlay">
+  <div class="modal-box aa-modal">
+    <div class="modal-head">
+      <div><span class="modal-title">🪞 Autoauditoria da semana</span><div class="aa-periodo" id="aa-periodo"></div></div>
+      <button class="modal-close" onclick="fecharAutoauditoria()">✕</button>
+    </div>
+    <div class="aa-progresso" id="aa-progresso"></div>
+    <div class="modal-body aa-conteudo" id="aa-conteudo"></div>
+    <div class="modal-foot">
+      <button class="btn-cancel" id="btn-aa-voltar" onclick="aaNavegar(-1)">← Voltar</button>
+      <button class="btn-save" id="btn-aa-proximo" onclick="aaNavegar(1)">Próximo →</button>
     </div>
   </div>
 </div>
