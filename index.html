@@ -767,7 +767,8 @@ const CFG_PADRAO={
   janelasDra:['10:00','11:00','13:00','16:00'],
   capacidadeJanela:2,
   autoauditoria:{},   // { uid: 'HH:MM' }
-  metas:{}            // { 'AAAA-MM': { uid: numero } }
+  metas:{},           // (legado) metas mensais manuais, não usado mais
+  metaSemanal:{}      // { uid: numero } padrão 2 por atendente
 };
 function mergeCfg(d){
   d=d||{};
@@ -778,7 +779,8 @@ function mergeCfg(d){
     feriados:Array.isArray(d.feriados)?d.feriados:[],
     janelasDra:Array.isArray(d.janelasDra)&&d.janelasDra.length?d.janelasDra:[...CFG_PADRAO.janelasDra],
     autoauditoria:d.autoauditoria||{},
-    metas:d.metas||{}
+    metas:d.metas||{},
+    metaSemanal:d.metaSemanal||{}
   };
 }
 let cfgComercial=mergeCfg({});
@@ -824,6 +826,7 @@ function faixaTempo(l){
   if(l.tempoRespostaMin<=f.amarelo)return 'amarelo';
   return 'vermelho';
 }
+function numBR(v){return v===null||v===undefined?'—':String(v).replace('.',',');}
 function formatMin(m){
   if(typeof m!=='number')return '—';
   if(m<60)return `${m} min`;
@@ -917,10 +920,10 @@ function renderConfigComercial(){
           <div class="cfg-hint" id="cfg-auto-aviso">Escalone os horários para nunca deixar leads sem resposta.</div>
         </div>
         <div class="cfg-card">
-          <div class="cfg-card-title">🎯 Meta mensal de conversões</div>
-          <div class="cfg-row"><label class="f-label">Mês</label><input type="month" id="cfg-meta-mes" class="f-input" value="${cfgMesMeta}" onchange="cfgTrocarMesMeta(this.value)"/></div>
+          <div class="cfg-card-title">🎯 Meta semanal de conversões</div>
           <div id="cfg-metas-lista"></div>
-          <div class="cfg-row cfg-total"><span class="cfg-nome">Meta do time</span><strong id="cfg-meta-total">0</strong></div>
+          <div class="cfg-row cfg-total"><span class="cfg-nome">Time por semana</span><strong id="cfg-meta-total">0</strong></div>
+          <div class="cfg-hint" id="cfg-meta-mes-info"></div>
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;margin-top:1rem"><button class="btn-save" id="btn-cfg-salvar" onclick="salvarConfigComercial()">💾 Salvar configurações</button></div>
@@ -938,26 +941,26 @@ function renderCfgJanelas(){
   el.innerHTML=l.length?l.map(j=>`<span class="cfg-chip">${j}<button onclick="cfgRemJanela('${j}')" title="Remover">✕</button></span>`).join(''):'<span class="cfg-hint" style="margin:0">Nenhuma janela cadastrada.</span>';
 }
 function lerMetasDaTela(){
-  document.querySelectorAll('.cfg-meta-input').forEach(i=>{
-    const mes=i.dataset.mes;
-    if(!cfgDraft.metas[mes])cfgDraft.metas[mes]={};
-    cfgDraft.metas[mes][i.dataset.uid]=parseInt(i.value)||0;
-  });
+  if(!cfgDraft.metaSemanal)cfgDraft.metaSemanal={};
+  document.querySelectorAll('.cfg-meta-input').forEach(i=>{cfgDraft.metaSemanal[i.dataset.uid]=parseInt(i.value)||0;});
 }
 function renderCfgMetas(){
   const el=document.getElementById('cfg-metas-lista');if(!el)return;
-  const us=usuariosAtivos();
-  const doMes=cfgDraft.metas[cfgMesMeta]||{};
-  el.innerHTML=us.length?us.map(u=>`<div class="cfg-row"><span class="cfg-nome">${u.nome}</span><input type="number" min="0" class="f-input cfg-num cfg-meta-input" data-uid="${u.id}" data-mes="${cfgMesMeta}" value="${doMes[u.id]||0}" oninput="cfgSomarMetas()"/></div>`).join(''):'<div class="cfg-hint">Nenhuma colaboradora ativa.</div>';
+  const us=usuariosAtivos().filter(u=>u.role!=='gestora');
+  const ms=cfgDraft.metaSemanal||{};
+  el.innerHTML=us.length?us.map(u=>`<div class="cfg-row"><span class="cfg-nome">${u.nome}</span><input type="number" min="0" class="f-input cfg-num cfg-meta-input" data-uid="${u.id}" value="${ms[u.id]===undefined||ms[u.id]===null?2:ms[u.id]}" oninput="cfgSomarMetas()"/><span class="cfg-unid">por semana</span><span class="cfg-unid cfg-meta-mes-uid" data-uid="${u.id}"></span></div>`).join(''):'<div class="cfg-hint">Nenhuma atendente ativa.</div>';
   cfgSomarMetas();
 }
 window.cfgSomarMetas=function(){
-  const t=[...document.querySelectorAll('.cfg-meta-input')].reduce((s,i)=>s+(parseInt(i.value)||0),0);
+  const ins=[...document.querySelectorAll('.cfg-meta-input')];
+  const t=ins.reduce((s,i)=>s+(parseInt(i.value)||0),0);
   const el=document.getElementById('cfg-meta-total');if(el)el.textContent=t;
-};
-window.cfgTrocarMesMeta=function(mes){
-  if(!mes)return;
-  lerMetasDaTela();cfgMesMeta=mes;renderCfgMetas();
+  const d=new Date(),dias=contarDiasUteis(new Date(d.getFullYear(),d.getMonth(),1),new Date(d.getFullYear(),d.getMonth()+1,0));
+  const sem=dias/5;
+  let totMes=0;
+  ins.forEach(i=>{const m=Math.ceil((parseInt(i.value)||0)*sem);totMes+=m;const sp=document.querySelector(`.cfg-meta-mes-uid[data-uid="${i.dataset.uid}"]`);if(sp)sp.textContent=`· ${m} no mês`;});
+  const info=document.getElementById('cfg-meta-mes-info');
+  if(info)info.textContent=`Este mês tem ${dias} dias úteis (${String(Math.round(sem*10)/10).replace('.',',')} semanas). A meta do mês é calculada sozinha: ${totMes} conversões para o time.`;
 };
 window.cfgChecarEscalonamento=function(){
   const el=document.getElementById('cfg-auto-aviso');if(!el)return;
@@ -1003,7 +1006,8 @@ window.salvarConfigComercial=async function(){
     janelasDra:[...cfgDraft.janelasDra].sort(),
     capacidadeJanela:capacidade,
     autoauditoria,
-    metas:cfgDraft.metas,
+    metas:cfgDraft.metas||{},
+    metaSemanal:cfgDraft.metaSemanal||{},
     atualizadoPor:currentUser?.nome||'',
     atualizadoEm:serverTimestamp()
   };
@@ -1759,10 +1763,37 @@ function contarDiasUteis(ini,fim){
   for(let i=0;i<400&&d<=f;i++){if(ehDiaUtil(d))n++;d.setDate(d.getDate()+1);}
   return n;
 }
+// Meta semanal de cada atendente (padrão 2). Gestora e inativas não têm meta.
+function metaSemanalDe(u){
+  if(!u||u.role==='gestora'||u.ativo===false||!u.nome)return 0;
+  const v=cfgComercial.metaSemanal?.[u.id];
+  return(v===undefined||v===null||v==='')?2:(parseInt(v)||0);
+}
+// Meta do mês = meta semanal × semanas úteis do mês (dias úteis ÷ 5), arredondado para cima
 function metaMensal(uid,ref){
   const d=ref||new Date();
-  const m=(cfgComercial.metas||{})[`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`]||{};
-  return uid?(parseInt(m[uid])||0):Object.values(m).reduce((s,v)=>s+(parseInt(v)||0),0);
+  const semanas=contarDiasUteis(new Date(d.getFullYear(),d.getMonth(),1),new Date(d.getFullYear(),d.getMonth()+1,0))/5;
+  const us=uid?allUsers.filter(u=>u.id===uid):allUsers;
+  return us.reduce((s,u)=>s+Math.ceil(metaSemanalDe(u)*semanas),0);
+}
+// Semana atual (segunda a domingo) com o status de cada atendente
+function semanaAtual(ref){
+  const d=new Date(ref);d.setHours(0,0,0,0);
+  const seg=new Date(d);seg.setDate(d.getDate()-((d.getDay()+6)%7));
+  const dom=new Date(seg);dom.setDate(seg.getDate()+6);dom.setHours(23,59,59,999);
+  return{seg,dom};
+}
+function calcSemanaMeta(agora,soNome){
+  agora=agora||new Date();
+  const{seg,dom}=semanaAtual(agora);
+  const fimSemana=localDateStr(agora)>=diaAutoauditoria(agora);
+  const itens=allUsers.filter(u=>metaSemanalDe(u)>0&&(!soNome||u.nome===soNome)).map(u=>{
+    const meta=metaSemanalDe(u);
+    const realizado=allLeads.filter(l=>l.assignee===u.nome&&l.status==='CONTRATO FECHADO'&&(()=>{const f=getDataFechamento(l);return f&&f>=seg&&f<=dom;})()).length;
+    return{nome:u.nome,uid:u.id,meta,realizado,cor:realizado>=meta?'verde':fimSemana?'vermelho':'amarelo'};
+  }).sort((a,b)=>a.nome.localeCompare(b.nome));
+  const cor=!itens.length||itens.every(i=>i.cor==='verde')?'verde':itens.some(i=>i.cor==='vermelho')?'vermelho':'amarelo';
+  return{seg,dom,itens,meta:itens.reduce((s,i)=>s+i.meta,0),realizado:itens.reduce((s,i)=>s+i.realizado,0),cor,fimSemana};
 }
 // Ritmo do mês: nome/uid nulos = time inteiro
 function calcRitmoMes(nome,uid,ref){
@@ -1926,7 +1957,8 @@ window.abrirAutoauditoria=function(compId){
     correcoes:[],reflexao:{objecao:'',diferente:'',hoje:''},compromissos:['','',''],
     numeros:calcNumerosAtendente(c.atendente,ini,fim),
     numerosAnt:calcNumerosAtendente(c.atendente,new Date(ini.getTime()-ms),new Date(fim.getTime()-ms)),
-    ritmo:calcRitmoMes(c.atendente,currentUser.uid,agora)
+    ritmo:calcRitmoMes(c.atendente,currentUser.uid,agora),
+    semana:calcSemanaMeta(agora,c.atendente).itens[0]||null
   };
   document.getElementById('modal-autoauditoria').style.display='flex';
   renderAAStep();
@@ -1981,11 +2013,19 @@ function aaStepNumeros(){
     ${aaCardNum('🟡 No amarelo',n.pctAmarelo,a.pctAmarelo,pct,true)}
     ${aaCardNum('🔴 No vermelho',n.pctVermelho,a.pctVermelho,pct,true)}
   </div>
+  ${aaState.semana?`<div class="aa-ritmo">
+    <div class="aa-sub">🎯 Minha meta da semana</div>
+    <div class="aa-ritmo-grid" style="grid-template-columns:repeat(2,1fr)">
+      <div><strong>${aaState.semana.realizado} de ${aaState.semana.meta}</strong><span>conversões nesta semana</span></div>
+      <div><strong>${Math.max(0,aaState.semana.meta-aaState.semana.realizado)}</strong><span>faltam para a meta da semana</span></div>
+    </div>
+    <div class="aa-msg ${aaState.semana.realizado>=aaState.semana.meta?'ok':'atencao'}">${aaState.semana.realizado>=aaState.semana.meta?'Meta da semana alcançada! Parabéns pelo trabalho. 💙':'A meta da semana ainda não veio. O que você planejar hoje já conta para a próxima semana.'}</div>
+  </div>`:''}
   <div class="aa-ritmo">
     <div class="aa-sub">📈 Meu ritmo do mês</div>
     ${r.meta?`<div class="aa-ritmo-grid">
       <div><strong>${r.realizado}</strong><span>conversões realizadas</span></div>
-      <div><strong>${r.esperado}</strong><span>esperado até hoje</span></div>
+      <div><strong>${numBR(r.esperado)}</strong><span>esperado até hoje</span></div>
       <div><strong>${r.falta}</strong><span>faltam para a meta de ${r.meta}</span></div>
       <div><strong>${r.diasRestantes}</strong><span>dias úteis restantes</span></div>
     </div>
@@ -2135,7 +2175,7 @@ async function concluirAutoauditoria(){
   const conv=(aaState.numeros.idsConversoes||[]).map(id=>allLeads.find(l=>l.id===id)).filter(Boolean);
   const resultado={
     periodo:{ini:aaState.ini.toISOString(),fim:agora.toISOString()},
-    numeros:tira(aaState.numeros),numerosAnt:tira(aaState.numerosAnt),ritmo:aaState.ritmo,
+    numeros:tira(aaState.numeros),numerosAnt:tira(aaState.numerosAnt),ritmo:aaState.ritmo,ritmoSemana:aaState.semana,
     compromissosAnteriores:aaState.compAnt,
     falhasInicio:aaState.falhasInicio,
     falhasCorrigidas:aaState.falhasInicio.filter(f=>!kFim.has(f.k)),
@@ -2225,7 +2265,8 @@ function renderPainelAutoauditorias(){
           ${linhaNum('Com decisão',n.ligDecisao,a.ligDecisao)}${linhaNum('Conversões',n.conversoes,a.conversoes)}
           ${linhaNum('Tempo médio',n.tempoMedio,a.tempoMedio,formatMin,true)}${linhaNum('% no verde',n.pctVerde,a.pctVerde,pctT)}
           </tbody></table>
-          ${rt.meta?`<div class="cfg-hint" style="margin-top:.4rem">Ritmo do mês: ${rt.realizado} de ${rt.meta} (esperado até o dia: ${rt.esperado})</div>`:''}
+          ${r.ritmoSemana?`<div class="cfg-hint" style="margin-top:.4rem">Meta da semana: <strong>${r.ritmoSemana.realizado} de ${r.ritmoSemana.meta}</strong>${r.ritmoSemana.realizado>=r.ritmoSemana.meta?' ✅':''}</div>`:''}
+          ${rt.meta?`<div class="cfg-hint">Ritmo do mês: ${rt.realizado} de ${rt.meta} (esperado até o dia: ${numBR(rt.esperado)})</div>`:''}
         </div>
         <div class="aa-g-bloco"><div class="aa-sub">💭 Reflexão</div>
           <div class="aa-g-q"><span>Objeção mais frequente</span>${escHtml(r.reflexao?.objecao||'—')}</div>
@@ -2292,7 +2333,7 @@ function calcAlertaMeta(agora){
   const ligNaoConf=pend.filter(c=>c.tipo==='ligacao-dra'&&c.statusLigacao!=='confirmada');
   const ligUrgentes=ligNaoConf.filter(c=>(dtCompromisso(c)-agora)<=3600000).length;
   const aaAtraso=pend.filter(c=>c.tipo==='autoauditoria'&&agora>prazoAutoauditoria(c)).length;
-  return{...r,avaliar,pctRitmo,nivel,ritmoDia,projecao,porDia,tarefas24,ligNaoConf:ligNaoConf.length,ligUrgentes,aaAtraso};
+  return{...r,avaliar,pctRitmo,nivel,ritmoDia,projecao,porDia,tarefas24,ligNaoConf:ligNaoConf.length,ligUrgentes,aaAtraso,semana:calcSemanaMeta(agora)};
 }
 function htmlAlertaMeta(a,noTopo){
   const ops=[];
@@ -2302,25 +2343,39 @@ function htmlAlertaMeta(a,noTopo){
   const opsHtml=ops.length?`<div class="ma-ops">${ops.join('')}</div>`:'';
   const ocultar=noTopo?`<button class="ma-ocultar" onclick="ocultarAlertaMetaHoje()" title="Ocultar só hoje">Ocultar hoje ✕</button>`:'';
   const auditoria=typeof window.abrirAuditoria==='function'?`<button class="ma-btn" onclick="abrirAuditoria()">📑 Gerar auditoria</button>`:'';
-  if(!a.avaliar){
-    if(a.meta<=0&&new Date().getDate()>=8)return `<div class="ma ma-neutro"><div class="ma-head"><span class="ma-titulo">🎯 Meta do mês não definida</span><span class="ma-sub">Defina a meta de cada atendente em Equipe › Configurações para acompanhar o ritmo.</span>${auditoria}${ocultar}</div>${opsHtml}</div>`;
-    if(!ops.length)return '';
-    return `<div class="ma ma-neutro"><div class="ma-head"><span class="ma-titulo">⚙️ Pendências da operação</span><span class="ma-sub">O ritmo da meta começa a ser avaliado no dia 8.</span>${auditoria}${ocultar}</div>${opsHtml}</div>`;
+  const sem=a.semana;
+  if(a.meta<=0&&!sem.itens.length){
+    return `<div class="ma ma-neutro"><div class="ma-head"><span class="ma-titulo">🎯 Meta não definida</span><span class="ma-sub">Cadastre as atendentes e a meta semanal em Equipe › Configurações.</span>${auditoria}${ocultar}</div>${opsHtml}</div>`;
   }
-  const titulo={verde:'🎯 No ritmo da meta',amarelo:'⚠️ Atenção: abaixo do ritmo da meta',vermelho:'🚨 Alerta: bem abaixo do ritmo da meta'}[a.nivel];
+  // Bloco da semana: aparece desde o primeiro dia do mês
+  const semHtml=`<div class="ma-semana">
+    <span class="ma-sem-titulo">📅 Semana de ${dataCurta(localDateStr(sem.seg))} a ${dataCurta(localDateStr(new Date(sem.seg.getTime()+4*86400000)))}</span>
+    ${sem.itens.map(i=>`<span class="ma-sem-chip ${i.cor}" title="Meta semanal: ${i.meta}">${i.cor==='verde'?'✅ ':i.cor==='vermelho'?'🔴 ':'🟡 '}${escHtml(i.nome)} <strong>${i.realizado} de ${i.meta}</strong></span>`).join('')}
+    <span class="ma-sem-chip time ${sem.cor}">Time <strong>${sem.realizado} de ${sem.meta}</strong></span>
+  </div>`;
+  // Bloco do mês: cores só a partir do dia 8
   const pct=a.pctRitmo===null?'—':Math.round(a.pctRitmo*100)+'%';
-  const dobro=a.porDia>0&&a.ritmoDia>0&&a.porDia>2*a.ritmoDia;
-  return `<div class="ma ma-${a.nivel}">
-    <div class="ma-head"><span class="ma-titulo">${titulo}</span><span class="ma-pct">${pct} do ritmo esperado</span>${auditoria}${ocultar}</div>
-    <div class="ma-nums">
+  const dobro=a.avaliar&&a.porDia>0&&a.ritmoDia>0&&a.porDia>2*a.ritmoDia;
+  const mesHtml=`<div class="ma-nums">
       <div><strong>${a.realizado}<small>/${a.meta}</small></strong><span>conversões no mês</span></div>
-      <div><strong>${a.esperado}</strong><span>esperado até hoje</span></div>
+      <div><strong>${numBR(a.esperado)}</strong><span>esperado até hoje</span></div>
       <div><strong>${a.falta}</strong><span>faltam para a meta</span></div>
       <div><strong>${a.diasRestantes}</strong><span>dias úteis restantes</span></div>
-      <div><strong>${a.porDia}</strong><span>conversões por dia útil</span></div>
-      <div><strong class="${a.projecao>=a.meta?'ok':'ruim'}">${a.projecao}</strong><span>projeção do mês</span></div>
-    </div>
-    ${dobro?`<div class="ma-dica">💡 Para bater a meta, o time precisa de mais que o dobro do ritmo atual (${Math.round(a.ritmoDia*10)/10} por dia útil). Concentre o esforço nos leads qualificados e amplie as ligações da Dra.</div>`:''}
+      <div><strong>${numBR(a.porDia)}</strong><span>conversões por dia útil</span></div>
+      <div><strong class="${a.avaliar?(a.projecao>=a.meta?'ok':'ruim'):''}">${a.projecao}</strong><span>projeção do mês</span></div>
+    </div>`;
+  const ordem={verde:0,amarelo:1,vermelho:2};
+  let nivel=a.avaliar?a.nivel:'neutro';
+  if(sem.cor==='vermelho'&&(nivel==='neutro'||ordem[nivel]<2))nivel='vermelho';
+  const titulo=a.avaliar
+    ?{verde:'🎯 No ritmo da meta do mês',amarelo:'⚠️ Atenção: abaixo do ritmo da meta do mês',vermelho:'🚨 Alerta: bem abaixo do ritmo da meta do mês'}[a.nivel]
+    :'🎯 Meta da semana e do mês';
+  const sub=a.avaliar?`<span class="ma-pct">${pct} do ritmo esperado no mês</span>`:'<span class="ma-sub">O ritmo do mês é avaliado a partir do dia 8. Até lá, acompanhe a semana.</span>';
+  return `<div class="ma ma-${nivel}">
+    <div class="ma-head"><span class="ma-titulo">${titulo}</span>${sub}${auditoria}${ocultar}</div>
+    ${semHtml}
+    ${mesHtml}
+    ${dobro?`<div class="ma-dica">💡 Para bater a meta do mês, o time precisa de mais que o dobro do ritmo atual (${numBR(Math.round(a.ritmoDia*10)/10)} por dia útil). Concentre o esforço nos leads qualificados e amplie as ligações da Dra.</div>`:''}
     ${opsHtml}
   </div>`;
 }
@@ -6194,6 +6249,19 @@ body.light-theme .ma-nums strong{color:#1A1D2E}
 body.light-theme .ma-ocultar{border-color:#E2E5EE;color:#6B7280}
 body.light-theme .ma-verde .ma-titulo{color:#059669}
 
+
+/* Fase 4b: meta semanal na faixa */
+.ma-semana{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+.ma-sem-titulo{font-size:.72rem;font-weight:700;color:#C4C9D8;margin-right:.2rem}
+.ma-sem-chip{font-size:.72rem;font-weight:600;border-radius:999px;padding:.25rem .7rem;border:1px solid}
+.ma-sem-chip strong{font-weight:800}
+.ma-sem-chip.verde{color:#10B981;border-color:rgba(16,185,129,.45);background:rgba(16,185,129,.1)}
+.ma-sem-chip.amarelo{color:#F5A623;border-color:rgba(245,166,35,.45);background:rgba(245,166,35,.1)}
+.ma-sem-chip.vermelho{color:#EF4444;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.1)}
+.ma-sem-chip.time{margin-left:auto}
+body.light-theme .ma-sem-titulo{color:#4B5563}
+body.light-theme .ma-sem-chip.verde{color:#059669}
+
 </style>
 </head>
 <body>
@@ -6378,7 +6446,7 @@ body.light-theme .ma-verde .ma-titulo{color:#059669}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20e</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20f</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
