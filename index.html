@@ -110,6 +110,7 @@ function showApp(){
   primeiraCargaFeita=false;
   startLeadsListener();startPresence();
   startUsersListener();
+  startConfigListener();
   carregarCampanhas();
   if(isG)carregarPlanos().then(()=>{ if(currentTab==='estrategia')renderEstrategia(); });
   if(fuAlertInterval)clearInterval(fuAlertInterval);
@@ -738,6 +739,265 @@ function localDateStr(d){
   const yy=d.getFullYear(),mm=String(d.getMonth()+1).padStart(2,'0'),dd=String(d.getDate()).padStart(2,'0');
   return `${yy}-${mm}-${dd}`;
 }
+
+// ═══════════════════════════════════════════════════════
+// FASE 1: CONFIGURAÇÕES DO COMERCIAL + TEMPO DE RESPOSTA
+// Todas as datas em horário local (Brasília), nunca em UTC.
+// ═══════════════════════════════════════════════════════
+const CFG_PADRAO={
+  expediente:{dias:[1,2,3,4,5],inicio:'08:30',fim:'14:00'},
+  feriados:[],
+  faixas:{verde:5,amarelo:15},
+  janelasDra:['10:00','11:00','13:00','16:00'],
+  capacidadeJanela:2,
+  autoauditoria:{},   // { uid: 'HH:MM' }
+  metas:{}            // { 'AAAA-MM': { uid: numero } }
+};
+function mergeCfg(d){
+  d=d||{};
+  return{
+    ...CFG_PADRAO,...d,
+    expediente:{...CFG_PADRAO.expediente,...(d.expediente||{})},
+    faixas:{...CFG_PADRAO.faixas,...(d.faixas||{})},
+    feriados:Array.isArray(d.feriados)?d.feriados:[],
+    janelasDra:Array.isArray(d.janelasDra)&&d.janelasDra.length?d.janelasDra:[...CFG_PADRAO.janelasDra],
+    autoauditoria:d.autoauditoria||{},
+    metas:d.metas||{}
+  };
+}
+let cfgComercial=mergeCfg({});
+function startConfigListener(){
+  onSnapshot(doc(db,'config','comercial'),snap=>{
+    cfgComercial=mergeCfg(snap.exists()?snap.data():{});
+    if(allLeads.length)renderAll();
+  },()=>{});
+}
+
+function tsToDate(v){if(!v)return null;return v.toDate?v.toDate():new Date(v);}
+function horaStr(d){return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;}
+function localDatetimeInput(d){return `${localDateStr(d)}T${horaStr(d)}`;}
+function formatDataHora(d){return d?`${formatDate(d)} ${horaStr(d)}`:'—';}
+// Colunas de horário para Excel e Backup
+const FAIXA_LABEL={verde:'Verde',amarelo:'Amarelo',vermelho:'Vermelho',fora:'Fora do expediente',sem:'Sem registro'};
+function colunasTempoExport(l){
+  return{
+    'Chegada':formatDataHora(tsToDate(l.dataHoraChegada)),
+    'Início atendimento':formatDataHora(tsToDate(l.dataHoraInicioAtendimento)),
+    'Tempo resposta (min)':typeof l.tempoRespostaMin==='number'?l.tempoRespostaMin:'',
+    'Faixa tempo':FAIXA_LABEL[faixaTempo(l)],
+    'Fora do expediente':l.foraExpediente===true?'Sim':l.foraExpediente===false?'Não':''
+  };
+}
+
+// Lead chegou fora do expediente humano? (dia não útil, feriado ou fora do horário)
+function calcForaExpediente(d){
+  if(!d)return null;
+  const e=cfgComercial.expediente;
+  if(!(e.dias||[]).includes(d.getDay()))return true;
+  if((cfgComercial.feriados||[]).includes(localDateStr(d)))return true;
+  const hm=horaStr(d);
+  return !(hm>=e.inicio&&hm<e.fim);
+}
+
+// Faixa do tempo de resposta: 'fora' | 'sem' | 'verde' | 'amarelo' | 'vermelho'
+function faixaTempo(l){
+  if(l.foraExpediente===true)return 'fora';
+  if(typeof l.tempoRespostaMin!=='number')return 'sem';
+  const f=cfgComercial.faixas;
+  if(l.tempoRespostaMin<=f.verde)return 'verde';
+  if(l.tempoRespostaMin<=f.amarelo)return 'amarelo';
+  return 'vermelho';
+}
+function formatMin(m){
+  if(typeof m!=='number')return '—';
+  if(m<60)return `${m} min`;
+  const h=Math.floor(m/60),r=m%60;
+  if(h<24)return r?`${h}h${String(r).padStart(2,'0')}`:`${h}h`;
+  const dd=Math.floor(h/24),hh=h%24;
+  return hh?`${dd}d ${hh}h`:`${dd}d`;
+}
+function seloTempoHTML(l,compacto){
+  const fx=faixaTempo(l);
+  if(fx==='sem')return compacto?'':'<span class="tr-selo tr-sem" title="Lead sem horário de chegada ou de início do atendimento">Sem registro</span>';
+  if(fx==='fora'){
+    const t=typeof l.tempoRespostaMin==='number'?` · ${formatMin(l.tempoRespostaMin)}`:'';
+    return `<span class="tr-selo tr-fora" title="Chegou fora do expediente humano. Não entra na média de tempo de resposta.">🌙 ${compacto?'Fora exp.':'Fora do expediente'+t}</span>`;
+  }
+  return `<span class="tr-selo tr-${fx}" title="Tempo até o início do atendimento humano">⏱ ${formatMin(l.tempoRespostaMin)}</span>`;
+}
+
+// Lê os campos de horário do modal do lead e devolve datas locais + erro de validação
+function lerTemposDoForm(){
+  const dataVal=document.getElementById('f-data-contato')?.value||'';
+  const horaVal=document.getElementById('f-hora-chegada')?.value||'';
+  const inicioVal=document.getElementById('f-inicio-atend')?.value||'';
+  const chegada=(dataVal&&horaVal)?new Date(`${dataVal}T${horaVal}:00`):null;
+  const inicio=inicioVal?new Date(inicioVal):null;
+  let erro=null;
+  if(horaVal&&!dataVal)erro='Preencha a Data do Primeiro Contato junto com a hora da chegada.';
+  else if(chegada&&inicio&&inicio<chegada)erro='O início do atendimento não pode ser antes da chegada do lead.';
+  const tempoRespostaMin=(chegada&&inicio&&!erro)?Math.round((inicio-chegada)/60000):null;
+  const foraExpediente=chegada?calcForaExpediente(chegada):null;
+  return{dataVal,horaVal,inicioVal,chegada,inicio,erro,tempoRespostaMin,foraExpediente};
+}
+window.atualizarPreviewTempo=function(){
+  const el=document.getElementById('tempo-resposta-preview');if(!el)return;
+  const t=lerTemposDoForm();
+  if(t.erro){el.innerHTML=`<span class="tr-erro">⚠️ ${t.erro}</span>`;return;}
+  if(!t.chegada&&!t.inicio){el.innerHTML='<span class="tr-hint">Preencha a hora da chegada e o início do atendimento.</span>';return;}
+  const fake={tempoRespostaMin:t.tempoRespostaMin,foraExpediente:t.foraExpediente};
+  let html=seloTempoHTML(fake,false);
+  if(t.chegada&&!t.inicio)html+=' <span class="tr-hint">Falta o início do atendimento.</span>';
+  if(t.inicio&&!t.chegada)html+=' <span class="tr-hint">Falta a hora da chegada.</span>';
+  el.innerHTML=html;
+};
+
+// ── Painel de Configurações (gestora, aba Equipe) ──
+let cfgDraft=null,cfgMesMeta='';
+const DIAS_SEMANA_CFG=[[1,'Seg'],[2,'Ter'],[3,'Qua'],[4,'Qui'],[5,'Sex'],[6,'Sáb'],[0,'Dom']];
+function mesAtualStr(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;}
+function usuariosAtivos(){return allUsers.filter(u=>u.ativo!==false&&u.nome);}
+function renderConfigComercial(){
+  const wrap=document.getElementById('cfg-comercial-wrap');if(!wrap)return;
+  if(currentUser?.role!=='gestora'){wrap.style.display='none';return;}
+  wrap.style.display='block';
+  cfgDraft=JSON.parse(JSON.stringify(cfgComercial));
+  if(!cfgMesMeta)cfgMesMeta=mesAtualStr();
+  const e=cfgDraft.expediente;
+  const atendentes=usuariosAtivos().filter(u=>u.role!=='gestora');
+  wrap.innerHTML=`
+    <div class="section-header-row">
+      <div class="est-section-title">⚙️ Configurações do Comercial</div>
+      <button class="section-collapse-btn" id="btn-collapse-cfg" onclick="toggleSection('cfg-body','btn-collapse-cfg')" title="Minimizar/Maximizar">▾</button>
+    </div>
+    <div id="cfg-body" class="section-collapsible">
+      <div class="cfg-grid">
+        <div class="cfg-card">
+          <div class="cfg-card-title">🕐 Expediente do atendimento humano</div>
+          <div class="cfg-dias">${DIAS_SEMANA_CFG.map(([n,lbl])=>`<label class="cfg-dia"><input type="checkbox" class="cfg-dia-chk" value="${n}" ${e.dias.includes(n)?'checked':''}/>${lbl}</label>`).join('')}</div>
+          <div class="cfg-row"><label class="f-label">Das</label><input type="time" id="cfg-exp-ini" class="f-input cfg-time" value="${e.inicio}"/><label class="f-label">às</label><input type="time" id="cfg-exp-fim" class="f-input cfg-time" value="${e.fim}"/></div>
+          <div class="cfg-hint">Leads que chegam fora desse horário são marcados como "fora do expediente" e ficam fora da média de tempo de resposta.</div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-title">⏱ Faixas do tempo de resposta</div>
+          <div class="cfg-row"><span class="tr-selo tr-verde">Verde</span><label class="f-label">até</label><input type="number" min="1" id="cfg-faixa-verde" class="f-input cfg-num" value="${cfgDraft.faixas.verde}"/><span class="cfg-unid">min</span></div>
+          <div class="cfg-row"><span class="tr-selo tr-amarelo">Amarelo</span><label class="f-label">até</label><input type="number" min="1" id="cfg-faixa-amarelo" class="f-input cfg-num" value="${cfgDraft.faixas.amarelo}"/><span class="cfg-unid">min</span></div>
+          <div class="cfg-row"><span class="tr-selo tr-vermelho">Vermelho</span><span class="cfg-hint" style="margin:0">acima disso</span></div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-title">📅 Feriados (dias não úteis)</div>
+          <div class="cfg-row"><input type="date" id="cfg-feriado-novo" class="f-input" style="flex:1"/><button class="btn-meta btn-meta-primary" onclick="cfgAddFeriado()">+ Adicionar</button></div>
+          <div class="cfg-chips" id="cfg-feriados-lista"></div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-title">📞 Janelas de ligação da Dra.</div>
+          <div class="cfg-row"><input type="time" id="cfg-janela-nova" class="f-input cfg-time"/><button class="btn-meta btn-meta-primary" onclick="cfgAddJanela()">+ Adicionar</button></div>
+          <div class="cfg-chips" id="cfg-janelas-lista"></div>
+          <div class="cfg-row"><label class="f-label">Ligações por janela</label><input type="number" min="1" id="cfg-capacidade" class="f-input cfg-num" value="${cfgDraft.capacidadeJanela}"/></div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-title">🪞 Horário da autoauditoria de sexta</div>
+          ${atendentes.length?atendentes.map(u=>`<div class="cfg-row"><span class="cfg-nome">${u.nome}</span><input type="time" class="f-input cfg-time cfg-auto-hora" data-uid="${u.id}" value="${cfgDraft.autoauditoria[u.id]||'10:30'}" oninput="cfgChecarEscalonamento()"/></div>`).join(''):'<div class="cfg-hint">Nenhuma atendente ativa cadastrada.</div>'}
+          <div class="cfg-hint" id="cfg-auto-aviso">Escalone os horários para nunca deixar leads sem resposta.</div>
+        </div>
+        <div class="cfg-card">
+          <div class="cfg-card-title">🎯 Meta mensal de conversões</div>
+          <div class="cfg-row"><label class="f-label">Mês</label><input type="month" id="cfg-meta-mes" class="f-input" value="${cfgMesMeta}" onchange="cfgTrocarMesMeta(this.value)"/></div>
+          <div id="cfg-metas-lista"></div>
+          <div class="cfg-row cfg-total"><span class="cfg-nome">Meta do time</span><strong id="cfg-meta-total">0</strong></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:1rem"><button class="btn-save" id="btn-cfg-salvar" onclick="salvarConfigComercial()">💾 Salvar configurações</button></div>
+    </div>`;
+  renderCfgFeriados();renderCfgJanelas();renderCfgMetas();cfgChecarEscalonamento();
+}
+function renderCfgFeriados(){
+  const el=document.getElementById('cfg-feriados-lista');if(!el)return;
+  const l=[...cfgDraft.feriados].sort();
+  el.innerHTML=l.length?l.map(f=>`<span class="cfg-chip">${formatDate(f+'T12:00:00')}<button onclick="cfgRemFeriado('${f}')" title="Remover">✕</button></span>`).join(''):'<span class="cfg-hint" style="margin:0">Nenhum feriado cadastrado.</span>';
+}
+function renderCfgJanelas(){
+  const el=document.getElementById('cfg-janelas-lista');if(!el)return;
+  const l=[...cfgDraft.janelasDra].sort();
+  el.innerHTML=l.length?l.map(j=>`<span class="cfg-chip">${j}<button onclick="cfgRemJanela('${j}')" title="Remover">✕</button></span>`).join(''):'<span class="cfg-hint" style="margin:0">Nenhuma janela cadastrada.</span>';
+}
+function lerMetasDaTela(){
+  document.querySelectorAll('.cfg-meta-input').forEach(i=>{
+    const mes=i.dataset.mes;
+    if(!cfgDraft.metas[mes])cfgDraft.metas[mes]={};
+    cfgDraft.metas[mes][i.dataset.uid]=parseInt(i.value)||0;
+  });
+}
+function renderCfgMetas(){
+  const el=document.getElementById('cfg-metas-lista');if(!el)return;
+  const us=usuariosAtivos();
+  const doMes=cfgDraft.metas[cfgMesMeta]||{};
+  el.innerHTML=us.length?us.map(u=>`<div class="cfg-row"><span class="cfg-nome">${u.nome}</span><input type="number" min="0" class="f-input cfg-num cfg-meta-input" data-uid="${u.id}" data-mes="${cfgMesMeta}" value="${doMes[u.id]||0}" oninput="cfgSomarMetas()"/></div>`).join(''):'<div class="cfg-hint">Nenhuma colaboradora ativa.</div>';
+  cfgSomarMetas();
+}
+window.cfgSomarMetas=function(){
+  const t=[...document.querySelectorAll('.cfg-meta-input')].reduce((s,i)=>s+(parseInt(i.value)||0),0);
+  const el=document.getElementById('cfg-meta-total');if(el)el.textContent=t;
+};
+window.cfgTrocarMesMeta=function(mes){
+  if(!mes)return;
+  lerMetasDaTela();cfgMesMeta=mes;renderCfgMetas();
+};
+window.cfgChecarEscalonamento=function(){
+  const el=document.getElementById('cfg-auto-aviso');if(!el)return;
+  const hs=[...document.querySelectorAll('.cfg-auto-hora')].map(i=>i.value).filter(Boolean);
+  const repetido=hs.some((h,i)=>hs.indexOf(h)!==i);
+  el.textContent=repetido?'⚠️ Há atendentes no mesmo horário. Escalone para nunca deixar leads sem resposta.':'Escalone os horários para nunca deixar leads sem resposta.';
+  el.style.color=repetido?'#F5A623':'';
+};
+window.cfgAddFeriado=function(){
+  const v=document.getElementById('cfg-feriado-novo')?.value;
+  if(!v)return showToast('Escolha a data do feriado','error');
+  if(!cfgDraft.feriados.includes(v))cfgDraft.feriados.push(v);
+  document.getElementById('cfg-feriado-novo').value='';renderCfgFeriados();
+};
+window.cfgRemFeriado=function(f){cfgDraft.feriados=cfgDraft.feriados.filter(x=>x!==f);renderCfgFeriados();};
+window.cfgAddJanela=function(){
+  const v=document.getElementById('cfg-janela-nova')?.value;
+  if(!v)return showToast('Escolha o horário da janela','error');
+  if(!cfgDraft.janelasDra.includes(v))cfgDraft.janelasDra.push(v);
+  document.getElementById('cfg-janela-nova').value='';renderCfgJanelas();
+};
+window.cfgRemJanela=function(j){cfgDraft.janelasDra=cfgDraft.janelasDra.filter(x=>x!==j);renderCfgJanelas();};
+window.salvarConfigComercial=async function(){
+  if(!cfgDraft)return;
+  const dias=[...document.querySelectorAll('.cfg-dia-chk')].filter(c=>c.checked).map(c=>parseInt(c.value));
+  const inicio=document.getElementById('cfg-exp-ini').value;
+  const fim=document.getElementById('cfg-exp-fim').value;
+  const verde=parseInt(document.getElementById('cfg-faixa-verde').value);
+  const amarelo=parseInt(document.getElementById('cfg-faixa-amarelo').value);
+  const capacidade=parseInt(document.getElementById('cfg-capacidade').value);
+  if(!dias.length)return showToast('Marque pelo menos um dia de expediente','error');
+  if(!inicio||!fim||fim<=inicio)return showToast('O fim do expediente deve ser depois do início','error');
+  if(!(verde>0)||!(amarelo>verde))return showToast('A faixa amarela deve ser maior que a verde','error');
+  if(!cfgDraft.janelasDra.length)return showToast('Cadastre pelo menos uma janela de ligação','error');
+  if(!(capacidade>0))return showToast('Informe quantas ligações cabem por janela','error');
+  lerMetasDaTela();
+  const autoauditoria={...cfgDraft.autoauditoria};
+  document.querySelectorAll('.cfg-auto-hora').forEach(i=>{if(i.value)autoauditoria[i.dataset.uid]=i.value;});
+  const dados={
+    expediente:{dias,inicio,fim},
+    feriados:[...cfgDraft.feriados].sort(),
+    faixas:{verde,amarelo},
+    janelasDra:[...cfgDraft.janelasDra].sort(),
+    capacidadeJanela:capacidade,
+    autoauditoria,
+    metas:cfgDraft.metas,
+    atualizadoPor:currentUser?.nome||'',
+    atualizadoEm:serverTimestamp()
+  };
+  try{
+    setBtnLoading('btn-cfg-salvar',true);
+    await setDoc(doc(db,'config','comercial'),dados);
+    showToast('✅ Configurações salvas!');
+  }catch(e){showToast('Erro ao salvar: '+e.message,'error');}
+  finally{setBtnLoading('btn-cfg-salvar',false);}
+};
 function startAgendaListener(){
   const q=query(collection(db,'compromissos'),orderBy('data','asc'));
   onSnapshot(q,snap=>{
@@ -1664,7 +1924,7 @@ function kanbanCard(l){
     <div class="k-top"><span class="k-name">${l.name||'Sem Nome'}</span>${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'} k-tipo">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}</div>
     <div class="k-trilha">${miniTrilhaK}</div>
     ${l.campaign?`<span class="campaign-tag">${l.campaign}</span>`:''}
-    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}</div>
+    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}${seloTempoHTML(l,true)}</div>
     ${l.currentNote?`<div class="k-note">${l.currentNote}</div>`:''}
     <div class="k-footer" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>`:'<span></span>'}
@@ -1674,12 +1934,15 @@ function kanbanCard(l){
 }
 
 // ─── TABLE ───
+let filterFaixa='TODAS';
+window.setFiltroFaixa=function(v){filterFaixa=v;renderTable();};
 function renderTable(){
   let filtered=allLeads;
   if(filterStatus!=='ALL')filtered=filtered.filter(l=>l.status===filterStatus);
+  if(filterFaixa!=='TODAS')filtered=filtered.filter(l=>faixaTempo(l)===filterFaixa);
   if(searchQuery){const q=searchQuery.toLowerCase();filtered=filtered.filter(l=>(l.name||'').toLowerCase().includes(q)||(l.phone||'').includes(q));}
   const tbody=document.getElementById('table-body');
-  if(!filtered.length){tbody.innerHTML=`<tr><td colspan="9" style="text-align:center;padding:2rem;color:#666">Nenhum lead</td></tr>`;return;}
+  if(!filtered.length){tbody.innerHTML=`<tr><td colspan="12" style="text-align:center;padding:2rem;color:#666">Nenhum lead</td></tr>`;return;}
   tbody.innerHTML=filtered.map(l=>{
     const sm=STATUS_META[l.status]||STATUS_META['EM ANDAMENTO'];
     const wa=formatPhone(l.phone);
@@ -1695,6 +1958,9 @@ function renderTable(){
       <td>${l.campaign||'—'}</td>
       <td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td>
       <td>${l.assignee||'—'}</td>
+      <td style="white-space:nowrap">${formatDataHora(tsToDate(l.dataHoraChegada))}</td>
+      <td style="white-space:nowrap">${formatDataHora(tsToDate(l.dataHoraInicioAtendimento))}</td>
+      <td>${seloTempoHTML(l,false)}</td>
       <td class="t-note">${l.currentNote||'—'}</td>
       <td class="${isUrgent?'urgent-fu':''}">${fu?formatDate(fu):'—'}</td>
     </tr>`;
@@ -1722,7 +1988,13 @@ window.openLead=function(id){
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
   // Data do Primeiro Contato: usa valor salvo; se não houver e for lead novo, sugere hoje (editável)
-  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):(!l?new Date().toISOString().slice(0,10):''));
+  document.getElementById('f-data-contato').value=l?.dataPrimeiroContato?toDateInput(l.dataPrimeiroContato):(l?.createdAt?.toDate?toDateInput(l.createdAt):(!l?localDateStr(new Date()):''));
+  // Fase 1: horários (local). Hora da chegada vem do dataHoraChegada salvo.
+  const _cheg=tsToDate(l?.dataHoraChegada),_ini=tsToDate(l?.dataHoraInicioAtendimento);
+  document.getElementById('f-hora-chegada').value=_cheg?horaStr(_cheg):'';
+  document.getElementById('f-inicio-atend').value=_ini?localDatetimeInput(_ini):'';
+  document.querySelectorAll('.tr-obrig').forEach(s=>s.style.display=l?'none':'inline');
+  atualizarPreviewTempo();
   document.getElementById('f-data-fechamento').value=l?.dataFechamentoContrato?toDateInput(l.dataFechamentoContrato):'';
   document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
   document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
@@ -1846,6 +2118,22 @@ window.saveLead=async function(){
   const dataPrimeiroContato=dataContatoVal?Timestamp.fromDate(new Date(dataContatoVal+'T12:00:00')):null;
   const dataFechamentoVal=document.getElementById('f-data-fechamento')?.value;
   const dataFechamentoContrato=dataFechamentoVal?Timestamp.fromDate(new Date(dataFechamentoVal+'T12:00:00')):null;
+  // Fase 1: horário de chegada e início do atendimento (obrigatórios em lead novo)
+  const tempos=lerTemposDoForm();
+  const falhaSalvar=msg=>{
+    clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
+    if(btn){btn.disabled=false;btn.textContent='Salvar';btn.style.background='';btn.style.borderColor='';}
+    showToast(msg,'error');
+  };
+  if(tempos.erro)return falhaSalvar(tempos.erro);
+  if(!editingLeadId&&(!tempos.dataVal||!tempos.horaVal||!tempos.inicioVal))
+    return falhaSalvar('Lead novo: preencha a data do primeiro contato, a hora da chegada e o início do atendimento.');
+  const camposTempo={
+    dataHoraChegada:tempos.chegada?Timestamp.fromDate(tempos.chegada):null,
+    dataHoraInicioAtendimento:tempos.inicio?Timestamp.fromDate(tempos.inicio):null,
+    tempoRespostaMin:tempos.tempoRespostaMin,
+    foraExpediente:tempos.foraExpediente
+  };
   const phoneNorm=normalizePhone(phone);
   if(phoneNorm){
     const dup=allLeads.find(l=>l.id!==editingLeadId&&normalizePhone(l.phone)===phoneNorm);
@@ -1864,6 +2152,7 @@ window.saveLead=async function(){
       await addDoc(collection(db,'leads'),{
         name,phone,campaign,status,tipo,assignee,currentNote:note,
         nextFollowup:Timestamp.fromDate(d),dataParto,dataPrimeiroContato,etapaFollowup:0,valorHonorarios,
+        ...camposTempo,
         dataFechamentoContrato,
         followupHistory:[],createdAt:dataPrimeiroContato||serverTimestamp(),lastContact:serverTimestamp(),
         log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
@@ -1881,6 +2170,7 @@ window.saveLead=async function(){
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
       if(beneficioConcedido!==null)upd.beneficioConcedido=beneficioConcedido;
       if(dataPrimeiroContato)upd.dataPrimeiroContato=dataPrimeiroContato;
+      Object.assign(upd,camposTempo);
       // Só grava a data de fechamento se o status estiver "Contrato Fechado" E
       // (a mudança de status aconteceu agora) OU (a pessoa editou o campo de data manualmente).
       // Isso evita gravar uma data "de hoje" só porque alguém abriu e salvou um lead já fechado.
@@ -1988,7 +2278,7 @@ window.fazerBackup=function(){
     const parto=l.dataParto?.toDate?l.dataParto.toDate():l.dataParto?new Date(l.dataParto):null;
     const hist=(l.followupHistory||[]).map(h=>`${h.label}(${h.doneBy} ${formatDatetime(new Date(h.doneAt))})`).join(' | ');
     const logTxt=(l.log||[]).map(e=>`[${formatDatetime(new Date(e.ts))} ${e.user}] ${e.note}`).join(' || ');
-    return{'ID':l.id,'Data':created?formatDate(created):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'','Nota':l.currentNote||'','Parto':parto?formatDate(parto):'—','Próx.FU':fu?formatDate(fu):'—','Etapa':l.etapaFollowup||0,'Trilha':hist,'Histórico':logTxt};
+    return{'ID':l.id,'Data':created?formatDate(created):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'',...colunasTempoExport(l),'Nota':l.currentNote||'','Parto':parto?formatDate(parto):'—','Próx.FU':fu?formatDate(fu):'—','Etapa':l.etapaFollowup||0,'Trilha':hist,'Histórico':logTxt};
   });
   const ws=XLSX.utils.json_to_sheet(rows);
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Backup');
@@ -2205,7 +2495,7 @@ function renderChart(id,type,labels,data,colors){
 }
 window.exportarExcel=function(){
   const leads=getLeadsFiltrados(false);
-  const rows=leads.map(l=>({'Data':l.createdAt?.toDate?formatDate(l.createdAt.toDate()):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'','Nota':l.currentNote||'','Próx.FU':l.nextFollowup?formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup)):'—'}));
+  const rows=leads.map(l=>({'Data':l.createdAt?.toDate?formatDate(l.createdAt.toDate()):'—','Nome':l.name||'','Telefone':l.phone||'','Tipo':l.tipo==='SM'?'SM':'Geral','Campanha':l.campaign||'','Status':STATUS_META[l.status]?.label||l.status,'Atendente':l.assignee||'',...colunasTempoExport(l),'Nota':l.currentNote||'','Próx.FU':l.nextFollowup?formatDate(l.nextFollowup?.toDate?l.nextFollowup.toDate():new Date(l.nextFollowup)):'—'}));
   const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Leads');
   XLSX.writeFile(wb,`CRM_${new Date().toLocaleDateString('pt-BR').replace(/\//g,'-')}.xlsx`);
 };
@@ -3008,7 +3298,7 @@ window.salvarPlanoForm = async function(idExistente) {
     const si = new Date(di); si.setDate(di.getDate()+i*7);
     const sf = new Date(si); sf.setDate(si.getDate()+6); if(sf>df) sf.setTime(df.getTime());
     const metaSem = baseContr+(i<resto?1:0);
-    semanas.push({label:`S${i+1}`,inicio:si.toISOString().slice(0,10),fim:sf.toISOString().slice(0,10),meta:metaSem});
+    semanas.push({label:`S${i+1}`,inicio:localDateStr(si),fim:localDateStr(sf),meta:metaSem});
   }
 
   const id = idExistente || 'plan_'+Date.now();
@@ -3654,13 +3944,19 @@ window.switchTab=function(tab){
   if(tab==='relatorios')setTimeout(renderRelatorios,100);
   else if(tab==='estrategia')setTimeout(renderEstrategia,100);
   else if(tab==='indicacao')setTimeout(renderIndicacao,100);
+  else if(tab==='equipe'){renderAll();renderConfigComercial();}
   else renderAll();
 };
 window.setFilter=function(s){filterStatus=s;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));document.getElementById('filter-'+s)?.classList.add('active');renderTable();};
 window.onSearch=v=>{searchQuery=v;renderTable();};
 
 // ─── UTILS ───
-function toDateInput(ts){const d=ts?.toDate?ts.toDate():new Date(ts);return d.toISOString().slice(0,10);}
+function toDateInput(ts){
+  // Data no horário local (Brasília). Texto já no formato AAAA-MM-DD volta como está.
+  if(typeof ts==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(ts))return ts;
+  const d=ts?.toDate?ts.toDate():new Date(ts);
+  return localDateStr(d);
+}
 function formatPhone(p){if(!p)return '';return '55'+p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function normalizePhone(p){if(!p)return '';return p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function formatDate(d){return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';}
@@ -4624,6 +4920,47 @@ body.light-theme .ind-step-connector.pendente{background:#E2E5EE;}
 body.light-theme .ind-card.status-aguardando{background:#EFF6FF;}
 body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
 
+
+/* ═══ FASE 1: TEMPO DE RESPOSTA ═══ */
+.tr-selo{display:inline-flex;align-items:center;gap:.2rem;font-size:.64rem;font-weight:700;padding:.12rem .45rem;border-radius:999px;white-space:nowrap;line-height:1.3}
+.tr-verde{background:rgba(16,185,129,.14);color:#10B981}
+.tr-amarelo{background:rgba(245,166,35,.15);color:#F5A623}
+.tr-vermelho{background:rgba(239,68,68,.14);color:#EF4444}
+.tr-fora{background:rgba(139,92,246,.14);color:#A78BFA}
+.tr-sem{background:rgba(107,114,128,.14);color:#9CA3AF}
+.tr-preview{min-height:38px;display:flex;align-items:center;flex-wrap:wrap;gap:.35rem;background:#1E2235;border:1px dashed #2A2F45;border-radius:7px;padding:.45rem .7rem}
+.tr-preview .tr-selo{font-size:.74rem;padding:.2rem .6rem}
+.tr-hint{font-size:.68rem;color:#6B7280}
+.tr-erro{font-size:.72rem;color:#EF4444;font-weight:600}
+.tr-obrig{color:#EF4444;font-weight:800}
+body.light-theme .tr-preview{background:#F4F5F8;border-color:#E2E5EE}
+body.light-theme .tr-fora{color:#7C3AED}
+
+/* ═══ FASE 1: CONFIGURAÇÕES DO COMERCIAL ═══ */
+.cfg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:.85rem}
+.cfg-card{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1rem;display:flex;flex-direction:column;gap:.6rem}
+.cfg-card-title{font-size:.78rem;font-weight:700;color:#F1F3F9}
+.cfg-row{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.cfg-row .f-label{margin:0}
+.cfg-time{width:110px}
+.cfg-num{width:80px;text-align:center}
+.cfg-unid{font-size:.72rem;color:#6B7280}
+.cfg-nome{font-size:.8rem;font-weight:600;flex:1;min-width:110px}
+.cfg-total{border-top:1px solid #2A2F45;padding-top:.5rem}
+.cfg-total strong{font-size:1.1rem;color:#4F6EF7;min-width:80px;text-align:center}
+.cfg-hint{font-size:.68rem;color:#6B7280;line-height:1.45}
+.cfg-dias{display:flex;gap:.3rem;flex-wrap:wrap}
+.cfg-dia{display:flex;align-items:center;gap:.25rem;font-size:.72rem;font-weight:600;color:#9CA3AF;background:#1E2235;border:1px solid #2A2F45;border-radius:6px;padding:.25rem .5rem;cursor:pointer}
+.cfg-dia input{accent-color:#4F6EF7}
+.cfg-chips{display:flex;gap:.35rem;flex-wrap:wrap}
+.cfg-chip{display:inline-flex;align-items:center;gap:.35rem;background:rgba(79,110,247,.12);color:#4F6EF7;border:1px solid rgba(79,110,247,.25);border-radius:999px;padding:.18rem .3rem .18rem .6rem;font-size:.72rem;font-weight:600}
+.cfg-chip button{background:none;border:none;color:#6B7280;cursor:pointer;font-size:.7rem;padding:0 .2rem}
+.cfg-chip button:hover{color:#EF4444}
+body.light-theme .cfg-card{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .cfg-card-title{color:#1A1D2E}
+body.light-theme .cfg-dia{background:#FFFFFF;border-color:#E2E5EE;color:#4B5563}
+body.light-theme .cfg-total{border-top-color:#E2E5EE}
+
 </style>
 </head>
 <body>
@@ -4752,6 +5089,14 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div id="view-table" class="hidden">
       <div class="table-controls">
         <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
+        <select class="search-input" style="width:auto;cursor:pointer" onchange="setFiltroFaixa(this.value)" title="Filtrar pelo tempo de resposta">
+          <option value="TODAS">⏱ Tempo de resposta: todos</option>
+          <option value="verde">🟢 Verde</option>
+          <option value="amarelo">🟡 Amarelo</option>
+          <option value="vermelho">🔴 Vermelho</option>
+          <option value="fora">🌙 Fora do expediente</option>
+          <option value="sem">Sem registro</option>
+        </select>
         <div class="filter-btns">
           <button id="filter-ALL"              class="filter-btn active" onclick="setFilter('ALL')">Todos</button>
           <button id="filter-EM ANDAMENTO"     class="filter-btn"        onclick="setFilter('EM ANDAMENTO')">Em Andamento</button>
@@ -4768,7 +5113,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <button class="section-collapse-btn" id="btn-collapse-tabela" onclick="toggleSection('tabela-body','btn-collapse-tabela')" title="Minimizar/Maximizar">▾</button>
       </div>
       <div id="tabela-body" class="section-collapsible">
-        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Entrada</th><th>Nome</th><th>WhatsApp</th><th>Tipo</th><th>Campanha</th><th>Status</th><th>Atendente</th><th>Chegada</th><th>Início atend.</th><th>Tempo resp.</th><th>Última Nota</th><th>Próx. F-up</th></tr></thead><tbody id="table-body"></tbody></table></div>
       </div>
     </div>
     <div id="view-relatorios" class="hidden">
@@ -4797,7 +5142,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20b</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -4872,6 +5217,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
     <div id="view-equipe" class="hidden">
       <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn-hdr" onclick="abrirModalDistribuir()">🔀 Distribuir sem atendente</button><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div></div>
       <div id="equipe-lista"></div>
+      <div id="cfg-comercial-wrap" class="est-section" style="margin-top:1.25rem;display:none"></div>
     </div>
     <!-- INDICAÇÃO VIEW -->
     <div id="view-indicacao" class="hidden">
@@ -4917,7 +5263,10 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
         <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="toggleHonorariosField()"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"></select></div>
-        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-data-contato" class="f-input" type="date" title="Data em que o lead chegou ou entrou em contato"/></div>
+        <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-data-contato" class="f-input" type="date" title="Data em que o lead chegou ou entrou em contato" oninput="atualizarPreviewTempo()"/></div>
+        <div class="f-group"><label class="f-label">🕐 Hora da chegada do lead <span class="tr-obrig">*</span></label><input id="f-hora-chegada" class="f-input" type="time" title="Hora em que a mensagem do lead chegou no WhatsApp" oninput="atualizarPreviewTempo()"/></div>
+        <div class="f-group"><label class="f-label">🙋 Início do atendimento humano <span class="tr-obrig">*</span></label><input id="f-inicio-atend" class="f-input" type="datetime-local" title="Data e hora em que a atendente respondeu o lead" oninput="atualizarPreviewTempo()"/></div>
+        <div class="f-group"><label class="f-label">⏱ Tempo de resposta</label><div id="tempo-resposta-preview" class="tr-preview"></div></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
         <div class="f-group" id="honorarios-row">
           <label class="f-label">💰 Valor dos Honorários (R$)</label>
