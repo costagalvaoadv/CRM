@@ -1419,38 +1419,56 @@ window.salvarRegistroCRM = async function() {
     if (btn) { btn.disabled = false; btn.textContent = '✅ Salvar no CRM'; }
   }
 };
+// ── Próximo contato Mensal (SM): todo mês até o parto; o último cai 1 dia após o parto ──
+// Sem data do parto: continua mensal (o lead nunca some do painel) e a atendente é avisada.
+function calcProxMensalSM(dataParto){
+  const agora=new Date();
+  const prox=new Date(agora);prox.setMonth(prox.getMonth()+1);
+  if(!dataParto)return prox;
+  const parto=dataParto?.toDate?dataParto.toDate():new Date(dataParto);
+  if(prox<=parto)return prox;
+  const posParto=new Date(parto);posParto.setDate(posParto.getDate()+1);
+  if(posParto>agora)return posParto;
+  const amanha=new Date(agora);amanha.setDate(amanha.getDate()+1);
+  return amanha;
+}
+
 async function avancarEtapa(id){
   const l=allLeads.find(x=>x.id===id);
   if(!l){ showToast('Lead não encontrado','error'); return; }
-  const trilhaDias=getTrilhaDias(l.tipo||'SM');
-  const trilhaLabels=getTrilha(l.tipo||'SM');
+  const tipo=l.tipo||'SM';
+  const trilhaDias=getTrilhaDias(tipo);
+  const trilhaLabels=getTrilha(tipo);
   const etapaAtual=l.etapaFollowup||0;
-  const novaEtapa=etapaAtual+1;
   const labelFeita=trilhaLabels[etapaAtual]||'Mensal';
+  const isMensalSM=tipo==='SM'&&etapaAtual>=trilhaDias.length;
+  let partoJaPassou=false;
+  if(l.dataParto){
+    const p=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
+    partoJaPassou=p<new Date();
+  }
 
-  // Verificar se é último estágio — abrir modal de decisão
-  const isUltimoEstagio = (l.tipo==='SM' && novaEtapa>trilhaDias.length) ||
-                          (l.tipo!=='SM' && novaEtapa>=trilhaDias.length);
+  // Último estágio: GERAL após o FUP 30d; SM no contato Mensal feito após o parto
+  const isUltimoEstagio = tipo==='SM' ? (isMensalSM && partoJaPassou) : (etapaAtual+1>=trilhaDias.length);
   if(isUltimoEstagio){
     abrirModalDecisao(l, labelFeita);
     return;
   }
 
+  // No Mensal SM a etapa se repete; nas demais, avança
+  const novaEtapa=isMensalSM?etapaAtual:etapaAtual+1;
+
   // Calcular próximo FU a partir de AGORA
-  let nextFollowup=null;
-  if(l.tipo==='SM' && novaEtapa>=trilhaDias.length){
-    if(l.dataParto){
-      const parto=l.dataParto?.toDate?l.dataParto.toDate():new Date(l.dataParto);
-      const prox=new Date();prox.setMonth(prox.getMonth()+1);
-      nextFollowup=prox<=parto?Timestamp.fromDate(prox):null;
-    }
-  } else if(novaEtapa<trilhaDias.length){
+  let nextFollowup;
+  if(tipo==='SM' && novaEtapa>=trilhaDias.length){
+    nextFollowup=Timestamp.fromDate(calcProxMensalSM(l.dataParto));
+  } else {
     const prox=new Date();
     prox.setDate(prox.getDate()+trilhaDias[novaEtapa]);
     nextFollowup=Timestamp.fromDate(prox);
   }
 
-  const histEntry={etapa:novaEtapa,label:labelFeita,doneAt:new Date().toISOString(),doneBy:currentUser?.nome||'—'};
+  const histEntry={etapa:etapaAtual+1,label:labelFeita,doneAt:new Date().toISOString(),doneBy:currentUser?.nome||'—'};
   const upd={
     etapaFollowup:novaEtapa,
     lastContact:serverTimestamp(),
@@ -1458,9 +1476,14 @@ async function avancarEtapa(id){
     followupHistory:arrayUnion(histEntry),
     log:arrayUnion({user:currentUser?.nome||'—',note:`${labelFeita} realizado${nextFollowup?' — próximo em '+formatDate(nextFollowup.toDate()):''}`,ts:new Date().toISOString(),statusChange:null})
   };
-  if(l.tipo==='SM'&&novaEtapa>=trilhaDias.length)upd.ultimoFollowupMensal=serverTimestamp();
+  if(tipo==='SM'&&novaEtapa>=trilhaDias.length)upd.ultimoFollowupMensal=serverTimestamp();
   await updateDoc(doc(db,'leads',id),upd);
-  showToast(nextFollowup?`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`:`✓ ${labelFeita} feito!`);
+  const semParto=tipo==='SM'&&novaEtapa>=trilhaDias.length&&!l.dataParto;
+  if(semParto){
+    showToast(`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}. ⚠️ Cadastre a data prevista do parto deste lead.`,'warn',7000);
+  }else{
+    showToast(`✓ ${labelFeita} feito! Próximo: ${formatDate(nextFollowup.toDate())}`);
+  }
 }
 window.avancarEtapaDoModal = async function() {
   if (!editingLeadId) return;
@@ -1549,6 +1572,8 @@ window.confirmarDecisao=async function(decisao){
   let nota='';
 
   if(decisao==='qualificar'){novoStatus='QUALIFICADO';nota=`${labelFeita} realizado — Lead qualificado`+(motivo?`: ${motivo}`:'');}
+  else if(decisao==='ag-docs'){novoStatus='AGUARDANDO DOCUMENTOS';nota=`${labelFeita} realizado: aguardando documentos`+(motivo?`. ${motivo}`:'');}
+  else if(decisao==='ag-ass'){novoStatus='AGUARDANDO ASSINATURA';nota=`${labelFeita} realizado: aguardando assinatura`+(motivo?`. ${motivo}`:'');}
   else if(decisao==='desqualificar'){novoStatus='DESQUALIFICADO';nota=`${labelFeita} realizado — Lead desqualificado`+(motivo?`: ${motivo}`:'');}
   else{nota=`${labelFeita} realizado — Continua em acompanhamento`+(motivo?`: ${motivo}`:'');}
 
@@ -1708,7 +1733,7 @@ window.openLead=function(id){
   // Show "FUP Feito" button if lead has pending followup
   const btnFeito = document.getElementById('btn-feito-modal');
   if (btnFeito) {
-    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l?.status||'');
+    const hasPendingFup = l?.nextFollowup && ['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(l?.status||'');
     btnFeito.style.display = hasPendingFup ? 'inline-flex' : 'none';
   }
   document.getElementById('btn-delete-lead').style.display=(editingLeadId&&currentUser?.role==='gestora')?'block':'none';
@@ -1849,7 +1874,7 @@ window.saveLead=async function(){
     }else{
       const existing=allLeads.find(l=>l.id===editingLeadId);
       const statusChanged=existing?.status&&existing.status!==status;
-      const partoChanged=partoVal&&!existing?.dataParto;
+      const partoChanged=!!partoVal&&partoVal!==(existing?.dataParto?toDateInput(existing.dataParto):'');
       const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
       if(note)upd.currentNote=note;
       if(dataParto)upd.dataParto=dataParto;
@@ -1864,10 +1889,15 @@ window.saveLead=async function(){
       if(dataFechamentoContrato&&status==='CONTRATO FECHADO'&&(statusChanged||fechamentoEditadoManualmente)){
         upd.dataFechamentoContrato=dataFechamentoContrato;
       }
-      if(partoChanged&&tipo==='SM'){
+      // SM na etapa Mensal: reagenda se a data do parto mudou ou se a gestante estava sem próximo contato
+      // (resgata quem sumiu do painel por não ter data do parto cadastrada)
+      if(tipo==='SM'){
         const etapa=existing?.etapaFollowup||0;
         const trilhaDias=getTrilhaDias('SM');
-        if(etapa>=trilhaDias.length){const b=new Date();b.setMonth(b.getMonth()+1);upd.nextFollowup=Timestamp.fromDate(b);upd.ultimoFollowupMensal=serverTimestamp();}
+        const statusAtivo=['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'].includes(status);
+        if(etapa===trilhaDias.length&&statusAtivo&&(partoChanged||!existing?.nextFollowup)){
+          upd.nextFollowup=Timestamp.fromDate(calcProxMensalSM(dataParto||existing?.dataParto||null));
+        }
       }
       upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
       await updateDoc(doc(db,'leads',editingLeadId),upd);
@@ -4767,7 +4797,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-09-28g</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -4885,7 +4915,7 @@ body.light-theme .ind-card.status-recebido{background:#F0FDF4;}
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
         <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField();calcHonorarios()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
-        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="toggleHonorariosField()"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="AGUARDANDO DOCUMENTOS">Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
+        <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="toggleHonorariosField()"><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"></select></div>
         <div class="f-group"><label class="f-label">📅 Data do Primeiro Contato</label><input id="f-data-contato" class="f-input" type="date" title="Data em que o lead chegou ou entrou em contato"/></div>
         <div class="f-group" id="parto-row"><label class="f-label">📅 Data Prevista do Parto</label><input id="f-parto" class="f-input" type="date"/></div>
