@@ -358,7 +358,7 @@ function renderEquipe(){
 // ─── LEADS ───
 function startLeadsListener(){
   const q=query(collection(db,'leads'),orderBy('createdAt','desc'));
-  onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));renderAll();});
+  onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));leadsCarregados=true;renderAll();agendarSyncTarefas();});
 }
 function renderAll(){
   renderFuFilterBtns();
@@ -705,16 +705,28 @@ function renderTarefaHoje(){
     });
     const entries=Object.entries(porAtendente).sort((a,b)=>b[1]-a[1]);
     const total=entries.reduce((s,[,c])=>s+c,0);
+    // Fase 2: tarefas da Agenda vencidas há mais de 24h, por atendente
+    const venc24={};
+    allCompromissos.filter(c=>ehTarefa(c)&&c.status==='pendente'&&(now-dtCompromisso(c))>86400000)
+      .forEach(c=>{const a=c.atendente||'—';venc24[a]=(venc24[a]||0)+1;});
+    const v24=Object.entries(venc24).sort((a,b)=>b[1]-a[1]);
+    const totalV24=v24.reduce((s,[,c])=>s+c,0);
     titleEl.textContent='⏰ Atrasos da equipe hoje';
-    countEl.textContent=total;
-    card.style.display=total?'flex':'none';
-    card.classList.toggle('pulsing-red',total>0);
-    bodyEl.innerHTML=entries.map(([chave,count])=>{
+    countEl.textContent=total+totalV24;
+    card.style.display=(total||totalV24)?'flex':'none';
+    card.classList.toggle('pulsing-red',(total+totalV24)>0);
+    bodyEl.innerHTML=(total?`<div class="th-total" style="font-size:.76rem">🔥 Follow-ups atrasados</div>`:'')+entries.map(([chave,count])=>{
       const label=chave===SEM_ATENDENTE_KEY?'Sem atendente':chave;
       return `<div class="th-item" onclick="irParaFollowup('${chave}')"><span class="th-name">${label}</span><span class="th-late">${count} atrasado${count>1?'s':''}</span></div>`;
-    }).join('');
+    }).join('')+(totalV24?`<div class="th-total" style="font-size:.76rem;margin-top:.2rem">📋 Tarefas da Agenda vencidas há mais de 24h</div>`+v24.map(([nome,count])=>`<div class="th-item" onclick="irParaAgenda('${escHtml(nome)}')"><span class="th-name">${escHtml(nome)}</span><span class="th-late">${count} tarefa${count>1?'s':''}</span></div>`).join(''):'');
   }
 }
+window.irParaAgenda=function(nome){
+  if(nome&&currentUser?.role==='gestora')window.setAgFilter(nome);
+  const wrap=document.getElementById('ag-list-wrap');
+  if(wrap&&wrap.classList.contains('fu-collapsed'))window.toggleAgPanel();
+  document.getElementById('ag-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
+};
 window.irParaFollowup=function(nome){
   if(nome)window.setFuFilter(nome);
   const wrap=document.getElementById('fu-stages-wrap');
@@ -1002,15 +1014,16 @@ function startAgendaListener(){
   const q=query(collection(db,'compromissos'),orderBy('data','asc'));
   onSnapshot(q,snap=>{
     allCompromissos=snap.docs.map(d=>({id:d.id,...d.data()}));
-    renderAgenda();checkAlarmes();
+    compromissosCarregados=true;
+    renderAgenda();checkAlarmes();renderTarefaHoje();agendarSyncTarefas();
   });
 }
 function renderAgFilterBtns(){
   const cont=document.getElementById('ag-filter-btns');if(!cont)return;
   if(currentUser?.role!=='gestora'){cont.innerHTML='';return;}
   const names=[...new Set(allUsers.map(u=>u.nome).filter(Boolean))];
-  const unique=['TODOS',...names];
-  cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${agFilter===n?'active':''}" onclick="setAgFilter('${n}')">${n==='TODOS'?'Todos':n}</button>`).join('');
+  const unique=['TODOS','__LIGACOES__',...names];
+  cont.innerHTML=unique.map(n=>`<button class="fu-filter-btn ${agFilter===n?'active':''}" onclick="setAgFilter('${n}')">${n==='TODOS'?'Todos':n==='__LIGACOES__'?'📞 Ligações da Dra.':n}</button>`).join('');
 }
 window.setAgFilter=function(f){agFilter=f;renderAgFilterBtns();renderAgenda();};
 window.toggleAgPanel=function(){
@@ -1034,15 +1047,20 @@ function renderAgenda(){
   const isG=currentUser?.role==='gestora';
   let lista=(isG?allCompromissos.slice():allCompromissos.filter(c=>c.atendente===currentUser?.nome))
     .filter(c=>c.status==='pendente');
-  if(isG&&agFilter!=='TODOS')lista=lista.filter(c=>c.atendente===agFilter);
+  if(isG&&agFilter==='__LIGACOES__')lista=lista.filter(c=>c.tipo==='ligacao-dra');
+  else if(isG&&agFilter!=='TODOS')lista=lista.filter(c=>c.atendente===agFilter);
   lista.sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora));
 
   const now=new Date();
+  // Próxima ligação da Dra. de hoje (destaque)
+  const _hoje=localDateStr(now);
+  const _prox=allCompromissos.filter(c=>c.tipo==='ligacao-dra'&&c.status==='pendente'&&c.data===_hoje&&dtCompromisso(c)>=new Date(now.getTime()-15*60000)).sort((a,b)=>a.hora.localeCompare(b.hora))[0];
+  proximaLigacaoId=_prox?_prox.id:null;
   const hojeStr=localDateStr(now);
   const amanhaDate=new Date(now);amanhaDate.setDate(amanhaDate.getDate()+1);
   const amanhaStr=localDateStr(amanhaDate);
 
-  const atrasados=lista.filter(c=>new Date(`${c.data}T${c.hora}:00`)<now);
+  const atrasados=lista.filter(c=>compromissoAtrasado(c,now));
   const badge=document.getElementById('ag-badge');
   badge.textContent=atrasados.length;badge.style.display=atrasados.length?'flex':'none';
   document.getElementById('ag-panel').classList.toggle('pulsing',atrasados.length>0);
@@ -1093,6 +1111,26 @@ function renderAgenda(){
   el.innerHTML=cols.length?cols.join(''):`<div class="fu-stage-empty">Nenhum compromisso pendente</div>`;
 }
 function agCardCompact(c,now,mostrarData){
+  if(c.tipo==='ligacao-dra')return agCardLigacao(c,now,mostrarData);
+  const tm=c.tipo?TIPO_TAREFA_META[c.tipo]:null;
+  if(tm){
+    const atrasadoT=compromissoAtrasado(c,now);
+    const venc24=(now-dtCompromisso(c))>86400000;
+    const origem=c.automatica?'🤖 Tarefa automática':(c.criadoPor?`📌 Enviada por ${escHtml(c.criadoPor)}`:'');
+    return `
+  <div class="fu-card2 ag-tarefa ${atrasadoT?'fu-late':''} ${c.prioridade?'ag-prioridade':''}" onclick="${c.leadId?`openLead('${c.leadId}')`:`editarCompromisso('${c.id}')`}">
+    <div class="fu2-header"><span class="fu2-name">${c.hora} · ${escHtml(c.leadNome||'Tarefa')}</span></div>
+    <span class="ag-tipo-tag" style="color:${tm.cor};background:${tm.cor}1F;border-color:${tm.cor}55">${tm.label}</span>
+    <div class="ag-tarefa-desc">${escHtml(c.nota||'')}</div>
+    ${venc24?'<div class="ag-venc24">⏰ Vencida há mais de 24h</div>':''}
+    <div class="fu2-meta"><span class="fu2-resp">${escHtml(c.atendente||'')}</span>${origem?`<span class="fu2-resp">· ${origem}</span>`:''}</div>
+    ${mostrarData?`<div class="fua-data">📅 ${formatDate(c.data+'T00:00:00')} às ${c.hora}</div>`:''}
+    <div class="fu2-actions">
+      <button onclick="event.stopPropagation();marcarCompromissoFeito('${c.id}')" class="btn-done">${c.exigeNota?'✓ Concluir':'✓ Feito'}</button>
+      <button onclick="event.stopPropagation();abrirRemarcar('${c.id}')" class="btn-wa">↻ Remarcar</button>
+    </div>
+  </div>`;
+  }
   const atrasado=new Date(`${c.data}T${c.hora}:00`)<now;
   const delegada=!!c.criadoPor&&c.criadoPor!==c.atendente;
   return `
@@ -1140,10 +1178,21 @@ function dispararAlarme(c){
 function checkAlarmes(){
   if(!currentUser)return;
   const now=new Date();
+  const novosAuto=[];
   allCompromissos.filter(c=>c.atendente===currentUser.nome&&c.status==='pendente').forEach(c=>{
     const dt=new Date(`${c.data}T${c.hora}:00`);
-    if(dt<=now&&!agAlertados.has(c.id)){agAlertados.add(c.id);dispararAlarme(c);}
+    if(dt<=now&&!agAlertados.has(c.id)){
+      agAlertados.add(c.id);
+      if(c.automatica)novosAuto.push(c);else dispararAlarme(c);
+    }
   });
+  // Tarefas automáticas: um único aviso agrupado (evita vários bipes seguidos)
+  if(novosAuto.length===1)dispararAlarme(novosAuto[0]);
+  else if(novosAuto.length>1){
+    beep();
+    showToast(`📋 Você tem ${novosAuto.length} tarefas na Agenda para resolver`,'warn',8000,true);
+    if(window.Notification&&Notification.permission==='granted'){try{new Notification('📋 Tarefas na Agenda',{body:`${novosAuto.length} tarefas para resolver`});}catch(e){}}
+  }
 }
 function filtrarLeadAgenda(){
   const box=document.getElementById('ag-lead-suggestions');if(!box)return;
@@ -1251,6 +1300,8 @@ window.salvarCompromisso=async function(){
   finally{setBtnLoading('btn-ag-save',false);}
 };
 window.marcarCompromissoFeito=async function(id){
+  const _c=allCompromissos.find(x=>x.id===id);
+  if(_c&&_c.exigeNota){abrirConcluirTarefa(id);return;}
   try{await updateDoc(doc(db,'compromissos',id),{status:'feito',concluidoEm:serverTimestamp()});showToast('Compromisso concluído!');}
   catch(e){showToast('Erro: '+e.message,'error');}
 };
@@ -1283,6 +1334,393 @@ window.confirmarRemarcar=async function(){
   }catch(e){showToast('Erro ao remarcar: '+e.message,'error');}
   finally{setBtnLoading('btn-rm-save',false);}
 };
+
+// ═══════════════════════════════════════════════════════
+// FASE 2: TAREFAS AUTOMÁTICAS NA AGENDA + LIGAÇÃO DA DRA.
+// Tudo fica na coleção "compromissos" (Agenda), com o campo "tipo".
+// ═══════════════════════════════════════════════════════
+let leadsCarregados=false,compromissosCarregados=false,syncTimer=null,proximaLigacaoId=null;
+const syncCriando=new Set();
+const TAREFA_AUTO={
+  'AGUARDANDO ASSINATURA':{tipo:'auto-assinatura',dias:1,repete:1,titulo:'Ligar e ajudar na assinatura digital'},
+  'AGUARDANDO DOCUMENTOS':{tipo:'auto-documentos',dias:2,repete:1,titulo:'Ligar e ajudar a reunir os documentos pendentes'}
+};
+const TIPO_TAREFA_META={
+  'auto-assinatura':{label:'✍️ Assinatura',cor:'#06B6D4'},
+  'auto-documentos':{label:'📄 Documentos',cor:'#F59E0B'},
+  'formalizacao':{label:'⭐ Formalização',cor:'#10B981'},
+  'reagendar':{label:'📞 Reagendar ligação',cor:'#8B5CF6'},
+  'aviso':{label:'🔔 Avisar o cliente',cor:'#F5A623'}
+};
+const LIG_STATUS_META={
+  aguardando:{label:'Aguardando confirmação',cls:'lig-aguardando'},
+  confirmada:{label:'Confirmada pela Dra.',cls:'lig-confirmada'},
+  remarcada:{label:'Remarcada',cls:'lig-remarcada'},
+  cancelada:{label:'Cancelada',cls:'lig-cancelada'},
+  realizada:{label:'Realizada',cls:'lig-realizada'}
+};
+const LIG_RESULTADO_META={
+  decidiu:{label:'Decidiu, seguir para formalização',curto:'Decidiu',cls:'lig-decidiu'},
+  nao_decidiu:{label:'Não decidiu',curto:'Não decidiu',cls:'lig-naodecidiu'},
+  nao_atendeu:{label:'Não atendeu',curto:'Não atendeu',cls:'lig-naoatendeu'}
+};
+const TAREFA_FORMALIZACAO='⭐ PRIORIDADE: Solicitar RG, CPF e comprovante de residência e enviar contrato e procuração';
+
+function escHtml(s){return String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));}
+function ehTarefa(c){return !!c.tipo&&c.tipo!=='ligacao-dra';}
+function dtCompromisso(c){return new Date(`${c.data}T${c.hora}:00`);}
+function dataCurta(dStr){return dStr?formatDate(dStr+'T12:00:00').slice(0,5):'';}
+// Tarefa só fica "atrasada" a partir do dia seguinte; compromisso comum, a partir do horário
+function compromissoAtrasado(c,now){return ehTarefa(c)?c.data<localDateStr(now):dtCompromisso(c)<now;}
+function nomeDra(){
+  const g=allUsers.find(u=>u.role==='gestora'&&u.ativo!==false&&u.nome);
+  return g?.nome||(currentUser?.role==='gestora'?currentUser.nome:'Dra.');
+}
+function servicoLead(l){return l?.tipo==='SM'?'Salário-Maternidade':'Previdenciário Geral'+(l?.campaign?` (${l.campaign})`:'');}
+
+// ── Datas das tarefas automáticas (sempre dia útil, no início do expediente) ──
+function ehDiaUtil(d){
+  return (cfgComercial.expediente.dias||[]).includes(d.getDay())&&!(cfgComercial.feriados||[]).includes(localDateStr(d));
+}
+function proxDiaUtil(d){
+  const x=new Date(d);
+  for(let i=0;i<60&&!ehDiaUtil(x);i++)x.setDate(x.getDate()+1);
+  return x;
+}
+function agendaTarefaAuto(base,dias,agora){
+  agora=agora||new Date();
+  const d=new Date(base);d.setDate(d.getDate()+dias);
+  let alvo=localDateStr(d)<localDateStr(agora)?new Date(agora):d;
+  alvo=proxDiaUtil(alvo);
+  const data=localDateStr(alvo);
+  let hora=cfgComercial.expediente.inicio;
+  if(data===localDateStr(agora)&&horaStr(agora)>hora)hora=horaStr(agora);
+  return{data,hora};
+}
+// Quando o lead entrou no status atual (pelo log). Sem log, usa a data de criação (estável).
+function dataEntradaStatus(l){
+  const lg=(l.log||[]).filter(e=>e.statusChange===l.status);
+  if(lg.length){const d=new Date(lg[lg.length-1].ts);if(!isNaN(d))return d;}
+  return tsToDate(l.createdAt)||new Date(0);
+}
+
+// ── Sincronização: garante 1 tarefa aberta por lead parado em Ag. Assinatura / Ag. Documentos ──
+function agendarSyncTarefas(){
+  if(!leadsCarregados||!compromissosCarregados||!currentUser)return;
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(()=>{sincronizarTarefasAuto().catch(e=>console.error('sync tarefas',e));},2500);
+}
+async function sincronizarTarefasAuto(){
+  const leadsMap=new Map(allLeads.map(l=>[l.id,l]));
+  const autos=allCompromissos.filter(c=>c.tipo==='auto-assinatura'||c.tipo==='auto-documentos');
+  // 1) Fecha tarefas cujo lead mudou de status (ou foi excluído) e acompanha troca de atendente
+  for(const c of autos.filter(x=>x.status==='pendente')){
+    const l=leadsMap.get(c.leadId);
+    const cfg=l?TAREFA_AUTO[l.status]:null;
+    const valida=!!(l&&cfg&&cfg.tipo===c.tipo&&String(dataEntradaStatus(l).getTime())===String(c.gatilhoDesde));
+    if(!valida){
+      const k='fechar-'+c.id;
+      if(syncCriando.has(k))continue;
+      syncCriando.add(k);
+      const motivo=!l?'Lead excluído':`Status do lead mudou para ${STATUS_META[l.status]?.label||l.status}`;
+      await updateDoc(doc(db,'compromissos',c.id),{status:'cancelado',fechadaAutomaticamente:true,motivoFechamento:motivo,concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()}).catch(()=>syncCriando.delete(k));
+      continue;
+    }
+    if(l.assignee&&l.assignee!==c.atendente){
+      await updateDoc(doc(db,'compromissos',c.id),{atendente:l.assignee}).catch(()=>{});
+    }
+  }
+  // 2) Cria a tarefa que falta (primeira: 1 ou 2 dias após entrar no status; repetição: 1 dia após concluir)
+  for(const l of allLeads){
+    const cfg=TAREFA_AUTO[l.status];
+    if(!cfg||!l.assignee)continue;
+    const entrada=dataEntradaStatus(l);
+    const chave=String(entrada.getTime());
+    const doCiclo=autos.filter(c=>c.leadId===l.id&&c.tipo===cfg.tipo&&String(c.gatilhoDesde)===chave);
+    if(doCiclo.some(c=>c.status==='pendente'))continue;
+    const n=doCiclo.length;
+    const id=`${cfg.tipo}-${l.id}-${chave}-${n}`;
+    if(syncCriando.has(id))continue;
+    let base=entrada,dias=cfg.dias;
+    const feitas=doCiclo.filter(c=>c.status==='feito').map(c=>c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)).filter(Boolean).sort((a,b)=>b-a);
+    if(feitas.length){base=feitas[0];dias=cfg.repete;}
+    const quando=agendaTarefaAuto(base,dias);
+    syncCriando.add(id);
+    await setDoc(doc(db,'compromissos',id),{
+      tipo:cfg.tipo,exigeNota:true,automatica:true,gatilhoDesde:chave,ciclo:n,
+      atendente:l.assignee,leadId:l.id,leadNome:l.name||'Sem nome',
+      data:quando.data,hora:quando.hora,nota:cfg.titulo,
+      status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp()
+    }).catch(e=>{syncCriando.delete(id);console.error('criar tarefa',e);});
+  }
+}
+
+// Cria uma tarefa manual na Agenda de uma atendente (formalização, reagendar, aviso)
+async function criarTarefaAgenda(tipo,lead,atendente,texto,extra){
+  const agora=new Date();
+  await addDoc(collection(db,'compromissos'),{
+    tipo,exigeNota:tipo!=='aviso',atendente:atendente||lead?.assignee||'',
+    leadId:lead?.id||null,leadNome:lead?.name||null,
+    data:localDateStr(agora),hora:horaStr(agora),nota:texto,
+    status:'pendente',historico:[],criadoPor:currentUser?.nome||'Sistema',createdAt:serverTimestamp(),
+    ...(extra||{})
+  });
+}
+
+// ── Concluir tarefa com nota obrigatória ──
+window.abrirConcluirTarefa=function(id){
+  const c=allCompromissos.find(x=>x.id===id);if(!c)return;
+  const meta=TIPO_TAREFA_META[c.tipo]||{label:'📋 Tarefa'};
+  document.getElementById('ct-id').value=id;
+  document.getElementById('ct-tipo').textContent=meta.label;
+  document.getElementById('ct-lead').textContent=c.leadNome||'';
+  document.getElementById('ct-desc').textContent=c.nota||'';
+  document.getElementById('ct-nota').value='';
+  document.getElementById('modal-concluir-tarefa').style.display='flex';
+  setTimeout(()=>document.getElementById('ct-nota')?.focus(),80);
+};
+window.fecharConcluirTarefa=()=>document.getElementById('modal-concluir-tarefa').style.display='none';
+window.confirmarConcluirTarefa=async function(){
+  const id=document.getElementById('ct-id').value;
+  const nota=document.getElementById('ct-nota').value.trim();
+  if(nota.length<5)return showToast('Escreva o resultado da tarefa (o que foi feito e o próximo passo)','error');
+  const c=allCompromissos.find(x=>x.id===id);if(!c)return;
+  const meta=TIPO_TAREFA_META[c.tipo]||{label:'Tarefa'};
+  try{
+    setBtnLoading('btn-ct-salvar',true);
+    await updateDoc(doc(db,'compromissos',id),{status:'feito',notaConclusao:nota,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()});
+    if(c.leadId&&allLeads.some(l=>l.id===c.leadId)){
+      const texto=`${meta.label.replace(/^\S+\s/,'')} (${c.nota}): ${nota}`;
+      await updateDoc(doc(db,'leads',c.leadId),{
+        currentNote:texto,lastContact:serverTimestamp(),
+        log:arrayUnion({user:currentUser?.nome||'—',note:`Tarefa concluída. ${texto}`,ts:new Date().toISOString(),statusChange:null})
+      });
+    }
+    showToast('✅ Tarefa concluída e registrada no histórico do lead!');
+    fecharConcluirTarefa();
+  }catch(e){showToast('Erro ao concluir: '+e.message,'error');}
+  finally{setBtnLoading('btn-ct-salvar',false);}
+};
+
+// ── Ligação da Dra.: selos ──
+function ligacaoAtiva(l){const g=l?.ligacaoDra;return !!(g&&['aguardando','confirmada','remarcada'].includes(g.status));}
+function seloLigacaoHTML(l,compacto){
+  const g=l?.ligacaoDra;if(!g||!g.status)return '';
+  const quando=g.data?`${dataCurta(g.data)} ${g.janela||''}`:'';
+  let cls,txt,titulo;
+  if(g.status==='realizada'&&g.resultado&&LIG_RESULTADO_META[g.resultado]){
+    const r=LIG_RESULTADO_META[g.resultado];
+    cls=r.cls;txt=compacto?`📞 ${r.curto}`:`📞 Ligação realizada: ${r.curto}`;titulo=`Ligação da Dra. em ${quando}: ${r.label}${g.objecao?'. Objeção: '+g.objecao:''}`;
+  }else{
+    const m=LIG_STATUS_META[g.status]||LIG_STATUS_META.aguardando;
+    cls=m.cls;
+    if(g.status==='cancelada'){txt=compacto?'📞 Cancelada':'📞 Ligação cancelada';titulo=`Ligação da Dra. cancelada${g.motivoCancelamento?': '+g.motivoCancelamento:''}`;}
+    else if(g.status==='remarcada'){txt=compacto?`📞 Remarcada ${quando}`:`📞 Remarcada para ${quando}`;titulo=`Ligação da Dra. remarcada para ${quando}`;}
+    else{txt=compacto?`📞 ${quando}`:`📞 ${m.label} · ${quando}`;titulo=`Ligação da Dra. ${quando}: ${m.label}`;}
+  }
+  return `<span class="lig-selo ${cls}" title="${escHtml(titulo)}">${escHtml(txt)}</span>`;
+}
+function renderLigacaoBoxLead(l){
+  const st=document.getElementById('lig-lead-status');
+  const btn=document.getElementById('btn-lig-agendar');
+  if(!st||!btn)return;
+  if(!l){st.innerHTML='<span class="cfg-hint">Salve o lead para poder agendar a ligação.</span>';btn.style.display='none';return;}
+  const g=l.ligacaoDra;
+  st.innerHTML=g?.status?seloLigacaoHTML(l,false)+(g.status==='realizada'&&g.objecao?`<div class="cfg-hint" style="margin-top:.3rem">Objeção: ${escHtml(g.objecao)}</div>`:''):'<span class="cfg-hint">Nenhuma ligação agendada.</span>';
+  btn.style.display=ligacaoAtiva(l)?'none':'inline-flex';
+}
+
+// ── Ligação da Dra.: vagas por janela ──
+function vagasJanela(data,janela,excluirId){
+  const ocupadas=allCompromissos.filter(c=>c.tipo==='ligacao-dra'&&c.status==='pendente'&&c.data===data&&c.hora===janela&&c.id!==excluirId).length;
+  return Math.max(0,(cfgComercial.capacidadeJanela||1)-ocupadas);
+}
+window.renderJanelasLigacao=function(){
+  const box=document.getElementById('lig-janelas');if(!box)return;
+  const data=document.getElementById('lig-data').value;
+  const excluir=document.getElementById('lig-comp-id').value||null;
+  const sel=document.getElementById('lig-janela-sel').value;
+  const agora=new Date(),hoje=localDateStr(agora);
+  const aviso=document.getElementById('lig-dia-aviso');
+  if(aviso)aviso.style.display=(data&&!ehDiaUtil(new Date(data+'T12:00:00')))?'block':'none';
+  if(!data){box.innerHTML='<span class="cfg-hint">Escolha a data.</span>';return;}
+  box.innerHTML=[...cfgComercial.janelasDra].sort().map(j=>{
+    const passou=data<hoje||(data===hoje&&j<=horaStr(agora));
+    const vagas=vagasJanela(data,j,excluir);
+    const bloq=passou||vagas<=0;
+    const info=passou?'Encerrada':vagas<=0?'Cheia':`${vagas} vaga${vagas>1?'s':''}`;
+    return `<button type="button" class="lig-janela-btn ${sel===j&&!bloq?'active':''}" ${bloq?'disabled':''} onclick="selecionarJanelaLigacao('${j}')"><strong>${j}</strong><span>${info}</span></button>`;
+  }).join('');
+};
+window.selecionarJanelaLigacao=function(j){document.getElementById('lig-janela-sel').value=j;renderJanelasLigacao();};
+function preencherModalLigacao(l,modo,c){
+  document.getElementById('lig-lead-id').value=l?.id||c?.leadId||'';
+  document.getElementById('lig-comp-id').value=c?.id||'';
+  document.getElementById('lig-modo').value=modo;
+  document.getElementById('lig-modal-title').textContent=modo==='remarcar'?'↻ Remarcar ligação da Dra.':'📞 Agendar ligação da Dra.';
+  document.getElementById('btn-lig-salvar').textContent=modo==='remarcar'?'Remarcar':'Agendar';
+  document.getElementById('lig-resumo').innerHTML=`
+    <div class="lig-resumo-nome">${escHtml(l?.name||c?.leadNome||'')}</div>
+    <div class="lig-resumo-linha">📱 ${escHtml(l?.phone||c?.telefone||'—')} · ${escHtml(l?servicoLead(l):(c?.servico||''))}</div>
+    <div class="lig-resumo-linha">📝 ${escHtml(l?.currentNote||c?.resumo||'Sem nota de triagem')}</div>
+    ${modo==='remarcar'&&c?`<div class="lig-resumo-linha">Horário atual: <strong>${dataCurta(c.data)} às ${c.hora}</strong></div>`:''}`;
+  document.getElementById('lig-data').value=modo==='remarcar'&&c?c.data:localDateStr(proxDiaUtil(new Date()));
+  document.getElementById('lig-data').min=localDateStr(new Date());
+  document.getElementById('lig-janela-sel').value='';
+  renderJanelasLigacao();
+  document.getElementById('modal-ligacao').style.display='flex';
+}
+window.abrirModalLigacao=function(){
+  if(!editingLeadId){showToast('Salve o lead antes de agendar a ligação','error');return;}
+  const l=allLeads.find(x=>x.id===editingLeadId);if(!l)return;
+  if(ligacaoAtiva(l)){showToast(`Este lead já tem ligação agendada para ${dataCurta(l.ligacaoDra.data)} às ${l.ligacaoDra.janela}`,'warn');return;}
+  preencherModalLigacao(l,'agendar',null);
+};
+window.abrirRemarcarLigacao=function(compId){
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  const l=allLeads.find(x=>x.id===c.leadId)||null;
+  preencherModalLigacao(l,'remarcar',c);
+};
+window.fecharModalLigacao=()=>document.getElementById('modal-ligacao').style.display='none';
+window.salvarLigacao=async function(){
+  const modo=document.getElementById('lig-modo').value;
+  const leadId=document.getElementById('lig-lead-id').value;
+  const compId=document.getElementById('lig-comp-id').value||null;
+  const data=document.getElementById('lig-data').value;
+  const janela=document.getElementById('lig-janela-sel').value;
+  if(!data||!janela)return showToast('Escolha a data e uma janela com vaga','error');
+  if(vagasJanela(data,janela,compId)<=0)return showToast('Essa janela acabou de lotar. Escolha outra.','error');
+  const l=allLeads.find(x=>x.id===leadId)||null;
+  const quando=`${dataCurta(data)} às ${janela}`;
+  try{
+    setBtnLoading('btn-lig-salvar',true);
+    if(modo==='agendar'){
+      if(!l)throw new Error('Lead não encontrado');
+      const ref=await addDoc(collection(db,'compromissos'),{
+        tipo:'ligacao-dra',atendente:nomeDra(),leadId:l.id,leadNome:l.name||'Sem nome',
+        telefone:l.phone||'',servico:servicoLead(l),resumo:l.currentNote||'',
+        data,hora:janela,nota:`Ligação de decisão: ${l.name||''}`,
+        status:'pendente',statusLigacao:'aguardando',atendenteLead:l.assignee||currentUser?.nome||'',
+        historico:[],criadoPor:currentUser?.nome||'—',createdAt:serverTimestamp()
+      });
+      const ligacaoDra={compromissoId:ref.id,data,janela,status:'aguardando',confirmadaEm:null,resultado:null,objecao:null,agendadaPor:currentUser?.nome||'—',agendadaEm:new Date().toISOString()};
+      await updateDoc(doc(db,'leads',l.id),{ligacaoDra,log:arrayUnion({user:currentUser?.nome||'—',note:`📞 Ligação da Dra. agendada para ${quando}. Aguardando confirmação.`,ts:new Date().toISOString(),statusChange:null})});
+      renderLigacaoBoxLead({...l,ligacaoDra});
+      showToast(`📞 Ligação agendada para ${quando}. Confirme o horário com o cliente.`);
+    }else{
+      const c=allCompromissos.find(x=>x.id===compId);if(!c)throw new Error('Ligação não encontrada');
+      await updateDoc(doc(db,'compromissos',compId),{data,hora:janela,statusLigacao:'remarcada',historico:arrayUnion({deData:c.data,deHora:c.hora,motivo:'Remarcada pela Dra.',ts:new Date().toISOString()})});
+      agAlertados.delete(compId);
+      if(l){
+        await updateDoc(doc(db,'leads',l.id),{ligacaoDra:{...(l.ligacaoDra||{}),compromissoId:compId,data,janela,status:'remarcada',confirmadaEm:null},log:arrayUnion({user:currentUser?.nome||'—',note:`📞 Ligação da Dra. remarcada de ${dataCurta(c.data)} às ${c.hora} para ${quando}.`,ts:new Date().toISOString(),statusChange:null})});
+        await criarTarefaAgenda('aviso',l,l.assignee||c.atendenteLead,`Avisar o cliente: a ligação da Dra. foi remarcada para ${quando}`);
+      }
+      showToast(`↻ Ligação remarcada para ${quando}. A atendente foi avisada.`);
+    }
+    fecharModalLigacao();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+  finally{setBtnLoading('btn-lig-salvar',false);}
+};
+
+// ── Ligação da Dra.: ações da gestora ──
+window.confirmarLigacao=async function(compId){
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  const l=allLeads.find(x=>x.id===c.leadId);
+  try{
+    await updateDoc(doc(db,'compromissos',compId),{statusLigacao:'confirmada',confirmadaEm:serverTimestamp()});
+    if(l)await updateDoc(doc(db,'leads',l.id),{ligacaoDra:{...(l.ligacaoDra||{}),status:'confirmada',confirmadaEm:new Date().toISOString()},log:arrayUnion({user:currentUser?.nome||'—',note:`📞 Ligação da Dra. de ${dataCurta(c.data)} às ${c.hora} confirmada pela Dra.`,ts:new Date().toISOString(),statusChange:null})});
+    showToast('✓ Ligação confirmada!');
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
+window.abrirCancelarLigacao=function(compId){
+  document.getElementById('lc-id').value=compId;
+  document.getElementById('lc-motivo').value='';
+  document.getElementById('modal-lig-cancelar').style.display='flex';
+};
+window.fecharCancelarLigacao=()=>document.getElementById('modal-lig-cancelar').style.display='none';
+window.confirmarCancelarLigacao=async function(){
+  const compId=document.getElementById('lc-id').value;
+  const motivo=document.getElementById('lc-motivo').value.trim();
+  if(!motivo)return showToast('Informe o motivo do cancelamento','error');
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  const l=allLeads.find(x=>x.id===c.leadId);
+  try{
+    setBtnLoading('btn-lc-salvar',true);
+    await updateDoc(doc(db,'compromissos',compId),{status:'cancelado',statusLigacao:'cancelada',motivoCancelamento:motivo,concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()});
+    if(l){
+      await updateDoc(doc(db,'leads',l.id),{ligacaoDra:{...(l.ligacaoDra||{}),status:'cancelada',motivoCancelamento:motivo},log:arrayUnion({user:currentUser?.nome||'—',note:`📞 Ligação da Dra. de ${dataCurta(c.data)} às ${c.hora} cancelada. Motivo: ${motivo}`,ts:new Date().toISOString(),statusChange:null})});
+      await criarTarefaAgenda('aviso',l,l.assignee||c.atendenteLead,`Avisar o cliente: a ligação da Dra. de ${dataCurta(c.data)} às ${c.hora} foi cancelada. Motivo: ${motivo}`);
+    }
+    showToast('Ligação cancelada. A atendente foi avisada.','warn');
+    fecharCancelarLigacao();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+  finally{setBtnLoading('btn-lc-salvar',false);}
+};
+window.abrirResultadoLigacao=function(compId){
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  document.getElementById('lr-id').value=compId;
+  document.getElementById('lr-lead').textContent=`${c.leadNome||''} · ${dataCurta(c.data)} às ${c.hora}`;
+  document.getElementById('lr-objecao').value='';
+  document.getElementById('modal-lig-resultado').style.display='flex';
+};
+window.fecharResultadoLigacao=()=>document.getElementById('modal-lig-resultado').style.display='none';
+window.registrarResultadoLigacao=async function(res){
+  const compId=document.getElementById('lr-id').value;
+  const objecao=document.getElementById('lr-objecao').value.trim();
+  if(res==='nao_decidiu'&&!objecao)return showToast('Informe a objeção do cliente','error');
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  const l=allLeads.find(x=>x.id===c.leadId);
+  const r=LIG_RESULTADO_META[res];
+  const agoraIso=new Date().toISOString();
+  try{
+    await updateDoc(doc(db,'compromissos',compId),{status:'feito',statusLigacao:'realizada',resultado:res,objecao:objecao||null,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:agoraIso});
+    if(l){
+      const notaRes=`📞 Ligação da Dra. realizada: ${r.label}${objecao?`. Objeção: ${objecao}`:''}`;
+      const upd={
+        ligacaoDra:{...(l.ligacaoDra||{}),status:'realizada',resultado:res,objecao:objecao||null,realizadaEm:agoraIso},
+        currentNote:notaRes,lastContact:serverTimestamp()
+      };
+      const logs=[{user:currentUser?.nome||'—',note:notaRes,ts:agoraIso,statusChange:null}];
+      if(res==='decidiu'&&['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO'].includes(l.status)){
+        upd.status='AGUARDANDO DOCUMENTOS';
+        logs.push({user:currentUser?.nome||'—',note:'Status → AGUARDANDO DOCUMENTOS (cliente decidiu na ligação da Dra.)',ts:new Date(Date.now()+1).toISOString(),statusChange:'AGUARDANDO DOCUMENTOS'});
+      }
+      upd.log=arrayUnion(...logs);
+      await updateDoc(doc(db,'leads',l.id),upd);
+      if(res==='decidiu')await criarTarefaAgenda('formalizacao',l,l.assignee||c.atendenteLead,TAREFA_FORMALIZACAO,{prioridade:true});
+      if(res==='nao_atendeu')await criarTarefaAgenda('reagendar',l,l.assignee||c.atendenteLead,'Reagendar a ligação da Dra. com o cliente');
+    }
+    showToast(res==='decidiu'?'✅ Registrado! Lead em Ag. Documentos e tarefa prioritária enviada à atendente.':res==='nao_atendeu'?'Registrado. A atendente vai reagendar com o cliente.':'Registrado. O lead segue na trilha de follow-up.');
+    fecharResultadoLigacao();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
+function agCardLigacao(c,now,mostrarData){
+  const dt=dtCompromisso(c);
+  const st=c.statusLigacao||'aguardando';
+  const meta=LIG_STATUS_META[st]||LIG_STATUS_META.aguardando;
+  const naoConfirmada=st!=='confirmada'&&(dt-now)<=3600000;
+  const proxima=c.id===proximaLigacaoId;
+  const wa=formatPhone(c.telefone);
+  return `
+  <div class="fu-card2 lig-card ${proxima?'lig-proxima':''} ${naoConfirmada?'lig-alerta':''}" onclick="${c.leadId?`openLead('${c.leadId}')`:''}">
+    <div class="fu2-header"><span class="fu2-name">${c.hora} · ${escHtml(c.leadNome||'')}</span></div>
+    ${proxima?'<div class="lig-badge-prox">▶ Próxima ligação</div>':''}
+    ${naoConfirmada?'<div class="lig-badge-alerta">⚠️ Ainda não confirmada</div>':''}
+    <div class="fu2-meta"><span class="lig-selo ${meta.cls}">${meta.label}</span></div>
+    <div class="lig-info">📱 ${escHtml(c.telefone||'—')} · ${escHtml(c.servico||'')}</div>
+    ${c.resumo?`<div class="fu2-note" title="${escHtml(c.resumo)}">📝 ${escHtml(c.resumo)}</div>`:''}
+    <div class="fua-data">👤 Agendada por ${escHtml(c.criadoPor||'—')}${mostrarData?` · 📅 ${dataCurta(c.data)}`:''}</div>
+    <div class="fu2-actions lig-acoes">
+      ${st!=='confirmada'?`<button onclick="event.stopPropagation();confirmarLigacao('${c.id}')" class="btn-done">✓ Confirmar</button>`:''}
+      <button onclick="event.stopPropagation();abrirRemarcarLigacao('${c.id}')" class="btn-wa">↻ Remarcar</button>
+      <button onclick="event.stopPropagation();abrirCancelarLigacao('${c.id}')" class="btn-lig-cancel">✕ Cancelar</button>
+    </div>
+    <div class="fu2-actions">
+      ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" onclick="event.stopPropagation()">WhatsApp</a>`:''}
+      <button onclick="event.stopPropagation();abrirResultadoLigacao('${c.id}')" class="btn-lead" style="flex:1">📝 Registrar resultado</button>
+    </div>
+  </div>`;
+}
 
 // ─── GERAR MENSAGEM FUP COM IA ───
 window.gerarMensagemFUP = async function(id) {
@@ -1924,7 +2362,7 @@ function kanbanCard(l){
     <div class="k-top"><span class="k-name">${l.name||'Sem Nome'}</span>${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'} k-tipo">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}</div>
     <div class="k-trilha">${miniTrilhaK}</div>
     ${l.campaign?`<span class="campaign-tag">${l.campaign}</span>`:''}
-    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}${seloTempoHTML(l,true)}</div>
+    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}${seloTempoHTML(l,true)}${seloLigacaoHTML(l,true)}</div>
     ${l.currentNote?`<div class="k-note">${l.currentNote}</div>`:''}
     <div class="k-footer" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>`:'<span></span>'}
@@ -1995,6 +2433,7 @@ window.openLead=function(id){
   document.getElementById('f-inicio-atend').value=_ini?localDatetimeInput(_ini):'';
   document.querySelectorAll('.tr-obrig').forEach(s=>s.style.display=l?'none':'inline');
   atualizarPreviewTempo();
+  renderLigacaoBoxLead(l||null);
   document.getElementById('f-data-fechamento').value=l?.dataFechamentoContrato?toDateInput(l.dataFechamentoContrato):'';
   document.getElementById('f-honorarios').value=l?.valorHonorarios||'';
   document.getElementById('f-beneficio').value=l?.beneficioConcedido||'';
@@ -4961,6 +5400,63 @@ body.light-theme .cfg-card-title{color:#1A1D2E}
 body.light-theme .cfg-dia{background:#FFFFFF;border-color:#E2E5EE;color:#4B5563}
 body.light-theme .cfg-total{border-top-color:#E2E5EE}
 
+
+/* ═══ FASE 2: TAREFAS NA AGENDA ═══ */
+.ag-tipo-tag{display:inline-flex;align-self:flex-start;font-size:.64rem;font-weight:700;padding:.12rem .5rem;border-radius:999px;border:1px solid}
+.ag-tarefa-desc{font-size:.74rem;color:#D1D5DB;line-height:1.4}
+.ag-venc24{font-size:.66rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:.15rem .45rem;align-self:flex-start}
+.ag-prioridade{border:1px solid #10B981;box-shadow:0 0 0 2px rgba(16,185,129,.18)}
+body.light-theme .ag-tarefa-desc{color:#374151}
+
+/* ═══ FASE 2: LIGAÇÃO DA DRA. ═══ */
+.lig-selo{display:inline-flex;align-items:center;font-size:.64rem;font-weight:700;padding:.12rem .5rem;border-radius:999px;white-space:nowrap}
+.lig-aguardando{background:rgba(245,166,35,.15);color:#F5A623}
+.lig-confirmada{background:rgba(16,185,129,.15);color:#10B981}
+.lig-remarcada{background:rgba(79,110,247,.15);color:#6B8AFF}
+.lig-cancelada{background:rgba(107,114,128,.18);color:#9CA3AF}
+.lig-realizada,.lig-decidiu{background:rgba(16,185,129,.18);color:#10B981}
+.lig-naodecidiu{background:rgba(245,166,35,.15);color:#F5A623}
+.lig-naoatendeu{background:rgba(239,68,68,.14);color:#EF4444}
+.lig-card{border-left:3px solid #4F6EF7}
+.lig-proxima{border-color:#4F6EF7;box-shadow:0 0 0 2px rgba(79,110,247,.35)}
+.lig-alerta{border-left-color:#EF4444;background:rgba(239,68,68,.06)}
+.lig-badge-prox{font-size:.64rem;font-weight:800;color:#fff;background:#4F6EF7;border-radius:6px;padding:.15rem .5rem;align-self:flex-start}
+.lig-badge-alerta{font-size:.66rem;font-weight:700;color:#EF4444;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:.15rem .45rem;align-self:flex-start}
+.lig-info{font-size:.7rem;color:#9CA3AF}
+.lig-acoes{flex-wrap:wrap}
+.btn-lig-cancel{background:transparent;color:#EF4444;border:1px solid #EF4444;border-radius:5px;padding:.28rem .65rem;font-size:.7rem;font-weight:600;cursor:pointer}
+.btn-lig-cancel:hover{background:rgba(239,68,68,.1)}
+.lig-lead-section{background:rgba(79,110,247,.06);border:1px solid rgba(79,110,247,.2);border-radius:10px;padding:.9rem 1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+.lig-lead-title{font-size:.8rem;font-weight:700;color:#4F6EF7;margin-bottom:.3rem}
+.lig-lead-status{display:flex;flex-direction:column;align-items:flex-start;gap:.2rem}
+.lig-lead-status .lig-selo{font-size:.72rem;padding:.2rem .6rem}
+.btn-lig-agendar{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.45rem .9rem;font-size:.76rem;font-weight:700;cursor:pointer;white-space:nowrap;align-items:center}
+.btn-lig-agendar:hover{background:#3B5BDB}
+.lig-resumo{background:#1A1D2E;border:1px solid #2A2F45;border-radius:9px;padding:.75rem .9rem;display:flex;flex-direction:column;gap:.3rem}
+.lig-resumo-nome{font-size:.88rem;font-weight:700;color:#F1F3F9}
+.lig-resumo-linha{font-size:.74rem;color:#9CA3AF;line-height:1.45}
+.lig-janelas{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:.45rem}
+.lig-janela-btn{background:#1E2235;border:1px solid #2A2F45;border-radius:8px;padding:.5rem .4rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:.1rem;color:#F1F3F9;font-family:'Inter',sans-serif;transition:all .15s}
+.lig-janela-btn strong{font-size:.9rem}
+.lig-janela-btn span{font-size:.62rem;color:#10B981;font-weight:600}
+.lig-janela-btn:hover:not([disabled]){border-color:#4F6EF7}
+.lig-janela-btn.active{background:#4F6EF7;border-color:#4F6EF7}
+.lig-janela-btn.active span{color:#fff}
+.lig-janela-btn[disabled]{opacity:.4;cursor:not-allowed}
+.lig-janela-btn[disabled] span{color:#9CA3AF}
+.lig-res-btn{display:flex;align-items:center;gap:.6rem;text-align:left;border-radius:8px;padding:.7rem;font-size:.85rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif}
+.lig-res-btn span{font-size:1.1rem}
+.lig-res-btn small{display:block;font-size:.7rem;opacity:.75;font-weight:400;margin-top:.1rem}
+.lig-res-decidiu{background:rgba(16,185,129,.1);border:1px solid #10B981;color:#10B981}
+.lig-res-naoatendeu{background:rgba(239,68,68,.08);border:1px solid #EF4444;color:#EF4444}
+.lig-res-naodecidiu{background:rgba(245,166,35,.08);border:1px solid #F5A623;color:#F5A623}
+body.light-theme .lig-resumo{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .lig-resumo-nome{color:#1A1D2E}
+body.light-theme .lig-janela-btn{background:#FFFFFF;border-color:#E2E5EE;color:#1A1D2E}
+body.light-theme .lig-janela-btn.active{background:#4F6EF7;color:#fff}
+body.light-theme .lig-remarcada{color:#3B5BDB}
+body.light-theme .lig-cancelada{color:#6B7280}
+
 </style>
 </head>
 <body>
@@ -5142,7 +5638,7 @@ body.light-theme .cfg-total{border-top-color:#E2E5EE}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20b</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20c</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -5320,6 +5816,14 @@ body.light-theme .cfg-total{border-top-color:#E2E5EE}
         <div id="lead-log"></div>
       </div>
       <!-- GERAR MENSAGEM IA -->
+      <!-- LIGAÇÃO DA DRA. -->
+      <div class="lig-lead-section">
+        <div style="min-width:0">
+          <div class="lig-lead-title">📞 Ligação de decisão com a Dra.</div>
+          <div id="lig-lead-status" class="lig-lead-status"></div>
+        </div>
+        <button id="btn-lig-agendar" class="btn-lig-agendar" onclick="abrirModalLigacao()">📞 Agendar ligação da Dra.</button>
+      </div>
       <div id="gerar-msg-section" style="background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.2);border-radius:10px;padding:.9rem 1rem;display:flex;align-items:center;justify-content:space-between;gap:1rem">
         <div>
           <div style="font-size:.8rem;font-weight:700;color:#8B5CF6">✨ Gerar mensagem estratégica com IA</div>
@@ -5538,6 +6042,70 @@ body.light-theme .cfg-total{border-top-color:#E2E5EE}
     </div>
     <div class="modal-body" style="padding-top:.75rem">
       <div id="lead-list-content" style="display:flex;flex-direction:column;gap:.5rem;max-height:60vh;overflow-y:auto"></div>
+    </div>
+  </div>
+</div>
+
+<!-- FASE 2: CONCLUIR TAREFA DA AGENDA -->
+<div id="modal-concluir-tarefa" class="modal-overlay">
+  <div class="modal-box" style="max-width:460px">
+    <div class="modal-head"><span class="modal-title">✓ Concluir tarefa</span><button class="modal-close" onclick="fecharConcluirTarefa()">✕</button></div>
+    <div class="modal-body" style="padding-bottom:1rem">
+      <input type="hidden" id="ct-id"/>
+      <div class="lig-resumo">
+        <div><span class="ag-tipo-tag" id="ct-tipo" style="color:#4F6EF7;border-color:#4F6EF755;background:#4F6EF71F"></span></div>
+        <div class="lig-resumo-nome" id="ct-lead"></div>
+        <div class="lig-resumo-linha" id="ct-desc"></div>
+      </div>
+      <div class="f-group">
+        <label class="f-label">Resultado da tarefa (obrigatório)</label>
+        <textarea id="ct-nota" class="f-textarea" style="min-height:80px" placeholder="Ex: Liguei, a cliente enviou o RG e o CPF. Falta o comprovante de residência, ela envia amanhã."></textarea>
+        <div class="cfg-hint">Conte onde o lead estava parado, o que foi feito e qual o próximo passo. Vai para o histórico do lead.</div>
+      </div>
+    </div>
+    <div class="modal-foot"><div></div><div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharConcluirTarefa()">Cancelar</button><button id="btn-ct-salvar" class="btn-save" onclick="confirmarConcluirTarefa()">Concluir</button></div></div>
+  </div>
+</div>
+<!-- FASE 2: AGENDAR / REMARCAR LIGAÇÃO DA DRA. -->
+<div id="modal-ligacao" class="modal-overlay">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-head"><span class="modal-title" id="lig-modal-title">📞 Agendar ligação da Dra.</span><button class="modal-close" onclick="fecharModalLigacao()">✕</button></div>
+    <div class="modal-body" style="padding-bottom:1rem">
+      <input type="hidden" id="lig-lead-id"/><input type="hidden" id="lig-comp-id"/><input type="hidden" id="lig-modo"/><input type="hidden" id="lig-janela-sel"/>
+      <div class="lig-resumo" id="lig-resumo"></div>
+      <div class="f-group"><label class="f-label">Data da ligação</label><input id="lig-data" type="date" class="f-input" onchange="document.getElementById('lig-janela-sel').value='';renderJanelasLigacao()"/></div>
+      <div id="lig-dia-aviso" class="cfg-hint" style="display:none;color:#F5A623">⚠️ Esse dia está fora do expediente configurado.</div>
+      <div class="f-group"><label class="f-label">Janela</label><div id="lig-janelas" class="lig-janelas"></div></div>
+      <div class="cfg-hint">Confirme o horário com o cliente na hora. A confirmação da Dra. no sistema é só uma conferência interna.</div>
+    </div>
+    <div class="modal-foot"><div></div><div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharModalLigacao()">Cancelar</button><button id="btn-lig-salvar" class="btn-save" onclick="salvarLigacao()">Agendar</button></div></div>
+  </div>
+</div>
+<!-- FASE 2: CANCELAR LIGAÇÃO -->
+<div id="modal-lig-cancelar" class="modal-overlay">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-head"><span class="modal-title">✕ Cancelar ligação</span><button class="modal-close" onclick="fecharCancelarLigacao()">✕</button></div>
+    <div class="modal-body" style="padding-bottom:1rem">
+      <input type="hidden" id="lc-id"/>
+      <div class="f-group"><label class="f-label">Motivo do cancelamento (obrigatório)</label><textarea id="lc-motivo" class="f-textarea" placeholder="Ex: Audiência no horário; cliente pediu outro dia"></textarea></div>
+      <div class="cfg-hint">A atendente responsável recebe na Agenda o aviso para falar com o cliente.</div>
+    </div>
+    <div class="modal-foot"><div></div><div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharCancelarLigacao()">Voltar</button><button id="btn-lc-salvar" class="btn-delete" onclick="confirmarCancelarLigacao()">Cancelar ligação</button></div></div>
+  </div>
+</div>
+<!-- FASE 2: RESULTADO DA LIGAÇÃO -->
+<div id="modal-lig-resultado" class="modal-overlay">
+  <div class="modal-box" style="max-width:460px">
+    <div class="modal-head"><span class="modal-title">📝 Resultado da ligação</span><button class="modal-close" onclick="fecharResultadoLigacao()">✕</button></div>
+    <div class="modal-body" style="padding-bottom:1rem">
+      <input type="hidden" id="lr-id"/>
+      <div class="lig-resumo"><div class="lig-resumo-nome" id="lr-lead"></div></div>
+      <div style="display:flex;flex-direction:column;gap:.5rem">
+        <button class="lig-res-btn lig-res-decidiu" onclick="registrarResultadoLigacao('decidiu')"><span>✅</span><div><div>Decidiu, seguir para formalização</div><small>Lead vai para Ag. Documentos e a atendente recebe a tarefa prioritária</small></div></button>
+        <button class="lig-res-btn lig-res-naoatendeu" onclick="registrarResultadoLigacao('nao_atendeu')"><span>📵</span><div><div>Não atendeu</div><small>A atendente recebe a tarefa de reagendar com o cliente</small></div></button>
+        <div class="f-group" style="margin-top:.3rem"><label class="f-label">Objeção do cliente (obrigatória em "Não decidiu")</label><textarea id="lr-objecao" class="f-textarea" placeholder="Ex: Quer conversar com o marido antes; medo de ser golpe"></textarea></div>
+        <button class="lig-res-btn lig-res-naodecidiu" onclick="registrarResultadoLigacao('nao_decidiu')"><span>🤔</span><div><div>Não decidiu</div><small>A objeção vai para o histórico e o lead segue a trilha de follow-up</small></div></button>
+      </div>
     </div>
   </div>
 </div>
