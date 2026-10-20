@@ -361,6 +361,7 @@ function startLeadsListener(){
   onSnapshot(q,snap=>{allLeads=snap.docs.map(d=>({id:d.id,...d.data()}));leadsCarregados=true;renderAll();agendarSyncTarefas();});
 }
 function renderAll(){
+  renderAlertaMeta();
   renderFuFilterBtns();
   renderMetrics();renderFollowups();renderTarefaHoje();
   if(!primeiraCargaFeita){primeiraCargaFeita=true;setTimeout(checkFuAlertaPessoal,500);}
@@ -725,7 +726,7 @@ function renderTarefaHoje(){
   }
 }
 window.irParaAgenda=function(nome){
-  if(nome&&currentUser?.role==='gestora')window.setAgFilter(nome);
+  if(currentUser?.role==='gestora')window.setAgFilter(nome||'TODOS');
   const wrap=document.getElementById('ag-list-wrap');
   if(wrap&&wrap.classList.contains('fu-collapsed'))window.toggleAgPanel();
   document.getElementById('ag-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
@@ -1198,6 +1199,7 @@ function checkAlarmes(){
     if(window.Notification&&Notification.permission==='granted'){try{new Notification('📋 Tarefas na Agenda',{body:`${novosAuto.length} tarefas para resolver`});}catch(e){}}
   }
   renderAutoauditoriaArea();
+  renderAlertaMeta();
 }
 function filtrarLeadAgenda(){
   const box=document.getElementById('ag-lead-suggestions');if(!box)return;
@@ -2263,6 +2265,72 @@ function renderPainelAutoauditorias(){
       <div class="est-section-title">🗣 Objeções reunidas (autoauditorias e ligações da Dra.)</div>
       ${objs.length?`<div class="aa-lista">${objs.map(g=>`<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome">${escHtml(g.texto)}</span><span class="aa-falha">${g.itens.length}×</span></div><div class="cfg-hint">${g.itens.map(i=>`${escHtml(i.origem)} (${dataCurta(i.data)})`).join(' · ')}</div></div>`).join('')}</div>`:'<div class="cfg-hint">Nenhuma objeção registrada ainda.</div>'}
     </div>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// FASE 4: ALERTA DE META (SÓ PARA A GESTORA)
+// ═══════════════════════════════════════════════════════
+const ALERTA_META_KEY='cg-alerta-meta-oculto';
+function alertaMetaOcultoHoje(){try{return localStorage.getItem(ALERTA_META_KEY)===localDateStr(new Date());}catch(e){return false;}}
+window.ocultarAlertaMetaHoje=function(){
+  try{localStorage.setItem(ALERTA_META_KEY,localDateStr(new Date()));}catch(e){}
+  renderAlertaMeta();
+  showToast('Alerta oculto até amanhã. Ele continua visível na aba Estratégia.');
+};
+function calcAlertaMeta(agora){
+  agora=agora||new Date();
+  const r=calcRitmoMes(null,null,agora);
+  const avaliar=agora.getDate()>=8&&r.meta>0;
+  const pctRitmo=r.esperado>0?r.realizado/r.esperado:null;
+  let nivel='verde';
+  if(avaliar&&pctRitmo!==null){if(pctRitmo<0.6)nivel='vermelho';else if(pctRitmo<0.8)nivel='amarelo';}
+  const ritmoDia=r.diasDecorridos?r.realizado/r.diasDecorridos:0;
+  const projecao=Math.round(ritmoDia*r.diasTotal);
+  const porDia=r.falta<=0?0:(r.diasRestantes>0?Math.ceil(r.falta/r.diasRestantes*10)/10:r.falta);
+  const pend=allCompromissos.filter(c=>c.status==='pendente');
+  const tarefas24=pend.filter(c=>ehTarefa(c)&&c.tipo!=='autoauditoria'&&(agora-dtCompromisso(c))>86400000).length;
+  const ligNaoConf=pend.filter(c=>c.tipo==='ligacao-dra'&&c.statusLigacao!=='confirmada');
+  const ligUrgentes=ligNaoConf.filter(c=>(dtCompromisso(c)-agora)<=3600000).length;
+  const aaAtraso=pend.filter(c=>c.tipo==='autoauditoria'&&agora>prazoAutoauditoria(c)).length;
+  return{...r,avaliar,pctRitmo,nivel,ritmoDia,projecao,porDia,tarefas24,ligNaoConf:ligNaoConf.length,ligUrgentes,aaAtraso};
+}
+function htmlAlertaMeta(a,noTopo){
+  const ops=[];
+  if(a.tarefas24)ops.push(`<button class="ma-op vermelho" onclick="irParaAgenda(null)">📋 ${a.tarefas24} tarefa${a.tarefas24>1?'s':''} vencida${a.tarefas24>1?'s':''} há +24h</button>`);
+  if(a.ligNaoConf)ops.push(`<button class="ma-op ${a.ligUrgentes?'vermelho':'amarelo'}" onclick="irParaAgenda('__LIGACOES__')">📞 ${a.ligNaoConf} ligaç${a.ligNaoConf>1?'ões':'ão'} da Dra. não confirmada${a.ligNaoConf>1?'s':''}${a.ligUrgentes?` (${a.ligUrgentes} em menos de 1h)`:''}</button>`);
+  if(a.aaAtraso)ops.push(`<button class="ma-op vermelho" onclick="switchTab('autoauditorias')">🪞 ${a.aaAtraso} autoauditoria${a.aaAtraso>1?'s':''} em atraso</button>`);
+  const opsHtml=ops.length?`<div class="ma-ops">${ops.join('')}</div>`:'';
+  const ocultar=noTopo?`<button class="ma-ocultar" onclick="ocultarAlertaMetaHoje()" title="Ocultar só hoje">Ocultar hoje ✕</button>`:'';
+  const auditoria=typeof window.abrirAuditoria==='function'?`<button class="ma-btn" onclick="abrirAuditoria()">📑 Gerar auditoria</button>`:'';
+  if(!a.avaliar){
+    if(a.meta<=0&&new Date().getDate()>=8)return `<div class="ma ma-neutro"><div class="ma-head"><span class="ma-titulo">🎯 Meta do mês não definida</span><span class="ma-sub">Defina a meta de cada atendente em Equipe › Configurações para acompanhar o ritmo.</span>${auditoria}${ocultar}</div>${opsHtml}</div>`;
+    if(!ops.length)return '';
+    return `<div class="ma ma-neutro"><div class="ma-head"><span class="ma-titulo">⚙️ Pendências da operação</span><span class="ma-sub">O ritmo da meta começa a ser avaliado no dia 8.</span>${auditoria}${ocultar}</div>${opsHtml}</div>`;
+  }
+  const titulo={verde:'🎯 No ritmo da meta',amarelo:'⚠️ Atenção: abaixo do ritmo da meta',vermelho:'🚨 Alerta: bem abaixo do ritmo da meta'}[a.nivel];
+  const pct=a.pctRitmo===null?'—':Math.round(a.pctRitmo*100)+'%';
+  const dobro=a.porDia>0&&a.ritmoDia>0&&a.porDia>2*a.ritmoDia;
+  return `<div class="ma ma-${a.nivel}">
+    <div class="ma-head"><span class="ma-titulo">${titulo}</span><span class="ma-pct">${pct} do ritmo esperado</span>${auditoria}${ocultar}</div>
+    <div class="ma-nums">
+      <div><strong>${a.realizado}<small>/${a.meta}</small></strong><span>conversões no mês</span></div>
+      <div><strong>${a.esperado}</strong><span>esperado até hoje</span></div>
+      <div><strong>${a.falta}</strong><span>faltam para a meta</span></div>
+      <div><strong>${a.diasRestantes}</strong><span>dias úteis restantes</span></div>
+      <div><strong>${a.porDia}</strong><span>conversões por dia útil</span></div>
+      <div><strong class="${a.projecao>=a.meta?'ok':'ruim'}">${a.projecao}</strong><span>projeção do mês</span></div>
+    </div>
+    ${dobro?`<div class="ma-dica">💡 Para bater a meta, o time precisa de mais que o dobro do ritmo atual (${Math.round(a.ritmoDia*10)/10} por dia útil). Concentre o esforço nos leads qualificados e amplie as ligações da Dra.</div>`:''}
+    ${opsHtml}
+  </div>`;
+}
+function renderAlertaMeta(){
+  const topo=document.getElementById('meta-alerta');
+  const est=document.getElementById('meta-alerta-est');
+  if(!currentUser||currentUser.role!=='gestora'){if(topo)topo.innerHTML='';if(est)est.innerHTML='';return;}
+  const a=calcAlertaMeta(new Date());
+  if(topo)topo.innerHTML=alertaMetaOcultoHoje()?'':htmlAlertaMeta(a,true);
+  if(est)est.innerHTML=htmlAlertaMeta(a,false);
 }
 
 // ─── GERAR MENSAGEM FUP COM IA ───
@@ -6092,6 +6160,40 @@ body.light-theme .aa-opc,body.light-theme .cc-chip{background:#FFFFFF;border-col
 body.light-theme .cc-chip.ok{background:rgba(16,185,129,.12);border-color:#10B981;color:#059669}
 body.light-theme .aa-compromissos-card,body.light-theme .aa-g-card{background:#FFFFFF;border-color:#E2E5EE}
 
+
+/* ═══ FASE 4: ALERTA DE META ═══ */
+.ma{border-radius:12px;padding:.85rem 1.1rem;margin-bottom:1rem;border:1px solid;display:flex;flex-direction:column;gap:.65rem}
+.ma-verde{background:rgba(16,185,129,.07);border-color:rgba(16,185,129,.35)}
+.ma-amarelo{background:rgba(245,166,35,.08);border-color:rgba(245,166,35,.55)}
+.ma-vermelho{background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.6);animation:pulseGlowRed 2.4s ease-in-out infinite}
+.ma-neutro{background:rgba(79,110,247,.06);border-color:rgba(79,110,247,.3)}
+.ma-head{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap}
+.ma-titulo{font-size:.88rem;font-weight:800;color:#F1F3F9}
+.ma-verde .ma-titulo{color:#10B981}.ma-amarelo .ma-titulo{color:#F5A623}.ma-vermelho .ma-titulo{color:#EF4444}
+.ma-pct{font-size:.72rem;font-weight:700;color:#9CA3AF}
+.ma-sub{font-size:.74rem;color:#9CA3AF}
+.ma-head>button:first-of-type{margin-left:auto}
+.ma-btn{background:#4F6EF7;color:#fff;border:none;border-radius:7px;padding:.35rem .8rem;font-size:.72rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif}
+.ma-ocultar{background:transparent;border:1px solid #2A2F45;color:#9CA3AF;border-radius:7px;padding:.3rem .65rem;font-size:.68rem;cursor:pointer;font-family:'Inter',sans-serif}
+.ma-ocultar:hover{border-color:#EF4444;color:#EF4444}
+.ma-nums{display:grid;grid-template-columns:repeat(6,1fr);gap:.5rem}
+.ma-nums div{display:flex;flex-direction:column;align-items:center;text-align:center;background:rgba(11,13,20,.45);border-radius:8px;padding:.5rem .3rem}
+.ma-nums strong{font-size:1.25rem;font-weight:800;color:#F1F3F9;line-height:1.1}
+.ma-nums strong small{font-size:.7rem;color:#6B7280;font-weight:600}
+.ma-nums strong.ok{color:#10B981}.ma-nums strong.ruim{color:#EF4444}
+.ma-nums span{font-size:.62rem;color:#9CA3AF;margin-top:.15rem}
+.ma-dica{font-size:.74rem;color:#F5A623;background:rgba(245,166,35,.08);border-radius:8px;padding:.5rem .75rem;line-height:1.45}
+.ma-ops{display:flex;gap:.4rem;flex-wrap:wrap}
+.ma-op{border-radius:999px;padding:.28rem .75rem;font-size:.7rem;font-weight:700;cursor:pointer;border:1px solid;font-family:'Inter',sans-serif;background:transparent}
+.ma-op.vermelho{color:#EF4444;border-color:rgba(239,68,68,.5);background:rgba(239,68,68,.08)}
+.ma-op.amarelo{color:#F5A623;border-color:rgba(245,166,35,.5);background:rgba(245,166,35,.08)}
+.ma-op:hover{filter:brightness(1.2)}
+@media(max-width:800px){.ma-nums{grid-template-columns:repeat(3,1fr)}}
+body.light-theme .ma-nums div{background:rgba(255,255,255,.75)}
+body.light-theme .ma-nums strong{color:#1A1D2E}
+body.light-theme .ma-ocultar{border-color:#E2E5EE;color:#6B7280}
+body.light-theme .ma-verde .ma-titulo{color:#059669}
+
 </style>
 </head>
 <body>
@@ -6133,6 +6235,7 @@ body.light-theme .aa-compromissos-card,body.light-theme .aa-g-card{background:#F
     </div>
   </header>
   <main>
+    <div id="meta-alerta"></div>
     <div class="tabs-row">
       <div class="tabs">
         <button id="tab-kanban"     class="tab-btn tab-active" onclick="switchTab('kanban')">Kanban</button>
@@ -6275,7 +6378,7 @@ body.light-theme .aa-compromissos-card,body.light-theme .aa-g-card{background:#F
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20d</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20e</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -6305,6 +6408,7 @@ body.light-theme .aa-compromissos-card,body.light-theme .aa-g-card{background:#F
           <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
         </div>
       </div>
+      <div id="meta-alerta-est"></div>
       <div class="period-bar" id="est-period-bar">
         <span class="period-label">📅 Período:</span>
         <button class="period-btn active" onclick="setEstPeriodo('mes-atual',this)">Mês Atual</button>
