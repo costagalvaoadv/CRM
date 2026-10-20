@@ -763,6 +763,8 @@ function localDateStr(d){
 const CFG_PADRAO={
   expediente:{dias:[1,2,3,4,5],inicio:'08:30',fim:'14:00'},
   feriados:[],
+  feriadosOpcoes:{carnaval:false,corpusChristi:false,dataMagnaPE:false,saoJoaoPE:false},
+  feriadosDesligados:[],   // datas automáticas que o escritório decidiu trabalhar
   faixas:{verde:5,amarelo:15},
   janelasDra:['10:00','11:00','13:00','16:00'],
   capacidadeJanela:2,
@@ -777,6 +779,8 @@ function mergeCfg(d){
     expediente:{...CFG_PADRAO.expediente,...(d.expediente||{})},
     faixas:{...CFG_PADRAO.faixas,...(d.faixas||{})},
     feriados:Array.isArray(d.feriados)?d.feriados:[],
+    feriadosOpcoes:{...CFG_PADRAO.feriadosOpcoes,...(d.feriadosOpcoes||{})},
+    feriadosDesligados:Array.isArray(d.feriadosDesligados)?d.feriadosDesligados:[],
     janelasDra:Array.isArray(d.janelasDra)&&d.janelasDra.length?d.janelasDra:[...CFG_PADRAO.janelasDra],
     autoauditoria:d.autoauditoria||{},
     metas:d.metas||{},
@@ -807,12 +811,54 @@ function colunasTempoExport(l){
   };
 }
 
+// ── Feriados: nacionais automáticos (calculados para qualquer ano) + opcionais + manuais ──
+function pascoa(ano){
+  const a=ano%19,b=Math.floor(ano/100),c=ano%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3);
+  const h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451);
+  const mes=Math.floor((h+l-7*m+114)/31),dia=((h+l-7*m+114)%31)+1;
+  return new Date(ano,mes-1,dia,12,0,0);
+}
+const _cacheFeriados={};
+function feriadosAutomaticos(ano){
+  if(_cacheFeriados[ano])return _cacheFeriados[ano];
+  const p=pascoa(ano);
+  const rel=n=>{const d=new Date(p);d.setDate(d.getDate()+n);return localDateStr(d);};
+  const fx=(mm,dd)=>`${ano}-${mm}-${dd}`;
+  const l=[
+    {data:fx('01','01'),nome:'Confraternização Universal',tipo:'nacional'},
+    {data:rel(-2),nome:'Sexta-feira Santa',tipo:'nacional'},
+    {data:fx('04','21'),nome:'Tiradentes',tipo:'nacional'},
+    {data:fx('05','01'),nome:'Dia do Trabalho',tipo:'nacional'},
+    {data:fx('09','07'),nome:'Independência',tipo:'nacional'},
+    {data:fx('10','12'),nome:'Nossa Senhora Aparecida',tipo:'nacional'},
+    {data:fx('11','02'),nome:'Finados',tipo:'nacional'},
+    {data:fx('11','15'),nome:'Proclamação da República',tipo:'nacional'},
+    {data:fx('11','20'),nome:'Consciência Negra',tipo:'nacional'},
+    {data:fx('12','25'),nome:'Natal',tipo:'nacional'},
+    {data:rel(-48),nome:'Carnaval (segunda)',tipo:'opcional',opcao:'carnaval'},
+    {data:rel(-47),nome:'Carnaval (terça)',tipo:'opcional',opcao:'carnaval'},
+    {data:rel(60),nome:'Corpus Christi',tipo:'opcional',opcao:'corpusChristi'},
+    {data:fx('03','06'),nome:'Data Magna de Pernambuco',tipo:'opcional',opcao:'dataMagnaPE'},
+    {data:fx('06','24'),nome:'São João',tipo:'opcional',opcao:'saoJoaoPE'}
+  ].sort((a,b)=>a.data.localeCompare(b.data));
+  _cacheFeriados[ano]=l;return l;
+}
+function feriadoAutoAtivo(f,cfg){
+  cfg=cfg||cfgComercial;
+  if((cfg.feriadosDesligados||[]).includes(f.data))return false;
+  return f.tipo==='nacional'||!!(cfg.feriadosOpcoes||{})[f.opcao];
+}
+function ehFeriado(dStr){
+  if((cfgComercial.feriados||[]).includes(dStr))return true;
+  const f=feriadosAutomaticos(parseInt(dStr.slice(0,4))).find(x=>x.data===dStr);
+  return !!(f&&feriadoAutoAtivo(f));
+}
 // Lead chegou fora do expediente humano? (dia não útil, feriado ou fora do horário)
 function calcForaExpediente(d){
   if(!d)return null;
   const e=cfgComercial.expediente;
   if(!(e.dias||[]).includes(d.getDay()))return true;
-  if((cfgComercial.feriados||[]).includes(localDateStr(d)))return true;
+  if(ehFeriado(localDateStr(d)))return true;
   const hm=horaStr(d);
   return !(hm>=e.inicio&&hm<e.fim);
 }
@@ -905,6 +951,12 @@ function renderConfigComercial(){
         </div>
         <div class="cfg-card">
           <div class="cfg-card-title">📅 Feriados (dias não úteis)</div>
+          <div class="cfg-sub-t">Nacionais de ${new Date().getFullYear()} <span class="cfg-auto-tag">automático</span></div>
+          <div class="cfg-chips" id="cfg-feriados-auto"></div>
+          <div class="cfg-hint" style="margin-top:-.2rem">Calculados sozinhos todo ano. Clique em um para desligar se o comercial trabalhar nesse dia.</div>
+          <div class="cfg-sub-t">O escritório fecha também em:</div>
+          <div class="cfg-opcoes-fer" id="cfg-feriados-opcoes"></div>
+          <div class="cfg-sub-t">Estaduais e municipais (manual)</div>
           <div class="cfg-row"><input type="date" id="cfg-feriado-novo" class="f-input" style="flex:1"/><button class="btn-meta btn-meta-primary" onclick="cfgAddFeriado()">+ Adicionar</button></div>
           <div class="cfg-chips" id="cfg-feriados-lista"></div>
         </div>
@@ -930,7 +982,34 @@ function renderConfigComercial(){
     </div>`;
   renderCfgFeriados();renderCfgJanelas();renderCfgMetas();cfgChecarEscalonamento();
 }
+function renderCfgFeriadosAuto(){
+  const ano=new Date().getFullYear();
+  const todos=feriadosAutomaticos(ano);
+  const el=document.getElementById('cfg-feriados-auto');
+  if(el)el.innerHTML=todos.filter(f=>f.tipo==='nacional').map(f=>{
+    const on=feriadoAutoAtivo(f,cfgDraft);
+    return `<button type="button" class="cfg-chip cfg-chip-auto ${on?'':'off'}" onclick="cfgToggleAuto('${f.data}')" title="${on?'Clique para desligar (comercial trabalha)':'Desligado: clique para voltar a ser feriado'}">${dataCurta(f.data)} ${f.nome}</button>`;
+  }).join('');
+  const op=document.getElementById('cfg-feriados-opcoes');
+  if(op){
+    const grupos=[['carnaval','Carnaval (segunda e terça)'],['corpusChristi','Corpus Christi'],['dataMagnaPE','Data Magna de Pernambuco'],['saoJoaoPE','São João (Pernambuco)']];
+    op.innerHTML=grupos.map(([k,lbl])=>{
+      const datas=todos.filter(f=>f.opcao===k).map(f=>dataCurta(f.data)).join(' e ');
+      return `<label class="cfg-fer-op"><input type="checkbox" ${(cfgDraft.feriadosOpcoes||{})[k]?'checked':''} onchange="cfgToggleOpcaoFeriado('${k}',this.checked)"/> ${lbl} <span class="cfg-unid">(${datas})</span></label>`;
+    }).join('');
+  }
+}
+window.cfgToggleAuto=function(data){
+  const l=cfgDraft.feriadosDesligados||(cfgDraft.feriadosDesligados=[]);
+  cfgDraft.feriadosDesligados=l.includes(data)?l.filter(x=>x!==data):[...l,data];
+  renderCfgFeriadosAuto();
+};
+window.cfgToggleOpcaoFeriado=function(k,v){
+  cfgDraft.feriadosOpcoes={...(cfgDraft.feriadosOpcoes||{}),[k]:v};
+  renderCfgFeriadosAuto();
+};
 function renderCfgFeriados(){
+  renderCfgFeriadosAuto();
   const el=document.getElementById('cfg-feriados-lista');if(!el)return;
   const l=[...cfgDraft.feriados].sort();
   el.innerHTML=l.length?l.map(f=>`<span class="cfg-chip">${formatDate(f+'T12:00:00')}<button onclick="cfgRemFeriado('${f}')" title="Remover">✕</button></span>`).join(''):'<span class="cfg-hint" style="margin:0">Nenhum feriado cadastrado.</span>';
@@ -1002,6 +1081,8 @@ window.salvarConfigComercial=async function(){
   const dados={
     expediente:{dias,inicio,fim},
     feriados:[...cfgDraft.feriados].sort(),
+    feriadosOpcoes:cfgDraft.feriadosOpcoes||{},
+    feriadosDesligados:cfgDraft.feriadosDesligados||[],
     faixas:{verde,amarelo},
     janelasDra:[...cfgDraft.janelasDra].sort(),
     capacidadeJanela:capacidade,
@@ -1394,7 +1475,7 @@ function servicoLead(l){return l?.tipo==='SM'?'Salário-Maternidade':'Previdenci
 
 // ── Datas das tarefas automáticas (sempre dia útil, no início do expediente) ──
 function ehDiaUtil(d){
-  return (cfgComercial.expediente.dias||[]).includes(d.getDay())&&!(cfgComercial.feriados||[]).includes(localDateStr(d));
+  return (cfgComercial.expediente.dias||[]).includes(d.getDay())&&!ehFeriado(localDateStr(d));
 }
 function proxDiaUtil(d){
   const x=new Date(d);
@@ -6262,6 +6343,20 @@ body.light-theme .ma-verde .ma-titulo{color:#059669}
 body.light-theme .ma-sem-titulo{color:#4B5563}
 body.light-theme .ma-sem-chip.verde{color:#059669}
 
+
+/* Feriados automáticos + versão no topo */
+.cfg-sub-t{font-size:.66rem;font-weight:700;color:#9CA3AF;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center;gap:.4rem}
+.cfg-auto-tag{font-size:.58rem;font-weight:700;text-transform:none;letter-spacing:0;color:#10B981;background:rgba(16,185,129,.12);border-radius:999px;padding:.05rem .45rem}
+.cfg-chip-auto{cursor:pointer;padding:.2rem .6rem;font-family:'Inter',sans-serif;background:rgba(16,185,129,.1);color:#10B981;border-color:rgba(16,185,129,.3)}
+.cfg-chip-auto.off{background:transparent;color:#6B7280;border-color:#2A2F45;text-decoration:line-through}
+.cfg-opcoes-fer{display:flex;flex-direction:column;gap:.3rem}
+.cfg-fer-op{display:flex;align-items:center;gap:.4rem;font-size:.76rem;color:#D1D5DB;cursor:pointer}
+.cfg-fer-op input{accent-color:#4F6EF7}
+.h-versao{font-size:.6rem;font-weight:600;color:#6B7280;background:#13161F;border:1px solid #1E2235;border-radius:999px;padding:.1rem .5rem;margin-left:.4rem;letter-spacing:0;vertical-align:middle}
+body.light-theme .cfg-fer-op{color:#374151}
+body.light-theme .h-versao{background:#F4F5F8;border-color:#E2E5EE}
+body.light-theme .cfg-chip-auto.off{border-color:#E2E5EE}
+
 </style>
 </head>
 <body>
@@ -6290,7 +6385,7 @@ body.light-theme .ma-sem-chip.verde{color:#059669}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM</div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-10-20g</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -6446,7 +6541,7 @@ body.light-theme .ma-sem-chip.verde{color:#059669}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20f</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20g</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
