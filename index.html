@@ -106,6 +106,8 @@ function showApp(){
   ['tab-relatorios','tab-equipe','tab-autoauditorias'].forEach(t=>{const el=document.getElementById(t);if(el)el.style.display=isG?'inline-block':'none';});
   const tabEst=document.getElementById('tab-estrategia');
   if(tabEst)tabEst.style.display='inline-block';
+  const btnAud=document.getElementById('btn-hdr-auditoria');
+  if(btnAud)btnAud.style.display=isG?'inline-block':'none';
   // Painel de Follow-up: atendente entra já filtrado nos próprios leads; gestora vê todos
   fuFilter=isG?'TODOS':(currentUser.nome||'TODOS');
   primeiraCargaFeita=false;
@@ -2413,7 +2415,11 @@ function alertaMetaOcultoHoje(){try{return localStorage.getItem(ALERTA_META_KEY)
 window.ocultarAlertaMetaHoje=function(){
   try{localStorage.setItem(ALERTA_META_KEY,localDateStr(new Date()));}catch(e){}
   renderAlertaMeta();
-  showToast('Alerta oculto até amanhã. Ele continua visível na aba Estratégia.');
+  showToast('Alerta oculto até amanhã. A auditoria continua no botão 📑 Auditoria do topo.');
+};
+window.mostrarAlertaMetaHoje=function(){
+  try{localStorage.removeItem(ALERTA_META_KEY);}catch(e){}
+  renderAlertaMeta();
 };
 function calcAlertaMeta(agora){
   agora=agora||new Date();
@@ -2481,7 +2487,9 @@ function renderAlertaMeta(){
   const est=document.getElementById('meta-alerta-est');
   if(!currentUser||currentUser.role!=='gestora'){if(topo)topo.innerHTML='';if(est)est.innerHTML='';return;}
   const a=calcAlertaMeta(new Date());
-  if(topo)topo.innerHTML=alertaMetaOcultoHoje()?'':htmlAlertaMeta(a,true);
+  if(topo)topo.innerHTML=alertaMetaOcultoHoje()
+    ?`<div class="ma-oculto"><span>🎯 Alerta da meta oculto hoje</span><button type="button" onclick="mostrarAlertaMetaHoje()">Mostrar novamente</button></div>`
+    :htmlAlertaMeta(a,true);
   if(est)est.innerHTML=htmlAlertaMeta(a,false);
 }
 
@@ -6714,6 +6722,15 @@ body.light-theme .ma-ocultar{border-color:#E2E5EE;color:#6B7280}
 body.light-theme .ma-verde .ma-titulo{color:#059669}
 
 
+/* Botão fixo da auditoria + faixa oculta */
+.btn-hdr-aud{border-color:rgba(79,110,247,.45);color:#8FA3FF}
+.btn-hdr-aud:hover{background:rgba(79,110,247,.12);border-color:#4F6EF7;color:#F1F3F9}
+.ma-oculto{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;font-size:.72rem;color:#6B7280;border:1px dashed #2A2F45;border-radius:9px;padding:.4rem .8rem;margin-bottom:1rem}
+.ma-oculto button{background:none;border:none;color:#4F6EF7;font-size:.72rem;font-weight:700;cursor:pointer;padding:0;font-family:'Inter',sans-serif}
+.ma-oculto button:hover{text-decoration:underline}
+body.light-theme .btn-hdr-aud{color:#3B5BDB;border-color:rgba(79,110,247,.4)}
+body.light-theme .ma-oculto{border-color:#D1D5DB}
+
 /* Fase 4b: meta semanal na faixa */
 .ma-semana{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
 .ma-sem-titulo{font-size:.72rem;font-weight:700;color:#C4C9D8;margin-right:.2rem}
@@ -6861,7 +6878,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-10-20i</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-10-23a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -6870,6 +6887,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <input type="file" id="import-file" accept=".xlsx" style="display:none" onchange="importarExcel(this)"/>
       <button class="btn-hdr" onclick="fazerBackup()" title="Backup completo">💾</button>
       <button class="btn-hdr" onclick="document.getElementById('import-file').click()">⬆ Importar</button>
+      <button class="btn-hdr btn-hdr-aud" id="btn-hdr-auditoria" onclick="abrirAuditoria()" style="display:none" title="Abrir a auditoria do mês">📑 Auditoria</button>
       <button class="btn-hdr btn-hdr-primary" onclick="openLead('new')">+ Novo Lead</button>
     </div>
   </header>
@@ -7018,7 +7036,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-20i</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-23a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
