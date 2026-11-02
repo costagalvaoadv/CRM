@@ -1855,7 +1855,16 @@ function itensChecklist(l){return CHECKLIST_CONV.filter(i=>!i.soSM||l.tipo==='SM
 function chegadaLead(l){return tsToDate(l.dataHoraChegada)||tsToDate(l.createdAt);}
 function entrouQualificadoEm(l){
   const e=(l.log||[]).find(x=>STATUS_QUALIFICADO_OU_POSTERIOR.includes(x.statusChange));
-  return e?new Date(e.ts):null;
+  if(e)return new Date(e.ts);
+  // Lead cadastrado já como Qualificado (ou etapa seguinte): conta a data do cadastro
+  if(STATUS_QUALIFICADO_OU_POSTERIOR.includes(l.status))return tsToDate(l.createdAt)||tsToDate(l.lastContact);
+  return null;
+}
+// Desde quando o lead está no status Qualificado (última entrada nesse status)
+function qualificadoDesde(l){
+  const es=(l.log||[]).filter(x=>x.statusChange==='QUALIFICADO');
+  if(es.length)return new Date(es[es.length-1].ts);
+  return entrouQualificadoEm(l)||tsToDate(l.lastContact);
 }
 function contarDiasUteis(ini,fim){
   let n=0;const d=new Date(ini);d.setHours(12,0,0,0);const f=new Date(fim);f.setHours(12,0,0,0);
@@ -1913,10 +1922,34 @@ function diaAutoauditoria(ref){
   return localDateStr(sex);
 }
 function prazoAutoauditoria(c){return new Date(dtCompromisso(c).getTime()+60*60000);}
+const AA_LIMITE_DIAS=28;
+// Período da autoauditoria: começa onde a anterior terminou (conclusão ou dispensa)
+// e vai até o momento em que a atendente faz. Sem buraco e sem repetição.
 function periodoAutoauditoria(c,agora){
-  const ini=dtCompromisso(c);ini.setDate(ini.getDate()-7);
-  return{ini,fim:agora||new Date()};
+  agora=agora||new Date();
+  const minhas=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.id!==c.id&&x.data<=c.data);
+  let marco=null;
+  minhas.forEach(x=>{
+    let d=null;
+    if(x.status==='feito')d=dataConclusao(x)||dtCompromisso(x);
+    else if(x.status==='dispensada')d=dtCompromisso(x);
+    if(d&&d<=agora&&(!marco||d>marco))marco=d;
+  });
+  const naoFeitas=minhas.filter(x=>x.status==='nao_realizada'||x.status==='pendente');
+  const incluidas=naoFeitas.filter(x=>!marco||dtCompromisso(x)>marco).length;
+  let ini;
+  if(marco)ini=new Date(marco);
+  else{
+    const maisAntiga=[c,...naoFeitas].map(dtCompromisso).sort((a,b)=>a-b)[0];
+    ini=new Date(maisAntiga.getTime()-7*86400000);
+  }
+  const limite=new Date(agora.getTime()-AA_LIMITE_DIAS*86400000);
+  const limitado=ini<limite;
+  if(limitado)ini=limite;
+  return{ini,fim:agora,limitado,incluidas};
 }
+const MESES_NOME=['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+function capitaliza(t){return t?t.charAt(0).toUpperCase()+t.slice(1):t;}
 
 // Cria a autoauditoria da semana de cada atendente (visível na Agenda desde segunda)
 async function sincronizarAutoauditorias(){
@@ -1943,7 +1976,42 @@ async function sincronizarAutoauditorias(){
       status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp()
     }).catch(()=>syncCriando.delete(id));
   }
+  await consolidarAutoauditorias();
 }
+// Se houver mais de uma autoauditoria vencida e pendente, só a mais recente fica aberta.
+// As antigas ficam registradas como "Não realizada no prazo" e o período delas entra na mais recente.
+async function consolidarAutoauditorias(){
+  const agora=new Date();
+  const porAtendente={};
+  allCompromissos.filter(c=>c.tipo==='autoauditoria'&&c.status==='pendente'&&dtCompromisso(c)<=agora)
+    .forEach(c=>{(porAtendente[c.atendente]=porAtendente[c.atendente]||[]).push(c);});
+  for(const lista of Object.values(porAtendente)){
+    if(lista.length<2)continue;
+    lista.sort((a,b)=>b.data.localeCompare(a.data));
+    const atual=lista[0];
+    for(const velha of lista.slice(1)){
+      const chave='aa-consol-'+velha.id;
+      if(syncCriando.has(chave))continue;
+      syncCriando.add(chave);
+      await updateDoc(doc(db,'compromissos',velha.id),{
+        status:'nao_realizada',substituidaPor:atual.id,
+        fechadaEm:serverTimestamp(),fechadaEmLocal:agora.toISOString()
+      }).catch(()=>syncCriando.delete(chave));
+    }
+  }
+}
+// Botão "Dispensar" (só gestora): férias, atestado etc.
+window.dispensarAutoauditoria=async function(compId){
+  if(currentUser?.role!=='gestora')return;
+  const c=allCompromissos.find(x=>x.id===compId);if(!c)return;
+  const motivo=(document.getElementById('aa-disp-'+compId)?.value||'').trim();
+  if(!motivo)return showToast('Informe o motivo da dispensa (ex.: férias, atestado)','error');
+  if(!confirm(`Dispensar a autoauditoria de ${c.atendente} da semana de ${dataCurta(c.data)}?`))return;
+  try{
+    await updateDoc(doc(db,'compromissos',compId),{status:'dispensada',motivoDispensa:motivo,dispensadaPor:currentUser?.nome||'—',fechadaEm:serverTimestamp(),fechadaEmLocal:new Date().toISOString()});
+    showToast('Autoauditoria dispensada.');
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
 
 // ── Números da semana (nunca mistura atendentes) ──
 function calcNumerosAtendente(nome,ini,fim){
@@ -1970,6 +2038,7 @@ function calcNumerosAtendente(nome,ini,fim){
 }
 
 // ── Falhas encontradas automaticamente nos leads da atendente ──
+const QUALIF_PARADO_MS=24*3600000; // alerta: qualificado sem avançar há mais de 1 dia
 function calcFalhas(nome,ini,fim){
   const noP=d=>!!d&&d>=ini&&d<=fim;
   const ativos=['EM ANDAMENTO','SEM RESPOSTA','QUALIFICADO','AGUARDANDO DOCUMENTOS','AGUARDANDO ASSINATURA'];
@@ -1983,9 +2052,13 @@ function calcFalhas(nome,ini,fim){
       if(e.user===nome&&e.note==='Atualizado'&&noP(new Date(e.ts))&&!log.some(x=>x.complementa===e.ts))
         f.push({k:`nota-${l.id}-${e.ts}`,tipo:'nota',lead:l,ts:e.ts,txt:`Contato de ${formatDatetime(new Date(e.ts))} salvo sem nota`});
     });
-    const qEm=entrouQualificadoEm(l)||tsToDate(l.lastContact);
-    if(l.status==='QUALIFICADO'&&qEm&&qEm>=lim30&&!ligacaoAtiva(l)&&l.ligacaoDra?.status!=='realizada')
-      f.push({k:`semlig-${l.id}`,tipo:'semlig',lead:l,txt:'Qualificado sem ligação da Dra. agendada'});
+    if(l.status==='QUALIFICADO'&&!ligacaoAtiva(l)&&l.ligacaoDra?.status!=='realizada'){
+      const desde=qualificadoDesde(l);
+      if(desde&&desde>=lim30&&(fim-desde)>QUALIF_PARADO_MS){
+        const dias=Math.floor((fim-desde)/86400000);
+        f.push({k:`parado-${l.id}`,tipo:'parado',lead:l,desde,txt:`Qualificado parado há ${dias} dia${dias>1?'s':''}`});
+      }
+    }
     if(ativos.includes(l.status)&&l.ligacaoDra?.status==='realizada'&&l.ligacaoDra?.resultado==='nao_atendeu')
       f.push({k:`naoatendeu-${l.id}`,tipo:'naoatendeu',lead:l,txt:'Ligação da Dra. "Não atendeu" sem novo agendamento'});
     if(l.status==='CONTRATO FECHADO'){
@@ -2003,7 +2076,7 @@ function calcPendencias(nome){
   return{
     fuVencidos:allLeads.filter(l=>l.assignee===nome&&leadEstaAtrasadoHoje(l,todayEnd)),
     tarefas:allCompromissos.filter(c=>ehTarefa(c)&&c.tipo!=='autoauditoria'&&c.status==='pendente'&&c.atendente===nome).sort((a,b)=>(a.data+a.hora).localeCompare(b.data+b.hora)),
-    semLigacao:calcFalhas(nome,new Date(0),new Date()).filter(x=>x.tipo==='semlig').map(x=>x.lead)
+    parados:calcFalhas(nome,new Date(0),new Date()).filter(x=>x.tipo==='parado')
   };
 }
 
@@ -2045,19 +2118,28 @@ window.abrirAutoauditoria=function(compId){
   if(c.atendente!==currentUser?.nome){showToast('A autoauditoria é feita pela própria atendente. O resumo aparece na aba Autoauditorias.','warn');return;}
   if(c.status!=='pendente')return showToast('Esta autoauditoria já foi concluída.','warn');
   const agora=new Date();
-  const{ini,fim}=periodoAutoauditoria(c,agora);
+  const maisRecente=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='pendente'&&dtCompromisso(x)<=agora).sort((a,b)=>b.data.localeCompare(a.data))[0];
+  if(maisRecente&&maisRecente.id!==c.id)return abrirAutoauditoria(maisRecente.id);
+  const{ini,fim,limitado,incluidas}=periodoAutoauditoria(c,agora);
+  const dur=fim-ini,iniAnt=new Date(ini.getTime()-dur);
+  const venc=dtCompromisso(c);
+  const mesmoMes=venc.getFullYear()===agora.getFullYear()&&venc.getMonth()===agora.getMonth();
+  const refRitmo=mesmoMes?agora:new Date(venc.getFullYear(),venc.getMonth()+1,0,23,59,59);
+  const uidAA=c.atendenteUid||currentUser.uid;
+  const semObj=calcSemanaMeta(venc,c.atendente);
   const anterior=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='feito'&&x.data<c.data).sort((a,b)=>b.data.localeCompare(a.data))[0]||null;
   const compAnt=(anterior?.resultado?.compromissos||[]).map(t=>({texto:t,status:''}));
-  const ms=7*86400000;
   aaState={
-    compId,c,ini,fim,anteriorId:anterior?.id||null,compAnt,
+    compId,c,ini,fim,iniAnt,limitado,incluidas,anteriorId:anterior?.id||null,compAnt,
     steps:[...(compAnt.length?['anteriores']:[]),'numeros','conferencia','pendencias','reflexao','compromissos'],idx:0,
     falhasInicio:calcFalhas(c.atendente,ini,fim).map(f=>({k:f.k,tipo:f.tipo,leadId:f.lead.id,leadNome:f.lead.name||'',txt:f.txt})),
     correcoes:[],reflexao:{objecao:'',diferente:'',hoje:''},compromissos:['','',''],
     numeros:calcNumerosAtendente(c.atendente,ini,fim),
-    numerosAnt:calcNumerosAtendente(c.atendente,new Date(ini.getTime()-ms),new Date(fim.getTime()-ms)),
-    ritmo:calcRitmoMes(c.atendente,currentUser.uid,agora),
-    semana:calcSemanaMeta(agora,c.atendente).itens[0]||null
+    numerosAnt:calcNumerosAtendente(c.atendente,iniAnt,ini),
+    ritmo:{...calcRitmoMes(c.atendente,uidAA,refRitmo),fechado:!mesmoMes,mesNome:MESES_NOME[venc.getMonth()]},
+    ritmoAtual:mesmoMes?null:{...calcRitmoMes(c.atendente,uidAA,agora),mesNome:MESES_NOME[agora.getMonth()]},
+    semana:semObj.itens[0]||null,
+    semanaSeg:semObj.seg
   };
   document.getElementById('modal-autoauditoria').style.display='flex';
   renderAAStep();
@@ -2083,7 +2165,7 @@ function aaSeta(a,b,menorMelhor){
 }
 function aaCardNum(label,a,b,fmt,menorMelhor){
   const f=fmt||(v=>v===null||v===undefined?'—':v);
-  return `<div class="aa-num"><div class="aa-num-val">${f(a)} ${aaSeta(a,b,menorMelhor)}</div><div class="aa-num-label">${label}</div><div class="aa-num-ant">semana anterior: ${f(b)}</div></div>`;
+  return `<div class="aa-num"><div class="aa-num-val">${f(a)} ${aaSeta(a,b,menorMelhor)}</div><div class="aa-num-label">${label}</div><div class="aa-num-ant">período anterior: ${f(b)}</div></div>`;
 }
 function aaStepAnteriores(){
   return `<div class="aa-intro">Vamos começar olhando para os compromissos que você assumiu na semana passada. Seja sincera(o): isso é para o seu desenvolvimento, não para cobrança. 💙</div>
@@ -2098,8 +2180,11 @@ window.aaSetCompromisso=function(i,v){if(aaState)aaState.compromissos[i]=v;};
 function aaStepNumeros(){
   const n=aaState.numeros,a=aaState.numerosAnt,r=aaState.ritmo;
   const pct=v=>v===null||v===undefined?'—':v+'%';
-  const dentro=r.meta?(r.realizado>=r.esperado):null;
-  return `<div class="aa-intro">Estes são os seus números de ${formatDatetime(aaState.ini)} até agora, comparados com a semana anterior. ▲ verde é melhora, ▼ vermelho é ponto de atenção.</div>
+  const msg=msgRitmoAA(r);
+  const ra=aaState.ritmoAtual;
+  const semFim=aaState.semanaSeg?new Date(aaState.semanaSeg.getTime()+4*86400000):null;
+  return `<div class="aa-intro">Estes são os seus números de <strong>${formatDatetime(aaState.ini)} até agora</strong>${aaState.limitado?' (limite das últimas 4 semanas)':''}, comparados com o período anterior de mesmo tamanho (${formatDatetime(aaState.iniAnt)} a ${formatDatetime(aaState.ini)}). A seta mostra se o número subiu ou desceu. Verde é melhora, vermelho é ponto de atenção.</div>
+  ${aaState.incluidas?`<div class="aa-msg atencao" style="margin-top:.6rem">⏰ Esta autoauditoria inclui ${aaState.incluidas} autoauditoria${aaState.incluidas>1?'s':''} que ficou sem ser feita. Por isso o período é maior que uma semana.</div>`:''}
   <div class="aa-nums">
     ${aaCardNum('Leads recebidos',n.recebidos,a.recebidos)}
     ${aaCardNum('Qualificados',n.qualificados,a.qualificados)}
@@ -2113,7 +2198,7 @@ function aaStepNumeros(){
     ${aaCardNum('🔴 No vermelho',n.pctVermelho,a.pctVermelho,pct,true)}
   </div>
   ${aaState.semana?`<div class="aa-ritmo">
-    <div class="aa-sub">🎯 Minha meta da semana</div>
+    <div class="aa-sub">🎯 Minha meta da semana${aaState.semanaSeg?` (${dataCurta(localDateStr(aaState.semanaSeg))} a ${dataCurta(localDateStr(semFim))})`:''}</div>
     <div class="aa-ritmo-grid" style="grid-template-columns:repeat(2,1fr)">
       <div><strong>${aaState.semana.realizado} de ${aaState.semana.meta}</strong><span>conversões nesta semana</span></div>
       <div><strong>${Math.max(0,aaState.semana.meta-aaState.semana.realizado)}</strong><span>faltam para a meta da semana</span></div>
@@ -2121,16 +2206,40 @@ function aaStepNumeros(){
     <div class="aa-msg ${aaState.semana.realizado>=aaState.semana.meta?'ok':'atencao'}">${aaState.semana.realizado>=aaState.semana.meta?'Meta da semana alcançada! Parabéns pelo trabalho. 💙':'A meta da semana ainda não veio. O que você planejar hoje já conta para a próxima semana.'}</div>
   </div>`:''}
   <div class="aa-ritmo">
-    <div class="aa-sub">📈 Meu ritmo do mês</div>
+    <div class="aa-sub">📈 Meu ritmo de ${r.mesNome}${r.fechado?' (mês encerrado)':''}</div>
     ${r.meta?`<div class="aa-ritmo-grid">
       <div><strong>${r.realizado}</strong><span>conversões realizadas</span></div>
-      <div><strong>${numBR(r.esperado)}</strong><span>esperado até hoje</span></div>
+      ${r.fechado
+        ?`<div><strong>${r.meta}</strong><span>meta do mês</span></div>
+      <div><strong>${r.falta}</strong><span>ficaram faltando</span></div>
+      <div><strong>${r.diasTotal}</strong><span>dias úteis no mês</span></div>`
+        :`<div><strong>${numBR(r.esperado)}</strong><span>esperado até hoje</span></div>
       <div><strong>${r.falta}</strong><span>faltam para a meta de ${r.meta}</span></div>
-      <div><strong>${r.diasRestantes}</strong><span>dias úteis restantes</span></div>
+      <div><strong>${r.diasRestantes}</strong><span>dias úteis restantes</span></div>`}
     </div>
-    <div class="aa-msg ${dentro?'ok':'atencao'}">${dentro?'Você está no ritmo ou à frente. Continue assim! 💙':`Faltam ${Math.max(0,Math.ceil(r.esperado-r.realizado))} conversão(ões) para o ritmo de hoje. Vamos transformar isso em ação na próxima semana.`}</div>`
+    <div class="aa-msg ${msg[0]}">${msg[1]}</div>
+    ${ra&&ra.meta?`<div class="aa-msg-mes">📆 ${capitaliza(ra.mesNome)} já começou: meta de <strong>${ra.meta} conversões</strong> em ${ra.diasTotal} dias úteis${ra.realizado?`, ${ra.realizado} já realizada${ra.realizado>1?'s':''}`:''}. ${msgRitmoAA(ra)[1]}</div>`:''}`
     :'<div class="cfg-hint">Sua meta do mês ainda não foi definida pela gestora.</div>'}
   </div>`;
+}
+function msgRitmoAA(r){
+  if(!r||!r.meta)return['atencao',''];
+  const mes=r.mesNome||'mês';
+  if(r.realizado>=r.meta)return['ok',`🏆 Meta de ${mes} alcançada! Parabéns, você fez ${r.realizado} de ${r.meta} conversões. Agora é ampliar esse resultado.`];
+  if(r.fechado){
+    const perto=r.realizado/r.meta>=0.8;
+    return[perto?'atencao':'alerta',`📅 ${capitaliza(mes)} fechou com ${r.realizado} de ${r.meta} conversões. Ficaram faltando ${r.falta}. ${perto?'Foi por pouco! ':''}Use a reflexão desta autoauditoria para chegar mais forte no mês seguinte.`];
+  }
+  if(r.esperado<1&&r.realizado===0){
+    const porSem=r.diasRestantes>0?Math.round(r.falta/(r.diasRestantes/5)*10)/10:r.falta;
+    return['ok',`🚀 O mês está começando. São ${r.falta} conversões em ${r.diasRestantes} dias úteis, cerca de ${numBR(porSem)} por semana. Que tal garantir a primeira já nesta semana?`];
+  }
+  const pct=r.esperado>0?r.realizado/r.esperado:1;
+  if(pct>=1)return['ok',r.realizado>=r.esperado+1
+    ?`🎉 Você está à frente do ritmo: ${r.realizado} conversões, quando o esperado até aqui era ${numBR(r.esperado)}. Parabéns, continue assim!`
+    :`🎉 Você está no ritmo da meta: ${r.realizado} conversões, e o esperado até aqui era ${numBR(r.esperado)}. Parabéns, continue assim!`];
+  if(pct>=0.6)return['atencao',`⚠️ Você está um pouco abaixo do ritmo: ${r.realizado} de ${numBR(r.esperado)} esperadas até aqui. Faltam ${r.falta} em ${r.diasRestantes} dias úteis. Priorize os qualificados. Dá para virar!`];
+  return['alerta',`🚨 Ritmo bem abaixo do esperado: ${r.realizado} de ${numBR(r.esperado)} esperadas até aqui. Para bater a meta, são ${r.falta} conversões em ${r.diasRestantes} dias úteis. Hora de alinhar a estratégia com a gestora e focar nos leads mais quentes.`];
 }
 function aaFormFalha(f,i){
   const l=f.lead;
@@ -2149,7 +2258,19 @@ function aaFormFalha(f,i){
       <label>Honorários (R$) <input type="number" id="aa-hon-${i}" class="f-input" min="0" step="0.01" value="${l.valorHonorarios||''}"/></label>
       <button class="btn-done" onclick="aaCorrigirFechamento(${i},'${l.id}')">💾 Salvar</button></div>`;
   }
-  return `<div class="aa-fix"><button class="btn-lead" style="width:auto" onclick="aaAbrirLead('${l.id}')">📋 Abrir lead e ${f.tipo==='semlig'?'agendar a ligação':'reagendar a ligação'}</button></div>`;
+  if(f.tipo==='parado')return `<div class="aa-fix"><button class="btn-lead" style="width:auto" onclick="aaAbrirLead('${l.id}')">📋 Abrir lead e retomar o contato</button></div>`;
+  return `<div class="aa-fix"><button class="btn-lead" style="width:auto" onclick="aaAbrirLead('${l.id}')">📋 Abrir lead e reagendar a ligação</button></div>`;
+}
+const AA_ORIENT_PARADO=`<div class="aa-orient">
+    <div class="aa-orient-t">🧭 O que fazer com estes leads</div>
+    <ol>
+      <li>Retome o contato <strong>com prioridade nas próximas 24h</strong>, com uma mensagem direta convidando a cliente a seguir para o envio dos documentos.</li>
+      <li>✅ <strong>Topou:</strong> mude o status para Aguardando Documentos.</li>
+      <li>💬 <strong>Trouxe dúvida, insegurança ou objeção:</strong> agende a ligação da Dra.</li>
+    </ol>
+  </div>`;
+function aaItemFalha(f,i){
+  return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${f.lead.id}')">${escHtml(f.lead.name||'Sem nome')}</span><span class="aa-falha">${escHtml(f.txt)}</span></div>${aaFormFalha(f,i)}</div>`;
 }
 function aaStepConferencia(){
   const c=aaState.c;
@@ -2158,7 +2279,10 @@ function aaStepConferencia(){
   const conv=allLeads.filter(l=>l.assignee===c.atendente&&l.status==='CONTRATO FECHADO'&&(()=>{const d=getDataFechamento(l);return d&&d>=aaState.ini;})());
   return `<div class="aa-sub">a) Registros para ajustar</div>
   ${fs.length?`<div class="aa-intro">Encontramos ${fs.length} ponto(s) para ajustar. Você corrige aqui mesmo, e tudo fica registrado no histórico do lead.</div>`:'<div class="aa-msg ok">Tudo certo! Nenhum registro para ajustar. 🎉</div>'}
-  <div class="aa-lista">${fs.map((f,i)=>`<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${f.lead.id}')">${escHtml(f.lead.name||'Sem nome')}</span><span class="aa-falha">${escHtml(f.txt)}</span></div>${aaFormFalha(f,i)}</div>`).join('')}</div>
+  <div class="aa-lista">${fs.map((f,i)=>f.tipo==='parado'?'':aaItemFalha(f,i)).join('')}</div>
+  ${fs.some(f=>f.tipo==='parado')?`<div class="aa-sub" style="margin-top:1rem">⏳ Qualificados parados há mais de 1 dia (${fs.filter(f=>f.tipo==='parado').length})</div>
+  ${AA_ORIENT_PARADO}
+  <div class="aa-lista">${fs.map((f,i)=>f.tipo==='parado'?aaItemFalha(f,i):'').join('')}</div>`:''}
   <div class="aa-sub" style="margin-top:1rem">b) Conferência das conversões da semana</div>
   ${conv.length?`<div class="aa-lista">${conv.map(l=>{const its=itensChecklist(l);const okN=its.filter(i=>l.checklistConversao?.[i.k]).length;return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${l.id}')">${escHtml(l.name||'Sem nome')}</span><span class="${okN===its.length?'aa-ok':'aa-falha'}">${okN} de ${its.length} itens</span></div><div class="cc-chips">${chipsChecklist(l,'aaToggleChecklist')}</div></div>`;}).join('')}</div>`:'<div class="cfg-hint">Nenhuma conversão registrada na semana.</div>'}`;
 }
@@ -2222,8 +2346,9 @@ function aaStepPendencias(){
   <div class="aa-lista">${p.fuVencidos.length?p.fuVencidos.map(l=>{const fu=tsToDate(l.nextFollowup);return item(l,`${getTrilha(l.tipo||'SM')[l.etapaFollowup||0]||'Mensal'} · venceu ${formatDate(fu)}`);}).join(''):'<div class="aa-msg ok">Nenhum follow-up vencido. 🎉</div>'}</div>
   <div class="aa-sub">📋 Tarefas abertas na Agenda (${p.tarefas.length})</div>
   <div class="aa-lista">${p.tarefas.length?p.tarefas.map(c=>{const tm=TIPO_TAREFA_META[c.tipo]||{label:'Tarefa'};return `<div class="aa-item ${c.leadId?'aa-item-link':''}" ${c.leadId?`onclick="aaAbrirLead('${c.leadId}')"`:''}><div class="aa-item-head"><span class="aa-item-nome">${escHtml(c.leadNome||tm.label)}</span><span class="aa-falha">${tm.label} · ${dataCurta(c.data)}</span></div><div class="aa-item-txt">${escHtml(c.nota||'')}</div></div>`;}).join(''):'<div class="aa-msg ok">Nenhuma tarefa aberta. 🎉</div>'}</div>
-  <div class="aa-sub">📞 Qualificados sem ligação da Dra. (${p.semLigacao.length})</div>
-  <div class="aa-lista">${p.semLigacao.length?p.semLigacao.map(l=>item(l,'Agendar ligação')).join(''):'<div class="aa-msg ok">Todos os qualificados recentes têm ligação. 🎉</div>'}</div>`;
+  <div class="aa-sub">⏳ Qualificados parados há mais de 1 dia (${p.parados.length})</div>
+  ${p.parados.length?AA_ORIENT_PARADO:''}
+  <div class="aa-lista">${p.parados.length?p.parados.map(x=>item(x.lead,`${x.txt} · retomar em 24h`)).join(''):'<div class="aa-msg ok">Nenhum qualificado parado. Todos estão avançando. 🎉</div>'}</div>`;
 }
 function aaStepReflexao(){
   const r=aaState.reflexao;
@@ -2242,7 +2367,7 @@ function renderAAStep(){
   if(!aaState)return;
   const st=aaState.steps,idx=aaState.idx,passo=st[idx];
   document.getElementById('aa-progresso').innerHTML=st.map((s,i)=>`<div class="aa-passo ${i<idx?'feito':i===idx?'atual':''}"><div class="aa-passo-num">${i<idx?'✓':i+1}</div><div class="aa-passo-label">${AA_PASSOS[s]}</div></div>`).join('<div class="aa-passo-linha"></div>');
-  document.getElementById('aa-periodo').textContent=`${aaState.c.atendente} · ${formatDatetime(aaState.ini)} até agora`;
+  document.getElementById('aa-periodo').textContent=`${aaState.c.atendente} · ${formatDatetime(aaState.ini)} até agora${aaState.incluidas?` · inclui ${aaState.incluidas} autoauditoria${aaState.incluidas>1?'s':''} não realizada${aaState.incluidas>1?'s':''}`:''}`;
   const html={anteriores:aaStepAnteriores,numeros:aaStepNumeros,conferencia:aaStepConferencia,pendencias:aaStepPendencias,reflexao:aaStepReflexao,compromissos:aaStepCompromissos}[passo]();
   const body=document.getElementById('aa-conteudo');body.innerHTML=`<div class="aa-titulo-passo">${AA_PASSOS[passo]}</div>`+html;body.scrollTop=0;
   document.getElementById('btn-aa-voltar').style.visibility=idx>0?'visible':'hidden';
@@ -2273,7 +2398,7 @@ async function concluirAutoauditoria(){
   const tira=n=>{const{idsConversoes,...r}=n;return r;};
   const conv=(aaState.numeros.idsConversoes||[]).map(id=>allLeads.find(l=>l.id===id)).filter(Boolean);
   const resultado={
-    periodo:{ini:aaState.ini.toISOString(),fim:agora.toISOString()},
+    periodo:{ini:aaState.ini.toISOString(),fim:agora.toISOString(),iniAnt:aaState.iniAnt.toISOString(),limitado:!!aaState.limitado,incluidas:aaState.incluidas||0},
     numeros:tira(aaState.numeros),numerosAnt:tira(aaState.numerosAnt),ritmo:aaState.ritmo,ritmoSemana:aaState.semana,
     compromissosAnteriores:aaState.compAnt,
     falhasInicio:aaState.falhasInicio,
@@ -2281,7 +2406,7 @@ async function concluirAutoauditoria(){
     falhasPendentes:falhasFim.map(f=>({k:f.k,tipo:f.tipo,leadId:f.lead.id,leadNome:f.lead.name||'',txt:f.txt})),
     correcoes:aaState.correcoes,
     conferenciaConversoes:conv.map(l=>({leadId:l.id,nome:l.name||'',tipo:l.tipo||'',itens:Object.fromEntries(itensChecklist(l).map(i=>[i.k,!!l.checklistConversao?.[i.k]]))})),
-    pendencias:{fuVencidos:p.fuVencidos.length,tarefasAbertas:p.tarefas.length,qualifSemLigacao:p.semLigacao.length},
+    pendencias:{fuVencidos:p.fuVencidos.length,tarefasAbertas:p.tarefas.length,qualifParados:p.parados.length},
     reflexao:{objecao:aaState.reflexao.objecao.trim(),diferente:aaState.reflexao.diferente.trim(),hoje:aaState.reflexao.hoje.trim()},
     compromissos:comps,
     noPrazo:agora<=prazoAutoauditoria(c)
@@ -2289,6 +2414,9 @@ async function concluirAutoauditoria(){
   try{
     await updateDoc(doc(db,'compromissos',aaState.compId),{status:'feito',resultado,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:agora.toISOString()});
     if(aaState.anteriorId)await updateDoc(doc(db,'compromissos',aaState.anteriorId),{avaliacaoCompromissos:aaState.compAnt}).catch(()=>{});
+    for(const velha of allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='pendente'&&x.id!==aaState.compId&&x.data<c.data)){
+      await updateDoc(doc(db,'compromissos',velha.id),{status:'nao_realizada',substituidaPor:aaState.compId,fechadaEm:serverTimestamp(),fechadaEmLocal:agora.toISOString()}).catch(()=>{});
+    }
     await criarTarefaAgenda('acao-semana',null,c.atendente,`🎯 Ação de hoje: ${resultado.reflexao.hoje}`);
     document.getElementById('modal-autoauditoria').style.display='none';aaState=null;
     showToast('💙 Autoauditoria concluída! Sua ação de hoje já está na Agenda.','success',6000,true);
@@ -2343,6 +2471,8 @@ function renderPainelAutoauditorias(){
   const now=new Date();
   const statusAA=c=>{
     if(c.status==='feito')return c.resultado?.noPrazo?['ok','✅ Concluída no prazo']:['tarde','🕒 Concluída com atraso'];
+    if(c.status==='nao_realizada')return['atraso','⛔ Não realizada no prazo'];
+    if(c.status==='dispensada')return['disp','🌴 Dispensada'];
     if(now>prazoAutoauditoria(c))return['atraso','⏰ Em atraso'];
     return['pend','⏳ Agendada'];
   };
@@ -2357,8 +2487,9 @@ function renderPainelAutoauditorias(){
       const statusComp={cumprido:'✅ Cumprido',parcial:'🌗 Parcial',nao_cumprido:'⭕ Não cumprido'};
       corpo=`
       <div class="aa-g-grid">
-        <div class="aa-g-bloco"><div class="aa-sub">📊 Números da semana</div>
-          <table class="est-table"><thead><tr><th></th><th>Semana</th><th>Anterior</th></tr></thead><tbody>
+        <div class="aa-g-bloco"><div class="aa-sub">📊 Números do período</div>
+          ${r.periodo?`<div class="cfg-hint" style="margin-bottom:.35rem">De ${formatDatetime(new Date(r.periodo.ini))} a ${formatDatetime(new Date(r.periodo.fim))}${r.periodo.incluidas?` · inclui ${r.periodo.incluidas} não realizada${r.periodo.incluidas>1?'s':''}`:''}${r.periodo.limitado?' · limite de 4 semanas':''}</div>`:''}
+          <table class="est-table"><thead><tr><th></th><th>Período</th><th>Anterior</th></tr></thead><tbody>
           ${linhaNum('Leads recebidos',n.recebidos,a.recebidos)}${linhaNum('Qualificados',n.qualificados,a.qualificados)}
           ${linhaNum('Ligações agendadas',n.ligAgendadas,a.ligAgendadas)}${linhaNum('Ligações realizadas',n.ligRealizadas,a.ligRealizadas)}
           ${linhaNum('Com decisão',n.ligDecisao,a.ligDecisao)}${linhaNum('Conversões',n.conversoes,a.conversoes)}
@@ -2382,9 +2513,20 @@ function renderPainelAutoauditorias(){
         ${(r.correcoes||[]).length?`<div class="est-table-wrap" style="margin-top:.4rem"><table class="est-table"><thead><tr><th>Lead</th><th>Campo</th><th>Antes</th><th>Depois</th><th>Quando</th></tr></thead><tbody>${r.correcoes.map(x=>`<tr><td><a class="aa-link" onclick="openLead('${x.leadId}')">${escHtml(x.leadNome)}</a></td><td>${escHtml(x.campo)}</td><td>${escHtml(x.antes)}</td><td>${escHtml(x.depois)}</td><td>${formatDatetime(new Date(x.em))}</td></tr>`).join('')}</tbody></table></div>`:''}
       </div>
       ${(r.conferenciaConversoes||[]).length?`<div class="aa-g-bloco"><div class="aa-sub">✅ Conferência das conversões</div><div class="est-table-wrap"><table class="est-table"><thead><tr><th>Lead</th>${CHECKLIST_CONV.map(i=>`<th title="${i.label}">${i.label.split(' ').slice(0,2).join(' ')}</th>`).join('')}</tr></thead><tbody>${r.conferenciaConversoes.map(x=>`<tr><td><a class="aa-link" onclick="openLead('${x.leadId}')">${escHtml(x.nome)}</a></td>${CHECKLIST_CONV.map(i=>`<td>${i.k in (x.itens||{})?(x.itens[i.k]?'✅':'❌'):'—'}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div>`:''}
-      <div class="cfg-hint">Pendências no momento da conclusão: ${r.pendencias?.fuVencidos??0} follow-ups vencidos · ${r.pendencias?.tarefasAbertas??0} tarefas abertas · ${r.pendencias?.qualifSemLigacao??0} qualificados sem ligação</div>`;
+      <div class="cfg-hint">Pendências no momento da conclusão: ${r.pendencias?.fuVencidos??0} follow-ups vencidos · ${r.pendencias?.tarefasAbertas??0} tarefas abertas · ${r.pendencias?.qualifParados!==undefined?`${r.pendencias.qualifParados} qualificados parados`:`${r.pendencias?.qualifSemLigacao??0} qualificados sem ligação`}</div>`;
     }
-    return `<details class="aa-g-card" ${lista.length<=3&&r?'open':''}><summary><span class="aa-g-nome">${escHtml(c.atendente||'')}</span><span class="aa-g-semana">Semana de ${dataCurta(c.data)} · ${c.hora}</span><span class="aa-g-status ${cls}">${txt}</span></summary>${corpo||'<div class="cfg-hint" style="padding:.6rem 0">Ainda não concluída.</div>'}</details>`;
+    if(!r){
+      if(c.status==='nao_realizada'){
+        const sub=allCompromissos.find(x=>x.id===c.substituidaPor);
+        corpo=`<div class="cfg-hint" style="padding:.6rem 0">Não foi feita antes do vencimento da autoauditoria seguinte${sub?` (semana de ${dataCurta(sub.data)})`:''}. O período desta semana foi incluído na seguinte, então nada ficou sem conferência. O atraso fica registrado aqui e na auditoria do mês.</div>`;
+      }else if(c.status==='dispensada'){
+        corpo=`<div class="cfg-hint" style="padding:.6rem 0">Dispensada por ${escHtml(c.dispensadaPor||'—')}. Motivo: <strong>${escHtml(c.motivoDispensa||'—')}</strong>. A próxima autoauditoria começa a contar a partir desta semana.</div>`;
+      }else{
+        corpo=`<div class="cfg-hint" style="padding:.6rem 0">Ainda não concluída.</div>
+        <div class="aa-dispensar"><input type="text" id="aa-disp-${c.id}" class="f-input" placeholder="Motivo da dispensa (ex.: férias, atestado)"/><button type="button" class="btn-hdr" onclick="dispensarAutoauditoria('${c.id}')">🌴 Dispensar</button></div>`;
+      }
+    }
+    return `<details class="aa-g-card" ${lista.length<=3&&r?'open':''}><summary><span class="aa-g-nome">${escHtml(c.atendente||'')}</span><span class="aa-g-semana">Semana de ${dataCurta(c.data)} · ${c.hora}</span><span class="aa-g-status ${cls}">${txt}</span></summary>${corpo}</details>`;
   };
   // Objeções reunidas: autoauditorias + ligações da Dra.
   const fontes=[];
@@ -2533,7 +2675,7 @@ function calcIndicadoresAud(ini,fim){
   const comTempo=rec.filter(l=>typeof l.tempoRespostaMin==='number'&&l.foraExpediente!==true);
   const tempos=comTempo.map(l=>l.tempoRespostaMin);
   const fx=k=>comTempo.filter(l=>faixaTempo(l)===k).length;
-  const aas=allCompromissos.filter(c=>c.tipo==='autoauditoria'&&noP(dtCompromisso(c))&&dtCompromisso(c)<=agora);
+  const aas=allCompromissos.filter(c=>c.tipo==='autoauditoria'&&c.status!=='dispensada'&&noP(dtCompromisso(c))&&dtCompromisso(c)<=agora);
   return{ini,fim,rec,qual,conv,desq,ligAg,ligConc,ligReal,ligDec,ligND,ligNA,comCheg,fora,comTempo,aas,
     n:{recebidos:rec.length,qualificados:qual.length,taxaQual:pctN(qual.length,rec.length),
       conversoes:conv.length,taxaConv:pctN(conv.length,rec.length),
@@ -3733,7 +3875,9 @@ window.saveLead=async function(){
         ...camposTempo,
         dataFechamentoContrato,
         followupHistory:[],createdAt:dataPrimeiroContato||serverTimestamp(),lastContact:serverTimestamp(),
-        log:note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[]
+        log:STATUS_QUALIFICADO_OU_POSTERIOR.includes(status)
+          ?[{user:assignee,note:note||`Lead cadastrado já como ${status}`,ts:new Date().toISOString(),statusChange:status}]
+          :(note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[])
       });
       clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
       showToast('Lead criado! FUP 24h agendado.');
@@ -6630,6 +6774,17 @@ body.light-theme .lig-cancelada{color:#6B7280}
 .aa-msg{font-size:.78rem;font-weight:600;border-radius:8px;padding:.55rem .8rem}
 .aa-msg.ok{background:rgba(16,185,129,.1);color:#10B981}
 .aa-msg.atencao{background:rgba(245,166,35,.1);color:#F5A623}
+.aa-msg.alerta{background:rgba(239,68,68,.1);color:#EF4444}
+.aa-msg-mes{font-size:.74rem;color:#9CA3AF;line-height:1.5;margin-top:.55rem;padding:.5rem .8rem;border-left:3px solid #4F6EF7;background:rgba(79,110,247,.06);border-radius:0 8px 8px 0}
+.aa-orient{background:rgba(79,110,247,.07);border:1px solid rgba(79,110,247,.25);border-radius:10px;padding:.7rem .9rem;margin:.4rem 0 .6rem}
+.aa-orient-t{font-size:.78rem;font-weight:700;color:#C4C9D8;margin-bottom:.35rem}
+.aa-orient ol{margin:0;padding-left:1.1rem;font-size:.76rem;color:#9CA3AF;line-height:1.6}
+.aa-orient strong{color:#E5E7EB}
+.aa-dispensar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;padding:0 0 .6rem}
+.aa-dispensar .f-input{flex:1;min-width:200px}
+body.light-theme .aa-orient-t{color:#1F2937}
+body.light-theme .aa-orient ol,body.light-theme .aa-msg-mes{color:#4B5563}
+body.light-theme .aa-orient strong{color:#111827}
 .aa-lista{display:flex;flex-direction:column;gap:.5rem}
 .aa-item{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.65rem .8rem;display:flex;flex-direction:column;gap:.45rem}
 .aa-item-link{cursor:pointer;transition:border-color .15s}
@@ -6671,6 +6826,7 @@ body.light-theme .lig-cancelada{color:#6B7280}
 .aa-g-status.tarde{background:rgba(245,166,35,.14);color:#F5A623}
 .aa-g-status.atraso{background:rgba(239,68,68,.14);color:#EF4444}
 .aa-g-status.pend{background:rgba(107,114,128,.16);color:#9CA3AF}
+.aa-g-status.disp{background:rgba(139,92,246,.14);color:#A78BFA}
 .aa-g-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem}
 .aa-g-bloco{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.75rem .9rem;margin-bottom:.6rem;display:flex;flex-direction:column;gap:.4rem}
 .aa-g-q{font-size:.78rem;color:#D1D5DB;line-height:1.45}
@@ -6878,7 +7034,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-10-23a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7036,7 +7192,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       </div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-10-23a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
