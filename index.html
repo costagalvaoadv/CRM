@@ -891,6 +891,70 @@ function faixaTempo(l){
   return 'vermelho';
 }
 function numBR(v){return v===null||v===undefined?'—':String(v).replace('.',',');}
+// ── Fora do expediente: abertura seguinte do expediente e estatísticas ──
+function aberturaSeguinte(d){
+  const [h,m]=String(cfgComercial.expediente?.inicio||'08:30').split(':').map(Number);
+  const x=new Date(d);
+  for(let i=0;i<20;i++){
+    const ab=new Date(x);ab.setHours(h,m,0,0);
+    if(ab>=d&&ehDiaUtil(ab))return ab;
+    x.setDate(x.getDate()+1);x.setHours(0,0,0,0);
+  }
+  return null;
+}
+// Tempo de resposta de um lead que chegou fora do expediente, contado a partir da abertura seguinte
+function tempoAposAbertura(l){
+  if(l.foraExpediente!==true)return null;
+  const ch=tsToDate(l.dataHoraChegada),ini=tsToDate(l.dataHoraInicioAtendimento);
+  if(!ch||!ini)return null;
+  const ab=aberturaSeguinte(ch);if(!ab)return null;
+  return Math.max(0,Math.round((ini-ab)/60000));
+}
+function calcForaStats(leads){
+  const e=cfgComercial.expediente||{};
+  const hIni=e.inicio||'08:30',hFim=e.fim||'14:00';
+  const comCheg=leads.filter(l=>l.dataHoraChegada&&typeof l.foraExpediente==='boolean');
+  const fora=comCheg.filter(l=>l.foraExpediente===true),dentro=comCheg.filter(l=>l.foraExpediente===false);
+  const tempos=fora.map(tempoAposAbertura).filter(v=>v!==null);
+  const conv=a=>a.length?Math.round(a.filter(l=>l.status==='CONTRATO FECHADO').length/a.length*1000)/10:null;
+  const rot=t=>t.endsWith(':00')?String(parseInt(t))+'h':t;
+  const faixas=[{r:`00h às ${rot(hIni)}`,de:'00:00',ate:hIni},{r:`${rot(hIni)} às ${rot(hFim)}`,de:hIni,ate:hFim}];
+  if(hFim<'18:00')faixas.push({r:`${rot(hFim)} às 18h`,de:hFim,ate:'18:00'},{r:'18h às 00h',de:'18:00',ate:'24:00'});
+  else faixas.push({r:`${rot(hFim)} às 00h`,de:hFim,ate:'24:00'});
+  faixas.forEach(f=>{f.dentro=0;f.fora=0;f.foraUtil=0;});
+  const dias=[['Segunda',1],['Terça',2],['Quarta',3],['Quinta',4],['Sexta',5],['Sábado',6],['Domingo',0]].map(([r,n])=>({r,n,dentro:0,fora:0}));
+  comCheg.forEach(l=>{
+    const d=tsToDate(l.dataHoraChegada),h=horaStr(d),k=l.foraExpediente?'fora':'dentro';
+    const fx=faixas.find(x=>h>=x.de&&h<x.ate)||faixas[faixas.length-1];
+    fx[k]++;
+    if(k==='fora'&&d.getDay()>=1&&d.getDay()<=5&&!ehFeriado(localDateStr(d)))fx.foraUtil++;
+    dias.find(x=>x.n===d.getDay())[k]++;
+  });
+  // horário com mais chegadas fora do expediente em dias úteis (fim de semana e feriado são contados à parte)
+  const topo=faixas.filter(f=>f.foraUtil>0).sort((a,b)=>b.foraUtil-a.foraUtil)[0]||null;
+  const fds=dias.filter(x=>x.n===0||x.n===6).reduce((s2,x)=>s2+x.fora,0);
+  return{total:leads.length,semCheg:leads.length-comCheg.length,comCheg:comCheg.length,fora,dentro,
+    pctFora:comCheg.length?Math.round(fora.length/comCheg.length*100):null,
+    mediaFora:tempos.length?Math.round(tempos.reduce((a,b)=>a+b,0)/tempos.length):null,temposN:tempos.length,
+    convFora:conv(fora),convDentro:conv(dentro),faixas,dias,topo,fds,hIni,hFim};
+}
+function leituraForaExp(s){
+  if(!s.comCheg)return 'Ainda não há leads com hora de chegada registrada neste período.';
+  if(!s.fora.length)return 'Todos os leads com horário registrado chegaram dentro do expediente neste período. 🎉';
+  let t=`${s.pctFora}% dos leads chegaram fora do expediente`;
+  if(s.topo)t+=`. Nos dias úteis, o horário com mais chegadas fora do expediente é das ${s.topo.r} (${s.topo.foraUtil} lead${s.topo.foraUtil>1?'s':''})`;
+  t+='.';
+  if(s.fds)t+=` ${s.fds} ${s.fds>1?'chegaram':'chegou'} no fim de semana.`;
+  if(s.mediaFora!==null)t+=` Esses leads esperam em média ${formatMin(s.mediaFora)} depois da abertura do expediente.`;
+  if(s.convFora!==null&&s.convDentro!==null&&s.fora.length>=5&&s.dentro.length>=5&&(s.convFora>0||s.convDentro>0)){
+    if(s.convFora<s.convDentro)t+=` Eles convertem menos que os de dentro do expediente (${numBR(s.convFora)}% contra ${numBR(s.convDentro)}%).`;
+    else if(s.convFora>s.convDentro)t+=` Eles convertem mais que os de dentro do expediente (${numBR(s.convFora)}% contra ${numBR(s.convDentro)}%).`;
+    else t+=` Eles convertem igual aos de dentro do expediente (${numBR(s.convFora)}% contra ${numBR(s.convDentro)}%).`;
+  }
+  t+=s.pctFora>30?' Vale avaliar um atendimento humano nesse horário ou um robô de acolhimento.':' Por enquanto o volume está controlado. Acompanhe mês a mês.';
+  if(s.fora.length<10)t+=' Amostra pequena: use como sinal, ainda sem conclusão.';
+  return t;
+}
 function formatMin(m){
   if(typeof m!=='number')return '—';
   if(m<60)return `${m} min`;
@@ -2025,7 +2089,19 @@ function calcNumerosAtendente(nome,ini,fim){
   const feitas=ligs.filter(c=>c.statusLigacao==='realizada'&&noP(c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)));
   const comTempo=recebidos.filter(l=>typeof l.tempoRespostaMin==='number'&&l.foraExpediente!==true);
   const pct=k=>comTempo.length?Math.round(comTempo.filter(l=>faixaTempo(l)===k).length/comTempo.length*100):null;
+  const daFaixa=k=>comTempo.filter(l=>faixaTempo(l)===k).sort((a,b)=>b.tempoRespostaMin-a.tempoRespostaMin);
+  const foraL=recebidos.filter(l=>l.foraExpediente===true);
+  const temposFora=foraL.map(tempoAposAbertura).filter(v=>v!==null);
+  const semHor=recebidos.filter(l=>typeof l.tempoRespostaMin!=='number');
+  const ligRe=feitas.filter(c=>c.resultado==='decidiu'||c.resultado==='nao_decidiu');
   return{
+    idsRecebidos:recebidos.map(l=>l.id),idsQualificados:qualificados.map(l=>l.id),
+    idsLigAgendadas:agendadas.map(c=>c.id),idsLigRealizadas:ligRe.map(c=>c.id),idsLigDecisao:feitas.filter(c=>c.resultado==='decidiu').map(c=>c.id),
+    idsVerde:daFaixa('verde').map(l=>l.id),idsAmarelo:daFaixa('amarelo').map(l=>l.id),idsVermelho:daFaixa('vermelho').map(l=>l.id),
+    idsFora:foraL.map(l=>l.id),
+    nVerde:daFaixa('verde').length,nAmarelo:daFaixa('amarelo').length,nVermelho:daFaixa('vermelho').length,
+    fora:foraL.length,foraMedia:temposFora.length?Math.round(temposFora.reduce((a,b)=>a+b,0)/temposFora.length):null,foraComTempo:temposFora.length,
+    semHorario:semHor.length,
     recebidos:recebidos.length,qualificados:qualificados.length,
     ligAgendadas:agendadas.length,
     ligRealizadas:feitas.filter(c=>c.resultado==='decidiu'||c.resultado==='nao_decidiu').length,
@@ -2121,7 +2197,8 @@ window.abrirAutoauditoria=function(compId){
   const maisRecente=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='pendente'&&dtCompromisso(x)<=agora).sort((a,b)=>b.data.localeCompare(a.data))[0];
   if(maisRecente&&maisRecente.id!==c.id)return abrirAutoauditoria(maisRecente.id);
   const{ini,fim,limitado,incluidas}=periodoAutoauditoria(c,agora);
-  const dur=fim-ini,iniAnt=new Date(ini.getTime()-dur);
+  const nDias=Math.max(1,Math.round((fim-ini)/86400000));
+  const iniAnt=new Date(ini);iniAnt.setHours(0,0,0,0);iniAnt.setDate(iniAnt.getDate()-nDias);
   const venc=dtCompromisso(c);
   const mesmoMes=venc.getFullYear()===agora.getFullYear()&&venc.getMonth()===agora.getMonth();
   const refRitmo=mesmoMes?agora:new Date(venc.getFullYear(),venc.getMonth()+1,0,23,59,59);
@@ -2130,7 +2207,7 @@ window.abrirAutoauditoria=function(compId){
   const anterior=allCompromissos.filter(x=>x.tipo==='autoauditoria'&&x.atendente===c.atendente&&x.status==='feito'&&x.data<c.data).sort((a,b)=>b.data.localeCompare(a.data))[0]||null;
   const compAnt=(anterior?.resultado?.compromissos||[]).map(t=>({texto:t,status:''}));
   aaState={
-    compId,c,ini,fim,iniAnt,limitado,incluidas,anteriorId:anterior?.id||null,compAnt,
+    compId,c,ini,fim,iniAnt,nDias,limitado,incluidas,anteriorId:anterior?.id||null,compAnt,listaAberta:null,grupos:{},
     steps:[...(compAnt.length?['anteriores']:[]),'numeros','conferencia','pendencias','reflexao','compromissos'],idx:0,
     falhasInicio:calcFalhas(c.atendente,ini,fim).map(f=>({k:f.k,tipo:f.tipo,leadId:f.lead.id,leadNome:f.lead.name||'',txt:f.txt})),
     correcoes:[],reflexao:{objecao:'',diferente:'',hoje:''},compromissos:['','',''],
@@ -2180,23 +2257,49 @@ window.aaSetCompromisso=function(i,v){if(aaState)aaState.compromissos[i]=v;};
 function aaStepNumeros(){
   const n=aaState.numeros,a=aaState.numerosAnt,r=aaState.ritmo;
   const pct=v=>v===null||v===undefined?'—':v+'%';
+  aaState.listaAberta=null;
   const msg=msgRitmoAA(r);
   const ra=aaState.ritmoAtual;
   const semFim=aaState.semanaSeg?new Date(aaState.semanaSeg.getTime()+4*86400000):null;
-  return `<div class="aa-intro">Estes são os seus números de <strong>${formatDatetime(aaState.ini)} até agora</strong>${aaState.limitado?' (limite das últimas 4 semanas)':''}, comparados com o período anterior de mesmo tamanho (${formatDatetime(aaState.iniAnt)} a ${formatDatetime(aaState.ini)}). A seta mostra se o número subiu ou desceu. Verde é melhora, vermelho é ponto de atenção.</div>
+  const N=aaState.nDias,diaAntes=new Date(aaState.ini);diaAntes.setDate(diaAntes.getDate()-1);
+  const dc=d=>dataCurta(localDateStr(d));
+  const pl=(v,um,varios)=>v===1?um:varios;
+  const cx=(k,v,ant,nome,frase,fmt,menor)=>{const f=fmt||(x=>x??'—');return `<button type="button" class="aa-cx" data-k="${k}" onclick="aaToggleLista('${k}')"><span class="aa-cx-ver">ver lista ›</span><div class="aa-cx-top"><span class="aa-cx-val">${f(v)}</span>${aaSeta(v,ant,menor)}</div><div class="aa-cx-nome">${nome}</div><div class="aa-cx-frase">${frase}</div><div class="aa-cx-ant">período anterior: ${f(ant)}</div></button>`;};
+  const fx=(k,cor,emoji,pv,nv,txt)=>`<div class="aa-fx" data-k="${k}" onclick="aaToggleLista('${k}')"><div class="aa-fx-pct" style="color:${cor}">${emoji} ${pv===null||pv===undefined?'—':pv+'%'}</div><div class="aa-fx-txt"><b>${nv} de ${n.comTempo} lead${n.comTempo===1?'':'s'}</b> ${txt}<div class="aa-fx-barra"><i style="width:${pv||0}%;background:${cor}"></i></div></div></div>`;
+  const fxv=cfgComercial.faixas||{verde:5,amarelo:15};
+  return `<div class="aa-intro">Seus números de <strong>${dc(aaState.ini)} até hoje (${N} dia${N>1?'s':''})</strong>${aaState.limitado?' (limite das últimas 4 semanas)':''}, comparados com os <strong>${N} dia${N>1?'s':''} anteriores (de ${dc(aaState.iniAnt)} a ${dc(diaAntes)})</strong>. A seta mostra se o número subiu ou desceu. Verde é melhora, vermelho é ponto de atenção. <strong>Clique em qualquer caixa para ver a lista.</strong></div>
   ${aaState.incluidas?`<div class="aa-msg atencao" style="margin-top:.6rem">⏰ Esta autoauditoria inclui ${aaState.incluidas} autoauditoria${aaState.incluidas>1?'s':''} que ficou sem ser feita. Por isso o período é maior que uma semana.</div>`:''}
-  <div class="aa-nums">
-    ${aaCardNum('Leads recebidos',n.recebidos,a.recebidos)}
-    ${aaCardNum('Qualificados',n.qualificados,a.qualificados)}
-    ${aaCardNum('Ligações da Dra. agendadas',n.ligAgendadas,a.ligAgendadas)}
-    ${aaCardNum('Ligações realizadas',n.ligRealizadas,a.ligRealizadas)}
-    ${aaCardNum('Ligações com decisão',n.ligDecisao,a.ligDecisao)}
-    ${aaCardNum('Conversões',n.conversoes,a.conversoes)}
-    ${aaCardNum('Tempo médio de resposta',n.tempoMedio,a.tempoMedio,formatMin,true)}
-    ${aaCardNum('🟢 No verde',n.pctVerde,a.pctVerde,pct)}
-    ${aaCardNum('🟡 No amarelo',n.pctAmarelo,a.pctAmarelo,pct,true)}
-    ${aaCardNum('🔴 No vermelho',n.pctVermelho,a.pctVermelho,pct,true)}
+  <div class="aa-sub" style="margin-top:1rem">📊 Meu funil</div>
+  <div class="aa-cxs">
+    ${cx('rec',n.recebidos,a.recebidos,'Leads recebidos',`${n.recebidos} ${pl(n.recebidos,'lead chegou','leads chegaram')} para você neste período`)}
+    ${cx('qual',n.qualificados,a.qualificados,'Qualificados',`${n.qualificados} ${pl(n.qualificados,'lead passou','leads passaram')} para Qualificado`)}
+    ${cx('ligAg',n.ligAgendadas,a.ligAgendadas,'Ligações da Dra. agendadas',`${n.ligAgendadas} ${pl(n.ligAgendadas,'ligação foi agendada','ligações foram agendadas')} com a Dra.`)}
+    ${cx('ligRe',n.ligRealizadas,a.ligRealizadas,'Ligações realizadas',`${n.ligRealizadas} ${pl(n.ligRealizadas,'ligação aconteceu e teve','ligações aconteceram e tiveram')} o resultado registrado`)}
+    ${cx('ligDe',n.ligDecisao,a.ligDecisao,'Ligações com decisão',`${n.ligDecisao} ${pl(n.ligDecisao,'ligação terminou','ligações terminaram')} com a cliente decidindo`)}
+    ${cx('conv',n.conversoes,a.conversoes,'Conversões',`${n.conversoes} ${pl(n.conversoes,'lead virou','leads viraram')} contrato neste período`)}
   </div>
+  <div id="aa-det-funil"></div>
+  <div class="aa-sub" style="margin-top:1rem">⏱ Rapidez no primeiro atendimento</div>
+  <div class="aa-rap">
+    <div class="aa-rap-bloco">
+      <div class="aa-rap-t">☀️ Dentro do expediente</div>
+      <div class="aa-rap-s">${n.comTempo} ${pl(n.comTempo,'lead chegou','leads chegaram')} no horário de atendimento e ${pl(n.comTempo,'tem','têm')} os horários registrados</div>
+      ${n.comTempo?`<div class="aa-rap-media"><strong>${formatMin(n.tempoMedio)}</strong> ${aaSeta(n.tempoMedio,a.tempoMedio,true)} em média, o atendimento começou ${formatMin(n.tempoMedio)} depois da chegada do lead <span class="aa-rap-ant">(período anterior: ${formatMin(a.tempoMedio)})</span></div>
+      ${fx('verde','#10B981','🟢',n.pctVerde,n.nVerde,`${pl(n.nVerde,'foi atendido','foram atendidos')} em até ${fxv.verde} minutos`)}
+      ${fx('amarelo','#F5A623','🟡',n.pctAmarelo,n.nAmarelo,`${pl(n.nAmarelo,'foi atendido','foram atendidos')} entre ${fxv.verde+1} e ${fxv.amarelo} minutos`)}
+      ${fx('vermelho','#EF4444','🔴',n.pctVermelho,n.nVermelho,`${pl(n.nVermelho,'esperou','esperaram')} mais de ${fxv.amarelo} minutos`)}`
+      :'<div class="cfg-hint">Nenhum lead deste período tem os dois horários registrados. Preencha na próxima etapa.</div>'}
+    </div>
+    <div class="aa-rap-bloco">
+      <div class="aa-rap-t">🌙 Fora do expediente</div>
+      <div class="aa-rap-s">Chegaram antes das ${cfgComercial.expediente?.inicio||'08:30'}, depois das ${cfgComercial.expediente?.fim||'14:00'}, em dia sem expediente ou em feriado</div>
+      <div class="aa-fx" data-k="fora" onclick="aaToggleLista('fora')"><div class="aa-fx-txt"><b class="aa-rap-grande">${n.fora} ${pl(n.fora,'lead','leads')}</b> ${pl(n.fora,'chegou','chegaram')} fora do horário de atendimento</div></div>
+      ${n.foraComTempo?`<div class="aa-rap-media"><strong>${formatMin(n.foraMedia)}</strong> em média, contados a partir da abertura do expediente seguinte</div>
+      <div class="aa-rap-nota">Exemplo: o lead chegou às 22h, o expediente abriu às ${cfgComercial.expediente?.inicio||'08:30'} e o atendimento começou 15 minutos depois. Conta 15 minutos.</div>`:(n.fora?'<div class="aa-rap-nota">Registre os horários desses leads para medir o tempo de atendimento.</div>':'')}
+    </div>
+  </div>
+  <div id="aa-det-rap"></div>
+  ${n.semHorario?`<div class="aa-msg atencao" style="margin-top:.6rem">⚠️ ${n.semHorario} ${pl(n.semHorario,'lead está','leads estão')} sem horário registrado e ${pl(n.semHorario,'ficou','ficaram')} fora destas contas. Registre os horários na próxima etapa para o número ficar real.</div>`:''}
   ${aaState.semana?`<div class="aa-ritmo">
     <div class="aa-sub">🎯 Minha meta da semana${aaState.semanaSeg?` (${dataCurta(localDateStr(aaState.semanaSeg))} a ${dataCurta(localDateStr(semFim))})`:''}</div>
     <div class="aa-ritmo-grid" style="grid-template-columns:repeat(2,1fr)">
@@ -2222,6 +2325,59 @@ function aaStepNumeros(){
     :'<div class="cfg-hint">Sua meta do mês ainda não foi definida pela gestora.</div>'}
   </div>`;
 }
+const AA_LISTAS={
+  rec:{t1:'lead recebido',ids:'idsRecebidos',t:'leads recebidos',vazio:'Nenhum lead chegou neste período.'},
+  qual:{t1:'lead qualificado',ids:'idsQualificados',t:'leads qualificados',vazio:'Nenhum lead passou para Qualificado neste período.'},
+  conv:{t1:'conversão',ids:'idsConversoes',t:'conversões',vazio:'Nenhuma conversão neste período.'},
+  verde:{t1:'lead atendido no verde',ids:'idsVerde',t:'leads atendidos no verde',vazio:'Nenhum lead nesta faixa.',rap:1},
+  amarelo:{t1:'lead atendido no amarelo',ids:'idsAmarelo',t:'leads atendidos no amarelo',vazio:'Nenhum lead nesta faixa.',rap:1},
+  vermelho:{t1:'lead no vermelho',ids:'idsVermelho',t:'leads no vermelho (do mais demorado para o mais rápido)',vazio:'Nenhum lead nesta faixa. 🎉',rap:1},
+  fora:{t1:'lead que chegou fora do expediente',ids:'idsFora',t:'leads que chegaram fora do expediente',vazio:'Nenhum lead chegou fora do expediente neste período.',rap:1},
+  ligAg:{t1:'ligação da Dra. agendada',ids:'idsLigAgendadas',t:'ligações da Dra. agendadas',vazio:'Nenhuma ligação da Dra. foi agendada neste período.',lig:1},
+  ligRe:{t1:'ligação realizada',ids:'idsLigRealizadas',t:'ligações realizadas',vazio:'Nenhuma ligação com resultado registrado neste período. Se alguma ligação aconteceu, registre o resultado na Agenda.',lig:1},
+  ligDe:{t1:'ligação com decisão',ids:'idsLigDecisao',t:'ligações com decisão',vazio:'Nenhuma ligação terminou com decisão neste período.',lig:1}
+};
+function aaChipLead(l,k){
+  if(k==='conv'){const d=getDataFechamento(l);return `<span class="aa-chip v">✅ ${d?dataCurta(localDateStr(d)):'convertido'}</span>`;}
+  if(k==='qual'){
+    if(l.status==='QUALIFICADO'){const d=qualificadoDesde(l);const dias=d?Math.floor((Date.now()-d)/86400000):0;return dias>=1?`<span class="aa-chip a">Parado há ${dias} dia${dias>1?'s':''}</span>`:'<span class="aa-chip n">Qualificado hoje</span>';}
+    return `<span class="aa-chip v">Avançou</span>`;
+  }
+  if(k==='fora'){const t=tempoAposAbertura(l);return t===null?'<span class="aa-chip n">Sem horário</span>':`<span class="aa-chip ${t<=(cfgComercial.faixas?.verde??5)?'v':t<=(cfgComercial.faixas?.amarelo??15)?'a':'r'}">⏱ ${formatMin(t)} após abrir</span>`;}
+  const fx=faixaTempo(l);
+  if(fx==='fora')return '<span class="aa-chip n">🌙 Fora do expediente</span>';
+  if(fx==='sem')return '<span class="aa-chip n">Sem horário</span>';
+  return `<span class="aa-chip ${fx==='verde'?'v':fx==='amarelo'?'a':'r'}">⏱ ${formatMin(l.tempoRespostaMin)}</span>`;
+}
+const AA_LIG_RES={decidiu:'✅ Decidiu',nao_decidiu:'🤔 Não decidiu',nao_atendeu:'📵 Não atendeu'};
+const AA_LIG_ST={aguardando:'Aguardando confirmação',confirmada:'Confirmada',remarcada:'Remarcada',realizada:'Realizada',cancelada:'Cancelada'};
+function aaListaHTML(k){
+  const cfg=AA_LISTAS[k];if(!cfg||!aaState)return '';
+  const ids=aaState.numeros[cfg.ids]||[];
+  let linhas='';
+  if(cfg.lig){
+    linhas=ids.map(id=>allCompromissos.find(c=>c.id===id)).filter(Boolean).map(c=>{
+      const res=c.resultado?AA_LIG_RES[c.resultado]||c.resultado:(AA_LIG_ST[c.statusLigacao]||'Sem resultado');
+      return `<div class="aa-li"><b>${escHtml(c.leadNome||'Lead')}</b><span class="aa-li-x">${dataCurta(c.data)} às ${c.hora}</span><span class="aa-li-x">${escHtml(AA_LIG_ST[c.statusLigacao]||'')}</span><span class="aa-li-d"><span class="aa-chip ${c.resultado==='decidiu'?'v':c.resultado?'a':'n'}">${escHtml(res)}</span>${c.leadId?`<span class="aa-abrir" onclick="aaAbrirLead('${c.leadId}')">Abrir ›</span>`:''}</span></div>`;
+    }).join('');
+  }else{
+    linhas=ids.map(id=>allLeads.find(l=>l.id===id)).filter(Boolean).map(l=>{
+      const ch=chegadaLead(l);
+      return `<div class="aa-li"><b>${escHtml(l.name||'Sem nome')}</b><span class="aa-li-x">${ch?formatDatetime(ch):'—'}</span><span class="aa-li-x">${escHtml(STATUS_META[l.status]?.label||l.status||'')}</span><span class="aa-li-d">${aaChipLead(l,k)}<span class="aa-abrir" onclick="aaAbrirLead('${l.id}')">Abrir ›</span></span></div>`;
+    }).join('');
+  }
+  return `<div class="aa-det"><div class="aa-det-h"><span>${ids.length} ${ids.length===1?cfg.t1:cfg.t}</span><button type="button" class="aa-det-x" onclick="aaToggleLista('${k}')" aria-label="Fechar">✕</button></div><div class="aa-det-l">${linhas||`<div class="aa-det-vazio">${cfg.vazio}</div>`}</div></div>`;
+}
+window.aaToggleLista=function(k){
+  if(!aaState)return;
+  aaState.listaAberta=aaState.listaAberta===k?null:k;
+  document.querySelectorAll('.aa-cx,.aa-fx').forEach(e=>e.classList.toggle('on',e.dataset.k===aaState.listaAberta));
+  const f=document.getElementById('aa-det-funil'),r=document.getElementById('aa-det-rap');
+  if(f)f.innerHTML='';if(r)r.innerHTML='';
+  if(!aaState.listaAberta)return;
+  const alvo=AA_LISTAS[k]?.rap?r:f;
+  if(alvo){alvo.innerHTML=aaListaHTML(k);alvo.scrollIntoView({behavior:'smooth',block:'nearest'});}
+};
 function msgRitmoAA(r){
   if(!r||!r.meta)return['atencao',''];
   const mes=r.mesNome||'mês';
@@ -2269,6 +2425,30 @@ const AA_ORIENT_PARADO=`<div class="aa-orient">
       <li>💬 <strong>Trouxe dúvida, insegurança ou objeção:</strong> agende a ligação da Dra.</li>
     </ol>
   </div>`;
+const AA_GRUPOS=[
+  {tipo:'nota',titulo:'📝 Contatos salvos sem nota',desc:'O lead foi salvo sem escrever o que aconteceu. Conte em uma frase o que houve no contato. Se você só corrigiu algum dado do cadastro, clique em "Foi só ajuste no cadastro".'},
+  {tipo:'horario',titulo:'🕐 Leads sem horário registrado',desc:'Sem a hora de chegada e o início do atendimento, o sistema não consegue medir a rapidez. Isso vale para leads de dentro e de fora do expediente.'},
+  {tipo:'parado',titulo:'⏳ Qualificados parados há mais de 1 dia',desc:''},
+  {tipo:'naoatendeu',titulo:'📵 Ligações da Dra. sem nova tentativa',desc:'A Dra. ligou e a cliente não atendeu. Abra o lead e agende uma nova tentativa.'},
+  {tipo:'inconsistente',titulo:'✅ Conversões com dados faltando',desc:'Conversão sem data de fechamento ou sem honorários fica fora dos relatórios. Complete os dados.'}
+];
+window.aaGrupoToggle=function(tipo,aberto){if(aaState)aaState.grupos[tipo]=aberto;};
+window.aaNotasLead=async function(leadId,soAjuste){
+  const l=allLeads.find(x=>x.id===leadId);if(!l||!aaState)return;
+  const tss=(aaState.falhasAtuais||[]).filter(f=>f.tipo==='nota'&&f.lead.id===leadId).map(f=>f.ts);
+  if(!tss.length)return;
+  const txt=(document.getElementById('aa-ng-'+leadId)?.value||'').trim();
+  if(!soAjuste&&txt.length<5)return showToast('Escreva o que aconteceu nesse contato','error');
+  const agora=Date.now();
+  const entradas=tss.map((ts,k)=>({user:currentUser?.nome||'—',
+    note:soAjuste?`Correção na autoauditoria. Registro de ${formatDatetime(new Date(ts))}: foi só ajuste no cadastro, sem contato com a cliente.`:`Correção na autoauditoria. Nota do contato de ${formatDatetime(new Date(ts))}: ${txt}`,
+    ts:new Date(agora+k).toISOString(),statusChange:null,complementa:ts}));
+  try{
+    await updateDoc(doc(db,'leads',leadId),{log:arrayUnion(...entradas)});
+    aaRegistrarCorrecao(l,`Nota de ${tss.length} registro${tss.length>1?'s':''} sem nota`,'Atualizado (sem nota)',soAjuste?'Foi só ajuste no cadastro':txt);
+    showToast(soAjuste?'✅ Registrado como ajuste no cadastro':'✅ Nota registrada!');renderAAStep();
+  }catch(e){showToast('Erro: '+e.message,'error');}
+};
 function aaItemFalha(f,i){
   return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${f.lead.id}')">${escHtml(f.lead.name||'Sem nome')}</span><span class="aa-falha">${escHtml(f.txt)}</span></div>${aaFormFalha(f,i)}</div>`;
 }
@@ -2277,12 +2457,30 @@ function aaStepConferencia(){
   aaState.falhasAtuais=calcFalhas(c.atendente,aaState.ini,new Date());
   const fs=aaState.falhasAtuais;
   const conv=allLeads.filter(l=>l.assignee===c.atendente&&l.status==='CONTRATO FECHADO'&&(()=>{const d=getDataFechamento(l);return d&&d>=aaState.ini;})());
+  const grupos=AA_GRUPOS.map(g=>({...g,itens:fs.map((f,i)=>({f,i})).filter(x=>x.f.tipo===g.tipo)})).filter(g=>g.itens.length);
+  const htmlGrupo=g=>{
+    let corpo='',nLeads;
+    if(g.tipo==='nota'){
+      const porLead={};
+      g.itens.forEach(x=>{(porLead[x.f.lead.id]=porLead[x.f.lead.id]||{lead:x.f.lead,ts:[]}).ts.push(x.f.ts);});
+      const ls=Object.values(porLead);nLeads=ls.length;
+      corpo=ls.map(x=>{
+        const minutos=[...new Set(x.ts.map(t=>formatDatetime(new Date(t))))];
+        const tag=minutos.length===1?`${x.ts.length} registro${x.ts.length>1?'s':''} em ${minutos[0]}`:`${x.ts.length} registros: ${minutos.join(' · ')}`;
+        return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${x.lead.id}')">${escHtml(x.lead.name||'Sem nome')}</span><span class="aa-falha">${escHtml(tag)}</span></div>
+        <div class="aa-fix"><textarea id="aa-ng-${x.lead.id}" class="f-textarea" style="min-height:48px" placeholder="O que aconteceu nesse contato?"></textarea><button class="btn-done" onclick="aaNotasLead('${x.lead.id}',false)">💾 Salvar nota</button><button type="button" class="aa-btn-sec" onclick="aaNotasLead('${x.lead.id}',true)">Foi só ajuste no cadastro</button></div></div>`;
+      }).join('');
+    }else{
+      nLeads=new Set(g.itens.map(x=>x.f.lead.id)).size;
+      corpo=g.itens.map(x=>aaItemFalha(x.f,x.i)).join('');
+    }
+    const aberto=aaState.grupos[g.tipo]!==undefined?aaState.grupos[g.tipo]:nLeads<=10;
+    return `<details class="aa-grupo" ${aberto?'open':''} ontoggle="aaGrupoToggle('${g.tipo}',this.open)"><summary><span class="aa-grupo-seta">▶</span>${g.titulo}<span class="aa-grupo-cont">${nLeads} lead${nLeads>1?'s':''}</span></summary>
+      <div class="aa-grupo-c">${g.tipo==='parado'?AA_ORIENT_PARADO:`<div class="aa-grupo-d">${g.desc}</div>`}<div class="aa-lista">${corpo}</div></div></details>`;
+  };
   return `<div class="aa-sub">a) Registros para ajustar</div>
-  ${fs.length?`<div class="aa-intro">Encontramos ${fs.length} ponto(s) para ajustar. Você corrige aqui mesmo, e tudo fica registrado no histórico do lead.</div>`:'<div class="aa-msg ok">Tudo certo! Nenhum registro para ajustar. 🎉</div>'}
-  <div class="aa-lista">${fs.map((f,i)=>f.tipo==='parado'?'':aaItemFalha(f,i)).join('')}</div>
-  ${fs.some(f=>f.tipo==='parado')?`<div class="aa-sub" style="margin-top:1rem">⏳ Qualificados parados há mais de 1 dia (${fs.filter(f=>f.tipo==='parado').length})</div>
-  ${AA_ORIENT_PARADO}
-  <div class="aa-lista">${fs.map((f,i)=>f.tipo==='parado'?aaItemFalha(f,i):'').join('')}</div>`:''}
+  ${fs.length?`<div class="aa-intro">Encontramos <strong>${fs.length} ponto${fs.length>1?'s':''}</strong> em <strong>${grupos.length} grupo${grupos.length>1?'s':''}</strong>. Você corrige aqui mesmo, e tudo fica registrado no histórico do lead. Clique no grupo para abrir ou fechar.</div>`:'<div class="aa-msg ok">Tudo certo! Nenhum registro para ajustar. 🎉</div>'}
+  ${grupos.map(htmlGrupo).join('')}
   <div class="aa-sub" style="margin-top:1rem">b) Conferência das conversões da semana</div>
   ${conv.length?`<div class="aa-lista">${conv.map(l=>{const its=itensChecklist(l);const okN=its.filter(i=>l.checklistConversao?.[i.k]).length;return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${l.id}')">${escHtml(l.name||'Sem nome')}</span><span class="${okN===its.length?'aa-ok':'aa-falha'}">${okN} de ${its.length} itens</span></div><div class="cc-chips">${chipsChecklist(l,'aaToggleChecklist')}</div></div>`;}).join('')}</div>`:'<div class="cfg-hint">Nenhuma conversão registrada na semana.</div>'}`;
 }
@@ -2395,7 +2593,7 @@ async function concluirAutoauditoria(){
   const falhasFim=calcFalhas(c.atendente,aaState.ini,agora);
   const kFim=new Set(falhasFim.map(f=>f.k));
   const p=calcPendencias(c.atendente);
-  const tira=n=>{const{idsConversoes,...r}=n;return r;};
+  const tira=n=>Object.fromEntries(Object.entries(n).filter(([k])=>!k.startsWith('ids')));
   const conv=(aaState.numeros.idsConversoes||[]).map(id=>allLeads.find(l=>l.id===id)).filter(Boolean);
   const resultado={
     periodo:{ini:aaState.ini.toISOString(),fim:agora.toISOString(),iniAnt:aaState.iniAnt.toISOString(),limitado:!!aaState.limitado,incluidas:aaState.incluidas||0},
@@ -2786,7 +2984,7 @@ function calcAcoesAud(A){
       acoes.push({p:7,titulo:`Acompanhamento individual: ${a.nome}`,dado:`Conversão de ${fmtPct(a.taxa)}, abaixo da metade da melhor taxa da equipe (${fmtPct(max)}).`,acao:'Acompanhamento individual: ouvir atendimentos, revisar abordagem e objeções mais comuns.',atalho:lista('atend'+i,a.ids,`Leads de ${a.nome}`)}));
   }
   if(P.comCheg>=10&&(P.pctFora??0)>30)
-    acoes.push({p:8,titulo:'Muitos leads fora do expediente',dado:`${fmtPct(P.pctFora)} dos leads chegaram fora do expediente humano.`,acao:'Mensagem automática imediata e prioridade para esses leads no início do expediente.',atalho:lista('fora',A.P.fora.map(l=>l.id),'Leads fora do expediente')});
+    acoes.push({p:8,titulo:'Muitos leads fora do expediente',dado:leituraForaExp(calcForaStats(A.P.rec)),acao:'Avaliar atendimento humano no horário de maior chegada ou um robô de acolhimento. Enquanto isso, mensagem automática imediata e prioridade para esses leads na abertura do expediente.',atalho:lista('fora',A.P.fora.map(l=>l.id),'Leads fora do expediente')});
   if(P.recebidos>=10&&(P.pctDesq??0)>40)
     acoes.push({p:9,titulo:'Desqualificação alta',dado:`${fmtPct(P.pctDesq)} dos leads recebidos foram desqualificados.`,acao:'Revisar segmentação das campanhas e critério de qualificação.',atalho:lista('desq',A.P.desq.map(l=>l.id),'Leads desqualificados')});
   const M=A.meta;
@@ -4105,7 +4303,45 @@ window.renderRelatorios=function(){
     return `<tr><td>${d?formatDate(d):'—'}</td><td>${l.name||'Sem Nome'}</td><td>${l.phone||'—'}</td><td>${l.tipo==='SM'?'SM':'Geral'}</td><td>${l.campaign||'—'}</td><td><span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span></td><td>${l.assignee||'—'}</td></tr>`;
   }).join('');
   renderFunilDiagnostico();
+  renderForaExpRel(relIni,relFim);
 };
+// ── Painel "Atendimento fora do expediente" (Relatórios) ──
+function leadsChegadosEntre(ini,fim){return allLeads.filter(l=>{const d=chegadaLead(l);return d&&d>=ini&&d<=fim;});}
+function renderForaExpRel(ini,fim){
+  const el=document.getElementById('fora-exp-card');if(!el)return;
+  const st=calcForaStats(leadsChegadosEntre(ini,fim));
+  window._foraRelIds=st.fora.map(l=>l.id);
+  const maxF=Math.max(1,...st.faixas.map(f=>f.dentro+f.fora)),maxD=Math.max(1,...st.dias.map(d=>d.dentro+d.fora));
+  const barra=(x,max)=>`<div class="fe-hb"><span>${x.r}</span><div class="fe-tr"><i class="d" style="width:${x.dentro/max*100}%"></i><i class="f" style="width:${x.fora/max*100}%"></i></div><b>${x.dentro+x.fora}</b></div>`;
+  const pv=v=>v===null||v===undefined?'—':numBR(v)+'%';
+  el.innerHTML=`
+    <div class="fe-head"><div class="chart-title" style="margin-bottom:0">🌙 Atendimento fora do expediente</div><span class="fe-exp">Expediente humano: ${st.hIni} às ${st.hFim} · segue o período do filtro</span></div>
+    <div class="fe-kpis">
+      <div class="fe-kpi ${st.fora.length?'fe-click':''}" ${st.fora.length?`onclick="abrirListaLeads(window._foraRelIds,'Leads que chegaram fora do expediente')"`:''}><strong>${pv(st.pctFora)}</strong><span>dos leads chegaram fora do expediente (${st.fora.length} de ${st.comCheg})</span></div>
+      <div class="fe-kpi"><strong>${st.mediaFora===null?'—':formatMin(st.mediaFora)}</strong><span>tempo médio de atendimento, contado da abertura do expediente</span></div>
+      <div class="fe-kpi"><strong>${pv(st.convFora)}</strong><span>dos leads de fora do expediente viraram contrato</span></div>
+      <div class="fe-kpi"><strong>${pv(st.convDentro)}</strong><span>dos leads de dentro do expediente viraram contrato</span></div>
+    </div>
+    <div class="fe-graf">
+      <div class="fe-bloco"><div class="fe-g-t">Em que horário os leads chegam</div>${st.faixas.map(f=>barra(f,maxF)).join('')}
+        <div class="fe-leg"><span><i class="d"></i>dentro do expediente</span><span><i class="f"></i>fora do expediente</span></div></div>
+      <div class="fe-bloco"><div class="fe-g-t">Em que dia da semana os leads chegam</div>${st.dias.map(d=>barra(d,maxD)).join('')}</div>
+    </div>
+    <div class="fe-reco">💡 <strong>Leitura do período:</strong> ${leituraForaExp(st)}</div>
+    ${st.semCheg?`<div class="fe-nota">${st.semCheg} lead${st.semCheg>1?'s':''} do período ${st.semCheg>1?'estão':'está'} sem hora de chegada registrada e ${st.semCheg>1?'ficaram':'ficou'} fora desta análise.</div>`:''}`;
+}
+// ── Alerta na Estratégia: só acima de 30% (com pelo menos 10 leads com horário) ──
+function htmlAlertaForaEst(ini,fim){
+  const st=calcForaStats(leadsChegadosEntre(ini,fim));
+  if(st.comCheg<10||(st.pctFora??0)<=30)return '';
+  const partes=[];
+  if(st.topo)partes.push(`Nos dias úteis, a maioria chega das ${st.topo.r}.`);
+  if(st.mediaFora!==null)partes.push(`Esses leads esperam em média ${formatMin(st.mediaFora)} depois da abertura do expediente.`);
+  if(st.convFora!==null&&st.convDentro!==null&&st.convFora<st.convDentro&&st.fora.length>=5)partes.push(`Convertem menos (${numBR(st.convFora)}% contra ${numBR(st.convDentro)}%).`);
+  partes.push('Avalie ampliar o atendimento nesse horário.');
+  return `<div class="fe-alerta" onclick="irParaForaExp()"><div class="fe-alerta-ic">🌙</div><div><div class="fe-alerta-t">${st.pctFora}% dos leads deste período chegaram fora do expediente</div><div class="fe-alerta-d">${partes.join(' ')}</div><span class="fe-alerta-l">Ver o painel completo em Relatórios ›</span></div></div>`;
+}
+window.irParaForaExp=function(){switchTab('relatorios');setTimeout(()=>document.getElementById('fora-exp-card')?.scrollIntoView({behavior:'smooth',block:'start'}),350);};
 
 // ── Diagnóstico do Funil ──
 function renderFunilDiagnostico(){
@@ -4330,6 +4566,7 @@ window.renderEstrategia=function(){
   el.innerHTML=`
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
+    ${isG?htmlAlertaForaEst(ini,fim):''}
     <div class="est-alerts-grid">
       <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" style="${partoProximo.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('partoProximo')"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
       <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" style="${qualifParados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('qualifParados')"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
@@ -6775,6 +7012,109 @@ body.light-theme .lig-cancelada{color:#6B7280}
 .aa-msg.ok{background:rgba(16,185,129,.1);color:#10B981}
 .aa-msg.atencao{background:rgba(245,166,35,.1);color:#F5A623}
 .aa-msg.alerta{background:rgba(239,68,68,.1);color:#EF4444}
+/* Painel fora do expediente (Relatórios) e alerta (Estratégia) */
+.fe-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem}
+.fe-exp{font-size:.66rem;color:#6B7280}
+.fe-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:.6rem}
+.fe-kpi{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.75rem .85rem;transition:border-color .15s,transform .15s}
+.fe-kpi strong{display:block;font-size:1.3rem;font-weight:800;color:#F1F3F9;letter-spacing:-.02em}
+.fe-kpi span{display:block;font-size:.7rem;color:#9CA3AF;line-height:1.4;margin-top:.15rem}
+.fe-click{cursor:pointer}.fe-click:hover{border-color:#8B5CF6;transform:translateY(-2px)}
+.fe-graf{display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-top:.6rem}
+.fe-bloco{background:#0B0D14;border:1px solid #1E2235;border-radius:10px;padding:.8rem .9rem}
+.fe-g-t{font-size:.74rem;font-weight:700;color:#C4C9D8;margin-bottom:.65rem}
+.fe-hb{display:grid;grid-template-columns:110px 1fr 30px;gap:.5rem;align-items:center;font-size:.68rem;color:#9CA3AF;margin-bottom:.4rem}
+.fe-tr{height:13px;background:#1E2235;border-radius:4px;overflow:hidden;display:flex}
+.fe-tr i{display:block;height:100%}
+.fe-tr i.d,.fe-leg i.d{background:#4F6EF7}.fe-tr i.f,.fe-leg i.f{background:#8B5CF6}
+.fe-hb b{color:#F1F3F9;text-align:right}
+.fe-leg{display:flex;gap:.8rem;font-size:.64rem;color:#6B7280;margin-top:.35rem}
+.fe-leg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:.25rem;vertical-align:-1px}
+.fe-reco{margin-top:.6rem;background:rgba(79,110,247,.07);border-left:3px solid #4F6EF7;border-radius:0 9px 9px 0;padding:.65rem .85rem;font-size:.75rem;color:#9CA3AF;line-height:1.55}
+.fe-reco strong{color:#F1F3F9}
+.fe-nota{font-size:.66rem;color:#6B7280;margin-top:.5rem}
+.fe-alerta{display:flex;gap:.75rem;align-items:flex-start;background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.3);border-left:4px solid #8B5CF6;border-radius:10px;padding:.8rem .95rem;margin-bottom:.75rem;cursor:pointer;transition:transform .15s}
+.fe-alerta:hover{transform:translateY(-2px)}
+.fe-alerta-ic{font-size:1.25rem}
+.fe-alerta-t{font-size:.82rem;font-weight:800;color:#F1F3F9;margin-bottom:.15rem}
+.fe-alerta-d{font-size:.74rem;color:#9CA3AF;line-height:1.5}
+.fe-alerta-l{display:inline-block;margin-top:.35rem;font-size:.7rem;font-weight:700;color:#4F6EF7}
+body.light-theme .fe-kpi,body.light-theme .fe-bloco{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .fe-kpi strong,body.light-theme .fe-hb b,body.light-theme .fe-reco strong,body.light-theme .fe-alerta-t{color:#1A1D2E}
+body.light-theme .fe-kpi span,body.light-theme .fe-hb,body.light-theme .fe-reco,body.light-theme .fe-alerta-d{color:#4B5563}
+body.light-theme .fe-g-t{color:#374151}
+body.light-theme .fe-tr{background:#E2E5EE}
+@media(max-width:760px){.fe-kpis{grid-template-columns:repeat(2,1fr)}.fe-graf{grid-template-columns:1fr}}
+/* Segunda entrega: caixas clicáveis, rapidez e grupos */
+.aa-cxs{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem;margin-top:.6rem}
+.aa-cx{position:relative;text-align:left;font-family:'Inter',sans-serif;color:inherit;background:#0B0D14;border:1px solid #1E2235;border-radius:11px;padding:.75rem .85rem .7rem;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease,background .18s ease}
+.aa-cx:hover{transform:translateY(-3px);box-shadow:0 10px 26px rgba(0,0,0,.4);border-color:#4F6EF7;background:#121522}
+.aa-cx.on{border-color:#4F6EF7;box-shadow:0 0 0 3px rgba(79,110,247,.22);background:#121522}
+.aa-cx-ver{position:absolute;top:.65rem;right:.75rem;font-size:.62rem;font-weight:700;color:#4F6EF7;opacity:0;transition:opacity .18s}
+.aa-cx:hover .aa-cx-ver,.aa-cx.on .aa-cx-ver{opacity:1}
+.aa-cx-top{display:flex;align-items:baseline;gap:.35rem}
+.aa-cx-val{font-size:1.45rem;font-weight:800;color:#F1F3F9;letter-spacing:-.02em}
+.aa-cx-nome{font-size:.7rem;font-weight:700;color:#C4C9D8;margin-top:.1rem}
+.aa-cx-frase{font-size:.72rem;color:#9CA3AF;line-height:1.45;margin-top:.3rem}
+.aa-cx-ant{font-size:.62rem;color:#6B7280;margin-top:.4rem}
+.aa-det{margin-top:.6rem;border:1px solid #4F6EF7;border-radius:11px;overflow:hidden;background:#0B0D14;animation:aaAbre .22s ease}
+@keyframes aaAbre{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+.aa-det-h{display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.6rem .85rem;background:rgba(79,110,247,.1);font-size:.76rem;font-weight:700;color:#F1F3F9}
+.aa-det-x{border:none;background:none;color:#9CA3AF;font-size:.9rem;cursor:pointer}
+.aa-det-l{max-height:280px;overflow:auto}
+.aa-det-vazio{padding:.85rem;font-size:.75rem;color:#9CA3AF}
+.aa-li{display:grid;grid-template-columns:1.3fr 1fr 1fr 220px;gap:.5rem;align-items:center;padding:.5rem .85rem;border-top:1px solid #1E2235;font-size:.72rem;color:#9CA3AF}
+.aa-li:hover{background:rgba(79,110,247,.05)}
+.aa-li b{color:#F1F3F9;font-weight:600}
+.aa-li-d{display:flex;gap:.5rem;align-items:center;justify-content:flex-end}
+.aa-abrir{font-size:.68rem;font-weight:700;color:#4F6EF7;cursor:pointer;white-space:nowrap}
+.aa-chip{font-size:.62rem;font-weight:700;border-radius:999px;padding:.12rem .5rem;white-space:nowrap}
+.aa-chip.v{background:rgba(16,185,129,.12);color:#10B981}.aa-chip.a{background:rgba(245,166,35,.12);color:#F5A623}.aa-chip.r{background:rgba(239,68,68,.12);color:#EF4444}.aa-chip.n{background:rgba(79,110,247,.12);color:#8FA3FF}
+.aa-rap{display:grid;grid-template-columns:1.35fr 1fr;gap:.6rem;margin-top:.6rem}
+.aa-rap-bloco{background:#0B0D14;border:1px solid #1E2235;border-radius:11px;padding:.8rem .9rem}
+.aa-rap-t{font-size:.76rem;font-weight:800;color:#F1F3F9}
+.aa-rap-s{font-size:.66rem;color:#6B7280;margin:.1rem 0 .6rem;line-height:1.4}
+.aa-rap-media{font-size:.74rem;color:#9CA3AF;line-height:1.5;margin-bottom:.55rem}
+.aa-rap-media strong{font-size:1.15rem;color:#F1F3F9;font-weight:800;margin-right:.15rem}
+.aa-rap-ant{color:#6B7280}
+.aa-rap-grande{font-size:1.15rem;color:#F1F3F9}
+.aa-rap-nota{font-size:.66rem;color:#6B7280;line-height:1.5}
+.aa-fx{display:flex;align-items:center;gap:.6rem;padding:.45rem .55rem;border-radius:9px;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s,transform .15s}
+.aa-fx:hover,.aa-fx.on{background:#121522;border-color:#2A2F45;transform:translateX(2px)}
+.aa-fx.on{border-color:#4F6EF7}
+.aa-fx-pct{min-width:58px;font-size:.98rem;font-weight:800}
+.aa-fx-txt{font-size:.73rem;color:#9CA3AF;line-height:1.4;flex:1}
+.aa-fx-txt b{color:#F1F3F9}
+.aa-fx-barra{height:5px;border-radius:99px;background:#1E2235;margin-top:.3rem;overflow:hidden}
+.aa-fx-barra i{display:block;height:100%;border-radius:99px}
+.aa-grupo{border:1px solid #1E2235;border-radius:11px;margin-top:.6rem;background:rgba(11,13,20,.6);overflow:hidden}
+.aa-grupo>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.5rem;padding:.7rem .85rem;font-size:.8rem;font-weight:700;color:#F1F3F9}
+.aa-grupo>summary::-webkit-details-marker{display:none}
+.aa-grupo-seta{font-size:.62rem;color:#6B7280;transition:transform .2s}
+.aa-grupo[open]>summary .aa-grupo-seta{transform:rotate(90deg)}
+.aa-grupo-cont{margin-left:auto;font-size:.66rem;font-weight:800;border-radius:999px;padding:.15rem .6rem;background:rgba(245,166,35,.12);color:#F5A623}
+.aa-grupo-c{padding:0 .85rem .85rem}
+.aa-grupo-d{font-size:.72rem;color:#9CA3AF;line-height:1.5;margin-bottom:.5rem}
+.aa-btn-sec{font-family:'Inter',sans-serif;font-size:.72rem;font-weight:600;border-radius:8px;padding:.45rem .75rem;cursor:pointer;border:1px solid #2A2F45;background:none;color:#9CA3AF}
+.aa-btn-sec:hover{border-color:#6B7280;color:#C4C9D8}
+body.light-theme .aa-intro{color:#4B5563}
+body.light-theme .aa-intro strong{color:#1A1D2E}
+body.light-theme .aa-cx,body.light-theme .aa-rap-bloco,body.light-theme .aa-det{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .aa-cx:hover,body.light-theme .aa-cx.on{background:#FFFFFF;border-color:#4F6EF7;box-shadow:0 10px 26px rgba(31,41,80,.12)}
+body.light-theme .aa-cx.on{box-shadow:0 0 0 3px rgba(79,110,247,.18)}
+body.light-theme .aa-det{background:#FFFFFF;border-color:#4F6EF7}
+body.light-theme .aa-cx-val,body.light-theme .aa-rap-t,body.light-theme .aa-rap-media strong,body.light-theme .aa-rap-grande,body.light-theme .aa-fx-txt b,body.light-theme .aa-li b,body.light-theme .aa-det-h,body.light-theme .aa-grupo>summary{color:#1A1D2E}
+body.light-theme .aa-cx-nome{color:#374151}
+body.light-theme .aa-cx-frase,body.light-theme .aa-rap-media,body.light-theme .aa-fx-txt,body.light-theme .aa-li,body.light-theme .aa-grupo-d{color:#4B5563}
+body.light-theme .aa-li{border-top-color:#E2E5EE}
+body.light-theme .aa-fx:hover,body.light-theme .aa-fx.on{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .aa-fx.on{border-color:#4F6EF7}
+body.light-theme .aa-fx-barra{background:#E2E5EE}
+body.light-theme .aa-grupo{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .aa-btn-sec{border-color:#D1D5DB;color:#4B5563}
+body.light-theme .aa-chip.n{color:#3B5BDB}
+body.light-theme .aa-chip.v{color:#059669}
+@media(max-width:760px){.aa-cxs{grid-template-columns:repeat(2,1fr)}.aa-rap{grid-template-columns:1fr}.aa-li{grid-template-columns:1fr auto}.aa-li .aa-li-x{display:none}}
 .aa-msg-mes{font-size:.74rem;color:#9CA3AF;line-height:1.5;margin-top:.55rem;padding:.5rem .8rem;border-left:3px solid #4F6EF7;background:rgba(79,110,247,.06);border-radius:0 8px 8px 0}
 .aa-orient{background:rgba(79,110,247,.07);border:1px solid rgba(79,110,247,.25);border-radius:10px;padding:.7rem .9rem;margin:.4rem 0 .6rem}
 .aa-orient-t{font-size:.78rem;font-weight:700;color:#C4C9D8;margin-bottom:.35rem}
@@ -7034,7 +7374,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02b</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7190,9 +7530,10 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
         <div class="chart-card"><div class="chart-title">Leads por Atendente</div><div class="chart-container"><canvas id="chart-atend"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Leads por Campanha</div><div class="chart-container"><canvas id="chart-camp"></canvas></div></div>
       </div>
+      <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02b</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
