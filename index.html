@@ -6982,7 +6982,8 @@ body.light-theme .lig-cancelada{color:#6B7280}
 /* ═══ FASE 3: AUTOAUDITORIA ═══ */
 .aa-modal{max-width:860px}
 .aa-periodo{font-size:.7rem;color:#6B7280;margin-top:.15rem}
-.aa-progresso{display:flex;align-items:flex-start;padding:.85rem 1.4rem;border-bottom:1px solid #1E2235;overflow-x:auto;gap:0}
+.aa-progresso{display:flex;align-items:flex-start;padding:.85rem 1.4rem;border-bottom:1px solid #1E2235;overflow-x:auto;overflow-y:hidden;gap:0;flex-shrink:0}
+.aa-modal .modal-head{flex-shrink:0}
 .aa-passo{display:flex;flex-direction:column;align-items:center;gap:.25rem;min-width:78px;flex-shrink:0}
 .aa-passo-num{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:800;border:2px solid #2A2F45;color:#6B7280;background:#13161F}
 .aa-passo-label{font-size:.6rem;font-weight:700;color:#6B7280;text-align:center;line-height:1.2}
@@ -7375,7 +7376,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02c</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02d</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7534,7 +7535,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02c</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02d</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
