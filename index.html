@@ -365,6 +365,7 @@ function startLeadsListener(){
 }
 function renderAll(){
   renderAlertaMeta();
+  renderAutoauditoriaArea();
   renderFuFilterBtns();
   renderMetrics();renderFollowups();renderTarefaHoje();
   if(!primeiraCargaFeita){primeiraCargaFeita=true;setTimeout(checkFuAlertaPessoal,500);}
@@ -1916,6 +1917,35 @@ const AA_PASSOS={anteriores:'Compromissos anteriores',numeros:'Meus números',co
 let aaState=null,aaFiltroAtendente='TODAS',aaFiltroSemana='TODAS';
 
 function itensChecklist(l){return CHECKLIST_CONV.filter(i=>!i.soSM||l.tipo==='SM');}
+// ── Conferência da conversão pendente (cobrada a partir de 20/10/2026) ──
+const CONF_CONV_DESDE=new Date(2026,9,20,0,0,0);
+function faltasConferencia(l){return itensChecklist(l).filter(i=>!l.checklistConversao?.[i.k]);}
+function conversoesPendentes(nome){
+  return allLeads.filter(l=>{
+    if(l.status!=='CONTRATO FECHADO'||(nome&&l.assignee!==nome))return false;
+    const d=getDataFechamento(l);
+    return d&&d>=CONF_CONV_DESDE&&faltasConferencia(l).length>0;
+  }).sort((a,b)=>getDataFechamento(a)-getDataFechamento(b));
+}
+function conferenciaAtrasada(l){const d=getDataFechamento(l);return !!d&&(Date.now()-d)>86400000;}
+function linhaConfPendente(l,mostrarAtendente){
+  const its=itensChecklist(l),falta=faltasConferencia(l),d=getDataFechamento(l),atr=conferenciaAtrasada(l);
+  return `<div class="cp-li ${atr?'atrasada':''}" onclick="abrirLeadConfPend('${l.id}')">
+    <div class="cp-li-h"><b>${escHtml(l.name||'Sem nome')}</b>${mostrarAtendente?`<span class="cp-at">${escHtml(l.assignee||'Sem atendente')}</span>`:''}<span class="cp-data">convertido em ${d?dataCurta(localDateStr(d)):'—'}</span><span class="cp-cont ${atr?'r':'a'}">${its.length-falta.length} de ${its.length}${atr?' · atrasada':''}</span><span class="cp-abrir">Abrir ›</span></div>
+    <div class="cp-falta">Falta: ${falta.map(i=>`<span>${escHtml(i.label)}</span>`).join('')}</div>
+  </div>`;
+}
+window.abrirLeadConfPend=function(id){const m=document.getElementById('modal-conf-pend');if(m)m.style.display='none';openLead(id);};
+window.abrirConfPendentes=function(){
+  const isG=currentUser?.role==='gestora';
+  const lista=conversoesPendentes(isG?null:currentUser?.nome);
+  let m=document.getElementById('modal-conf-pend');
+  if(!m){m=document.createElement('div');m.id='modal-conf-pend';m.className='modal-overlay';m.onclick=e=>{if(e.target===m)m.style.display='none';};document.body.appendChild(m);}
+  m.innerHTML=`<div class="modal-box" style="max-width:760px"><div class="modal-head"><span class="modal-title">📁 Conversões com conferência pendente (${lista.length})</span><button class="modal-close" onclick="document.getElementById('modal-conf-pend').style.display='none'">✕</button></div>
+    <div class="modal-body" style="padding-bottom:1.2rem"><div class="cp-intro">Contratos convertidos desde 20/10/2026 em que ainda falta algum item da conferência. Fica em vermelho depois de 1 dia. Clique para abrir o lead e marcar os itens.</div>
+    ${lista.length?`<div class="cp-lista">${lista.map(l=>linhaConfPendente(l,isG)).join('')}</div>`:'<div class="aa-msg ok">Nenhuma conferência pendente. Tudo em dia! 🎉</div>'}</div></div>`;
+  m.style.display='flex';
+};
 function chegadaLead(l){return tsToDate(l.dataHoraChegada)||tsToDate(l.createdAt);}
 function entrouQualificadoEm(l){
   const e=(l.log||[]).find(x=>STATUS_QUALIFICADO_OU_POSTERIOR.includes(x.statusChange));
@@ -2456,7 +2486,8 @@ function aaStepConferencia(){
   const c=aaState.c;
   aaState.falhasAtuais=calcFalhas(c.atendente,aaState.ini,new Date());
   const fs=aaState.falhasAtuais;
-  const conv=allLeads.filter(l=>l.assignee===c.atendente&&l.status==='CONTRATO FECHADO'&&(()=>{const d=getDataFechamento(l);return d&&d>=aaState.ini;})());
+  const pendIds=new Set(conversoesPendentes(c.atendente).map(l=>l.id));
+  const conv=allLeads.filter(l=>l.assignee===c.atendente&&l.status==='CONTRATO FECHADO'&&(pendIds.has(l.id)||(()=>{const d=getDataFechamento(l);return d&&d>=aaState.ini;})()));
   const grupos=AA_GRUPOS.map(g=>({...g,itens:fs.map((f,i)=>({f,i})).filter(x=>x.f.tipo===g.tipo)})).filter(g=>g.itens.length);
   const htmlGrupo=g=>{
     let corpo='',nLeads;
@@ -2481,8 +2512,9 @@ function aaStepConferencia(){
   return `<div class="aa-sub">a) Registros para ajustar</div>
   ${fs.length?`<div class="aa-intro">Encontramos <strong>${fs.length} ponto${fs.length>1?'s':''}</strong> em <strong>${grupos.length} grupo${grupos.length>1?'s':''}</strong>. Você corrige aqui mesmo, e tudo fica registrado no histórico do lead. Clique no grupo para abrir ou fechar.</div>`:'<div class="aa-msg ok">Tudo certo! Nenhum registro para ajustar. 🎉</div>'}
   ${grupos.map(htmlGrupo).join('')}
-  <div class="aa-sub" style="margin-top:1rem">b) Conferência das conversões da semana</div>
-  ${conv.length?`<div class="aa-lista">${conv.map(l=>{const its=itensChecklist(l);const okN=its.filter(i=>l.checklistConversao?.[i.k]).length;return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${l.id}')">${escHtml(l.name||'Sem nome')}</span><span class="${okN===its.length?'aa-ok':'aa-falha'}">${okN} de ${its.length} itens</span></div><div class="cc-chips">${chipsChecklist(l,'aaToggleChecklist')}</div></div>`;}).join('')}</div>`:'<div class="cfg-hint">Nenhuma conversão registrada na semana.</div>'}`;
+  <div class="aa-sub" style="margin-top:1rem">b) Conferência das conversões</div>
+  <div class="cfg-hint" style="margin:-.5rem 0 0">Aparecem as conversões deste período e todas as que ainda têm item pendente.</div>
+  ${conv.length?`<div class="aa-lista">${conv.map(l=>{const its=itensChecklist(l);const okN=its.filter(i=>l.checklistConversao?.[i.k]).length;return `<div class="aa-item"><div class="aa-item-head"><span class="aa-item-nome" onclick="aaAbrirLead('${l.id}')">${escHtml(l.name||'Sem nome')}</span><span class="${okN===its.length?'aa-ok':'aa-falha'}">${okN} de ${its.length} itens${okN<its.length&&conferenciaAtrasada(l)?' · atrasada':''}</span></div><div class="cc-chips">${chipsChecklist(l,'aaToggleChecklist')}</div></div>`;}).join('')}</div>`:'<div class="cfg-hint">Nenhuma conversão neste período e nenhuma conferência pendente. 🎉</div>'}`;
 }
 function aaRegistrarCorrecao(l,campo,antes,depois){
   aaState.correcoes.push({leadId:l.id,leadNome:l.name||'',campo,antes:String(antes??'—'),depois:String(depois??'—'),por:currentUser?.nome||'—',em:new Date().toISOString()});
@@ -2638,6 +2670,11 @@ function renderAutoauditoriaArea(){
   if(ult){
     html+=`<div class="aa-compromissos-card"><div class="aa-banner-titulo">🎯 Meus compromissos da semana</div><ul>${ult.resultado.compromissos.map(t=>`<li>${escHtml(t)}</li>`).join('')}</ul></div>`;
   }
+  const cp=conversoesPendentes(currentUser.nome);
+  if(cp.length){
+    const atr=cp.some(conferenciaAtrasada);
+    html+=`<div class="cp-card ${atr?'atrasada':''}"><div class="aa-banner-titulo">📁 Conferência pendente (${cp.length})</div><div class="cp-card-sub">${atr?'Tem conversão esperando há mais de 1 dia. ':''}Crie a pasta, salve os documentos e marque os itens no lead. Este aviso some quando tudo estiver marcado.</div><div class="cp-lista">${cp.map(l=>linhaConfPendente(l,false)).join('')}</div></div>`;
+  }
   el.innerHTML=html;
 }
 function agCardAutoauditoria(c,now){
@@ -2776,13 +2813,15 @@ function calcAlertaMeta(agora){
   const ligNaoConf=pend.filter(c=>c.tipo==='ligacao-dra'&&c.statusLigacao!=='confirmada');
   const ligUrgentes=ligNaoConf.filter(c=>(dtCompromisso(c)-agora)<=3600000).length;
   const aaAtraso=pend.filter(c=>c.tipo==='autoauditoria'&&agora>prazoAutoauditoria(c)).length;
-  return{...r,avaliar,pctRitmo,nivel,ritmoDia,projecao,porDia,tarefas24,ligNaoConf:ligNaoConf.length,ligUrgentes,aaAtraso,semana:calcSemanaMeta(agora)};
+  const confPend=conversoesPendentes(null);
+  return{...r,avaliar,pctRitmo,nivel,ritmoDia,projecao,porDia,tarefas24,ligNaoConf:ligNaoConf.length,ligUrgentes,aaAtraso,semana:calcSemanaMeta(agora),confPend:confPend.length,confAtras:confPend.filter(conferenciaAtrasada).length};
 }
 function htmlAlertaMeta(a,noTopo){
   const ops=[];
   if(a.tarefas24)ops.push(`<button class="ma-op vermelho" onclick="irParaAgenda(null)">📋 ${a.tarefas24} tarefa${a.tarefas24>1?'s':''} vencida${a.tarefas24>1?'s':''} há +24h</button>`);
   if(a.ligNaoConf)ops.push(`<button class="ma-op ${a.ligUrgentes?'vermelho':'amarelo'}" onclick="irParaAgenda('__LIGACOES__')">📞 ${a.ligNaoConf} ligaç${a.ligNaoConf>1?'ões':'ão'} da Dra. não confirmada${a.ligNaoConf>1?'s':''}${a.ligUrgentes?` (${a.ligUrgentes} em menos de 1h)`:''}</button>`);
   if(a.aaAtraso)ops.push(`<button class="ma-op vermelho" onclick="switchTab('autoauditorias')">🪞 ${a.aaAtraso} autoauditoria${a.aaAtraso>1?'s':''} em atraso</button>`);
+  if(a.confPend)ops.push(`<button class="ma-op ${a.confAtras?'vermelho':'amarelo'}" onclick="abrirConfPendentes()">📁 ${a.confPend} conversõ${a.confPend>1?'es':'ão'} com conferência pendente</button>`);
   const opsHtml=ops.length?`<div class="ma-ops">${ops.join('')}</div>`:'';
   const ocultar=noTopo?`<button class="ma-ocultar" onclick="ocultarAlertaMetaHoje()" title="Ocultar só hoje">Ocultar hoje ✕</button>`:'';
   const auditoria=typeof window.abrirAuditoria==='function'?`<button class="ma-btn" onclick="abrirAuditoria()">📑 Gerar auditoria</button>`:'';
@@ -3802,6 +3841,14 @@ function renderKanban(){
   });
 }
 
+function seloConferenciaHTML(l){
+  if(l.status!=='CONTRATO FECHADO')return '';
+  const d=getDataFechamento(l);if(!d||d<CONF_CONV_DESDE)return '';
+  const its=itensChecklist(l),falta=faltasConferencia(l);
+  if(!falta.length)return `<span class="k-conf ok" title="Conferência da conversão completa">📁 ${its.length} de ${its.length}</span>`;
+  const atr=conferenciaAtrasada(l);
+  return `<span class="k-conf ${atr?'r':'a'}" title="Falta: ${escHtml(falta.map(i=>i.label).join(', '))}">📁 ${its.length-falta.length} de ${its.length}</span>`;
+}
 function kanbanCard(l){
   const wa=formatPhone(l.phone);
   const today=new Date();today.setHours(23,59,59,999);
@@ -3834,7 +3881,7 @@ function kanbanCard(l){
     <div class="k-top"><span class="k-name">${l.name||'Sem Nome'}</span>${l.tipo?`<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'} k-tipo">${l.tipo==='SM'?'SM':'Geral'}</span>`:''}</div>
     <div class="k-trilha">${miniTrilhaK}</div>
     ${l.campaign?`<span class="campaign-tag">${l.campaign}</span>`:''}
-    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}${seloTempoHTML(l,true)}${seloLigacaoHTML(l,true)}</div>
+    <div class="k-meta">${l.phone?`<span class="k-phone">${l.phone}</span>`:''}<span class="k-resp">${l.assignee||'—'}</span>${daysLateHtml}${seloTempoHTML(l,true)}${seloLigacaoHTML(l,true)}${seloConferenciaHTML(l)}</div>
     ${l.currentNote?`<div class="k-note">${l.currentNote}</div>`:''}
     <div class="k-footer" onclick="event.stopPropagation()">
       ${wa?`<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs">WhatsApp</a>`:'<span></span>'}
@@ -4567,11 +4614,12 @@ window.renderEstrategia=function(){
   <div class="est-section">
     <div class="est-section-title">🚨 Alertas Críticos</div>
     ${isG?htmlAlertaForaEst(ini,fim):''}
-    <div class="est-alerts-grid">
+    <div class="est-alerts-grid est-alerts-5">
       <div class="est-alert ${partoProximo.length?'alert-red':'alert-ok'} ${partoProximo.length?'clickable-card':''}" style="${partoProximo.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('partoProximo')"><div class="est-alert-num">${partoProximo.length}</div><div class="est-alert-label">SM com parto<br>em até 60 dias</div></div>
       <div class="est-alert ${qualifParados.length?'alert-orange':'alert-ok'} ${qualifParados.length?'clickable-card':''}" style="${qualifParados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('qualifParados')"><div class="est-alert-num">${qualifParados.length}</div><div class="est-alert-label">Qualificados<br>parados +7 dias</div></div>
       <div class="est-alert ${esfriando.length?'alert-orange':'alert-ok'} ${esfriando.length?'clickable-card':''}" style="${esfriando.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('esfriando')"><div class="est-alert-num">${esfriando.length}</div><div class="est-alert-label">Esfriando<br>+15 dias sem contato</div></div>
       <div class="est-alert ${fuAtrasados.length?'alert-red':'alert-ok'} ${fuAtrasados.length?'clickable-card':''}" style="${fuAtrasados.length?'cursor:pointer':''}" onclick="abrirAlertaEstrategia('fuAtrasados')"><div class="est-alert-num">${fuAtrasados.length}</div><div class="est-alert-label">Follow-ups<br>em atraso</div></div>
+      ${(()=>{const cp=conversoesPendentes(isG?null:currentUser?.nome);const atr=cp.some(conferenciaAtrasada);return `<div class="est-alert ${cp.length?(atr?'alert-red':'alert-orange')+' clickable-card':'alert-ok'}" style="${cp.length?'cursor:pointer':''}" ${cp.length?'onclick="abrirConfPendentes()"':''}><div class="est-alert-num">${cp.length}</div><div class="est-alert-label">Conversões com<br>conferência pendente</div></div>`;})()}
     </div>
   </div>
   <div class="est-section">
@@ -7014,6 +7062,39 @@ body.light-theme .lig-cancelada{color:#6B7280}
 .aa-msg.ok{background:rgba(16,185,129,.1);color:#10B981}
 .aa-msg.atencao{background:rgba(245,166,35,.1);color:#F5A623}
 .aa-msg.alerta{background:rgba(239,68,68,.1);color:#EF4444}
+/* Conferência da conversão pendente */
+.est-alerts-grid.est-alerts-5{grid-template-columns:repeat(5,1fr)}
+@media(max-width:1200px){.est-alerts-grid.est-alerts-5{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:700px){.est-alerts-grid.est-alerts-5{grid-template-columns:repeat(2,1fr)}}
+.k-conf{font-size:.6rem;font-weight:700;border-radius:999px;padding:.08rem .45rem;white-space:nowrap}
+.k-conf.ok{background:rgba(16,185,129,.12);color:#10B981}.k-conf.a{background:rgba(245,166,35,.14);color:#F5A623}.k-conf.r{background:rgba(239,68,68,.14);color:#EF4444}
+.cp-card{background:#13161F;border:1px solid #1E2235;border-left:3px solid #F5A623;border-radius:12px;padding:.8rem 1.2rem;margin-bottom:1rem}
+.cp-card.atrasada{border-left-color:#EF4444}
+.cp-card-sub{font-size:.74rem;color:#9CA3AF;margin:.2rem 0 .6rem;line-height:1.5}
+.cp-intro{font-size:.76rem;color:#9CA3AF;line-height:1.5}
+#modal-conf-pend .modal-body>*,#modal-conf-pend .modal-head{flex-shrink:0}
+.cp-lista{display:flex;flex-direction:column;gap:.45rem}
+.cp-li{background:#0B0D14;border:1px solid #1E2235;border-radius:9px;padding:.55rem .75rem;cursor:pointer;transition:border-color .15s,transform .15s}
+.cp-li:hover{border-color:#4F6EF7;transform:translateX(2px)}
+.cp-li.atrasada{border-color:rgba(239,68,68,.4)}
+.cp-li-h{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;font-size:.78rem}
+.cp-li-h b{color:#F1F3F9}
+.cp-at{font-size:.66rem;font-weight:700;color:#8FA3FF;background:rgba(79,110,247,.12);border-radius:999px;padding:.1rem .5rem}
+.cp-data{font-size:.68rem;color:#6B7280}
+.cp-cont{margin-left:auto;font-size:.64rem;font-weight:800;border-radius:999px;padding:.12rem .5rem}
+.cp-cont.a{background:rgba(245,166,35,.14);color:#F5A623}.cp-cont.r{background:rgba(239,68,68,.14);color:#EF4444}
+.cp-abrir{font-size:.68rem;font-weight:700;color:#4F6EF7}
+.cp-falta{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.4rem;font-size:.66rem;color:#9CA3AF;align-items:center}
+.cp-falta span{border:1px dashed #2A2F45;border-radius:999px;padding:.08rem .5rem;color:#C4C9D8}
+body.light-theme .cp-card{background:#FFFFFF;border-color:#E2E5EE}
+body.light-theme .cp-card{border-left-color:#F5A623}body.light-theme .cp-card.atrasada{border-left-color:#EF4444}
+body.light-theme .cp-li{background:#F8F9FC;border-color:#E2E5EE}
+body.light-theme .cp-li:hover{border-color:#4F6EF7}
+body.light-theme .cp-li.atrasada{border-color:rgba(239,68,68,.45)}
+body.light-theme .cp-li-h b{color:#1A1D2E}
+body.light-theme .cp-card-sub,body.light-theme .cp-intro,body.light-theme .cp-falta{color:#4B5563}
+body.light-theme .cp-falta span{border-color:#D1D5DB;color:#374151}
+body.light-theme .cp-at{color:#3B5BDB}
 /* Painel fora do expediente (Relatórios) e alerta (Estratégia) */
 .fe-head{display:flex;justify-content:space-between;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.85rem}
 .fe-exp{font-size:.66rem;color:#6B7280}
@@ -7376,7 +7457,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02d</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02e</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7535,7 +7616,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02d</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02e</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
