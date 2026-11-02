@@ -6992,6 +6992,7 @@ body.light-theme .lig-cancelada{color:#6B7280}
 .aa-passo.atual .aa-passo-label{color:#4F6EF7}
 .aa-passo-linha{flex:1;min-width:14px;height:2px;background:#2A2F45;margin-top:12px}
 .aa-conteudo{padding-bottom:1.2rem}
+.aa-conteudo>*{flex-shrink:0} /* nada é espremido: a janela rola */
 .aa-titulo-passo{font-size:1rem;font-weight:800;color:#F1F3F9}
 .aa-intro{font-size:.8rem;color:#9CA3AF;line-height:1.55;background:rgba(79,110,247,.06);border:1px solid rgba(79,110,247,.18);border-radius:8px;padding:.65rem .85rem}
 .aa-sub{font-size:.74rem;font-weight:700;color:#C4C9D8;text-transform:uppercase;letter-spacing:.04em}
@@ -7374,7 +7375,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02b</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02c</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7533,7 +7534,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02b</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02c</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
