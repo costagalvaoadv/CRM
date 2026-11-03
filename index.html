@@ -2144,6 +2144,17 @@ function calcNumerosAtendente(nome,ini,fim){
 }
 
 // ── Falhas encontradas automaticamente nos leads da atendente ──
+// Nota escrita de verdade (não conta "Atualizado", mudança de status nem o registro automático do FUP)
+function ehNotaReal(x){
+  const t=String(x?.note||'').trim();
+  if(!t||t==='Atualizado'||/^Status → /.test(t))return false;
+  if(/^(FUP \S+|Mensal) realizado( — próximo em [\d/]+)?$/.test(t))return false;
+  return true;
+}
+function temNotaPerto(log,e){
+  const t=new Date(e.ts).getTime();
+  return log.some(x=>x!==e&&ehNotaReal(x)&&Math.abs(new Date(x.ts).getTime()-t)<=30*60000);
+}
 const QUALIF_PARADO_MS=24*3600000; // alerta: qualificado sem avançar há mais de 1 dia
 function calcFalhas(nome,ini,fim){
   const noP=d=>!!d&&d>=ini&&d<=fim;
@@ -2155,7 +2166,7 @@ function calcFalhas(nome,ini,fim){
     if(noP(chegadaLead(l))&&(!l.dataHoraChegada||!l.dataHoraInicioAtendimento))
       f.push({k:`horario-${l.id}`,tipo:'horario',lead:l,txt:'Sem hora de chegada ou sem início do atendimento'});
     log.forEach(e=>{
-      if(e.user===nome&&e.note==='Atualizado'&&noP(new Date(e.ts))&&!log.some(x=>x.complementa===e.ts))
+      if(e.user===nome&&e.note==='Atualizado'&&noP(new Date(e.ts))&&!log.some(x=>x.complementa===e.ts)&&!temNotaPerto(log,e))
         f.push({k:`nota-${l.id}-${e.ts}`,tipo:'nota',lead:l,ts:e.ts,txt:`Contato de ${formatDatetime(new Date(e.ts))} salvo sem nota`});
     });
     if(l.status==='QUALIFICADO'&&!ligacaoAtiva(l)&&l.ligacaoDra?.status!=='realizada'){
@@ -3696,6 +3707,15 @@ async function avancarEtapa(id){
 }
 window.avancarEtapaDoModal = async function() {
   if (!editingLeadId) return;
+  const campoNota=document.getElementById('f-note');
+  const nota=(campoNota?.value||'').trim();
+  if(nota){
+    try{
+      await updateDoc(doc(db,'leads',editingLeadId),{currentNote:nota,lastContact:serverTimestamp(),
+        log:arrayUnion({user:currentUser?.nome||'—',note:nota,ts:new Date().toISOString(),statusChange:null})});
+      if(campoNota)campoNota.value='';
+    }catch(e){showToast('Erro ao salvar a nota: '+e.message,'error');return;}
+  }
   await avancarEtapa(editingLeadId);
   closeLead();
 };
@@ -4121,8 +4141,8 @@ window.saveLead=async function(){
         dataFechamentoContrato,
         followupHistory:[],createdAt:dataPrimeiroContato||serverTimestamp(),lastContact:serverTimestamp(),
         log:STATUS_QUALIFICADO_OU_POSTERIOR.includes(status)
-          ?[{user:assignee,note:note||`Lead cadastrado já como ${status}`,ts:new Date().toISOString(),statusChange:status}]
-          :(note?[{user:assignee,note,ts:new Date().toISOString(),statusChange:null}]:[])
+          ?[{user:currentUser?.nome||assignee,note:note||`Lead cadastrado já como ${status}`,ts:new Date().toISOString(),statusChange:status}]
+          :(note?[{user:currentUser?.nome||assignee,note,ts:new Date().toISOString(),statusChange:null}]:[])
       });
       clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
       showToast('Lead criado! FUP 24h agendado.');
@@ -4156,7 +4176,10 @@ window.saveLead=async function(){
           upd.nextFollowup=Timestamp.fromDate(calcProxMensalSM(dataParto||existing?.dataParto||null));
         }
       }
-      upd.log=arrayUnion({user:assignee,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
+      const quemSalvou=currentUser?.nome||assignee;
+      const semNada=!note&&!statusChanged;
+      const registroRecente=semNada&&(existing?.log||[]).some(x=>x.user===quemSalvou&&(Date.now()-new Date(x.ts).getTime())<30*60000);
+      if(!registroRecente)upd.log=arrayUnion({user:quemSalvou,note:note||(statusChanged?`Status → ${status}`:'Atualizado'),ts:new Date().toISOString(),statusChange:statusChanged?status:null});
       await updateDoc(doc(db,'leads',editingLeadId),upd);
       clearTimeout(safetyTimer);clearTimeout(window._saveTimer);window._saveTimer=null;
       showToast('✅ Salvo!');
@@ -7457,7 +7480,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-02e</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-03a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7616,7 +7639,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-02e</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-03a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
