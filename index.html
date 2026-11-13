@@ -1629,12 +1629,13 @@ async function sincronizarTarefasAuto(){
     const id=`${cfg.tipo}-${l.id}-${chave}-${n}`;
     if(syncCriando.has(id))continue;
     let base=entrada,dias=cfg.dias;
-    const feitas=doCiclo.filter(c=>c.status==='feito').map(c=>c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)).filter(Boolean).sort((a,b)=>b-a);
-    if(feitas.length){
-      // Concluída: a tarefa sai da Agenda e o lead segue pela trilha de follow-up.
-      // Rede de segurança: só repete se o lead não tiver nenhum follow-up agendado.
+    if(n>0){
+      // Já houve tarefa neste ciclo (concluída ou cancelada): ela sai da Agenda e o lead segue pela trilha de follow-up.
+      // Rede de segurança: só cria outra se o lead não tiver nenhum follow-up agendado.
+      // (Regra espelhada no passo 1, que só cancela repetição quando HÁ follow-up: assim nunca entra em ciclo.)
       if(l.nextFollowup)continue;
-      base=feitas[0];dias=cfg.repete;
+      const fim=doCiclo.map(c=>c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)).filter(d=>d&&!isNaN(d)).sort((a,b)=>b-a);
+      base=fim[0]||entrada;dias=cfg.repete;
     }
     const quando=agendaTarefaAuto(base,dias);
     syncCriando.add(id);
@@ -7591,7 +7592,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13b</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7750,7 +7751,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13b</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
