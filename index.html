@@ -1556,6 +1556,7 @@ function nomeDra(){
 }
 function servicoLead(l){return l?.tipo==='SM'?'Salário-Maternidade':'Previdenciário Geral'+(l?.campaign?` (${l.campaign})`:'');}
 
+// Repetição: só acontece quando o lead não tem follow-up agendado (rede de segurança)
 // ── Datas das tarefas automáticas (sempre dia útil, no início do expediente) ──
 function ehDiaUtil(d){
   return (cfgComercial.expediente.dias||[]).includes(d.getDay())&&!ehFeriado(localDateStr(d));
@@ -1604,6 +1605,14 @@ async function sincronizarTarefasAuto(){
       await updateDoc(doc(db,'compromissos',c.id),{status:'cancelado',fechadaAutomaticamente:true,motivoFechamento:motivo,concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()}).catch(()=>syncCriando.delete(k));
       continue;
     }
+    // Repetição antiga (criada automaticamente depois de uma conclusão): sai da Agenda se o lead tem follow-up agendado
+    if((c.ciclo||0)>=1&&!c.retornoPedido&&l.nextFollowup){
+      const k='rep-'+c.id;
+      if(syncCriando.has(k))continue;
+      syncCriando.add(k);
+      await updateDoc(doc(db,'compromissos',c.id),{status:'cancelado',fechadaAutomaticamente:true,motivoFechamento:'Repetição automática desativada: o lead segue pela trilha de follow-up',concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()}).catch(()=>syncCriando.delete(k));
+      continue;
+    }
     if(l.assignee&&l.assignee!==c.atendente){
       await updateDoc(doc(db,'compromissos',c.id),{atendente:l.assignee}).catch(()=>{});
     }
@@ -1621,7 +1630,12 @@ async function sincronizarTarefasAuto(){
     if(syncCriando.has(id))continue;
     let base=entrada,dias=cfg.dias;
     const feitas=doCiclo.filter(c=>c.status==='feito').map(c=>c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)).filter(Boolean).sort((a,b)=>b-a);
-    if(feitas.length){base=feitas[0];dias=cfg.repete;}
+    if(feitas.length){
+      // Concluída: a tarefa sai da Agenda e o lead segue pela trilha de follow-up.
+      // Rede de segurança: só repete se o lead não tiver nenhum follow-up agendado.
+      if(l.nextFollowup)continue;
+      base=feitas[0];dias=cfg.repete;
+    }
     const quando=agendaTarefaAuto(base,dias);
     syncCriando.add(id);
     await setDoc(doc(db,'compromissos',id),{
@@ -1656,6 +1670,11 @@ window.abrirConcluirTarefa=function(id){
   document.getElementById('ct-lead').textContent=c.leadNome||'';
   document.getElementById('ct-desc').textContent=c.nota||'';
   document.getElementById('ct-nota').value='';
+  const rg=document.getElementById('ct-retorno-grupo');
+  if(rg)rg.style.display=c.leadId?'':'none';
+  const rd=document.getElementById('ct-ret-data'),rh=document.getElementById('ct-ret-hora');
+  if(rd){rd.value='';rd.min=localDateStr(new Date());}
+  if(rh)rh.value=cfgComercial.expediente?.inicio||'08:30';
   document.getElementById('modal-concluir-tarefa').style.display='flex';
   setTimeout(()=>document.getElementById('ct-nota')?.focus(),80);
 };
@@ -1666,17 +1685,31 @@ window.confirmarConcluirTarefa=async function(){
   if(nota.length<5)return showToast('Escreva o resultado da tarefa (o que foi feito e o próximo passo)','error');
   const c=allCompromissos.find(x=>x.id===id);if(!c)return;
   const meta=TIPO_TAREFA_META[c.tipo]||{label:'Tarefa'};
+  const retData=c.leadId?(document.getElementById('ct-ret-data')?.value||''):'';
+  const retHora=document.getElementById('ct-ret-hora')?.value||cfgComercial.expediente?.inicio||'08:30';
+  if(retData&&retData<localDateStr(new Date()))return showToast('A data do novo contato não pode ser no passado','error');
   try{
     setBtnLoading('btn-ct-salvar',true);
     await updateDoc(doc(db,'compromissos',id),{status:'feito',notaConclusao:nota,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()});
+    if(retData&&c.leadId){
+      const l=allLeads.find(x=>x.id===c.leadId);
+      const base={exigeNota:true,atendente:l?.assignee||c.atendente||'',leadId:c.leadId,leadNome:c.leadNome||l?.name||'Sem nome',
+        data:retData,hora:retHora,status:'pendente',historico:[],criadoPor:currentUser?.nome||'Sistema',createdAt:serverTimestamp(),retornoPedido:true};
+      if(c.automatica&&c.gatilhoDesde){
+        const n=(c.ciclo||0)+1;
+        await setDoc(doc(db,'compromissos',`${c.tipo}-${c.leadId}-${c.gatilhoDesde}-r${Date.now()}`),{...base,tipo:c.tipo,automatica:true,gatilhoDesde:c.gatilhoDesde,ciclo:n,nota:`${c.nota} (retorno combinado com a cliente)`});
+      }else{
+        await addDoc(collection(db,'compromissos'),{...base,tipo:c.tipo||'aviso',nota:`Retorno combinado com a cliente: ${c.nota||''}`.trim()});
+      }
+    }
     if(c.leadId&&allLeads.some(l=>l.id===c.leadId)){
-      const texto=`${meta.label.replace(/^\S+\s/,'')} (${c.nota}): ${nota}`;
+      const texto=`${meta.label.replace(/^\S+\s/,'')} (${c.nota}): ${nota}${retData?`. Novo contato agendado para ${dataCurta(retData)} às ${retHora}`:''}`;
       await updateDoc(doc(db,'leads',c.leadId),{
         currentNote:texto,lastContact:serverTimestamp(),
         log:arrayUnion({user:currentUser?.nome||'—',note:`Tarefa concluída. ${texto}`,ts:new Date().toISOString(),statusChange:null})
       });
     }
-    showToast('✅ Tarefa concluída e registrada no histórico do lead!');
+    showToast(retData?`✅ Tarefa concluída. Novo contato agendado para ${dataCurta(retData)} às ${retHora}.`:'✅ Tarefa concluída e registrada no histórico do lead!');
     fecharConcluirTarefa();
   }catch(e){showToast('Erro ao concluir: '+e.message,'error');}
   finally{setBtnLoading('btn-ct-salvar',false);}
@@ -7558,7 +7591,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-09a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7717,7 +7750,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-09a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -8154,6 +8187,11 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
         <label class="f-label">Resultado da tarefa (obrigatório)</label>
         <textarea id="ct-nota" class="f-textarea" style="min-height:80px" placeholder="Ex: Liguei, a cliente enviou o RG e o CPF. Falta o comprovante de residência, ela envia amanhã."></textarea>
         <div class="cfg-hint">Conte onde o lead estava parado, o que foi feito e qual o próximo passo. Vai para o histórico do lead.</div>
+      </div>
+      <div class="f-group" id="ct-retorno-grupo">
+        <label class="f-label">📅 Agendar novo contato? (opcional)</label>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap"><input type="date" id="ct-ret-data" class="f-input" style="flex:1;min-width:150px"/><input type="time" id="ct-ret-hora" class="f-input" style="max-width:130px"/></div>
+        <div class="cfg-hint">Preencha só se a cliente pediu retorno numa data, por exemplo "me liga segunda". Sem data, a tarefa sai da Agenda e o lead segue pela trilha de follow-up.</div>
       </div>
     </div>
     <div class="modal-foot"><div></div><div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharConcluirTarefa()">Cancelar</button><button id="btn-ct-salvar" class="btn-save" onclick="confirmarConcluirTarefa()">Concluir</button></div></div>
