@@ -1605,14 +1605,8 @@ async function sincronizarTarefasAuto(){
       await updateDoc(doc(db,'compromissos',c.id),{status:'cancelado',fechadaAutomaticamente:true,motivoFechamento:motivo,concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()}).catch(()=>syncCriando.delete(k));
       continue;
     }
-    // Repetição antiga (criada automaticamente depois de uma conclusão): sai da Agenda se o lead tem follow-up agendado
-    if((c.ciclo||0)>=1&&!c.retornoPedido&&l.nextFollowup){
-      const k='rep-'+c.id;
-      if(syncCriando.has(k))continue;
-      syncCriando.add(k);
-      await updateDoc(doc(db,'compromissos',c.id),{status:'cancelado',fechadaAutomaticamente:true,motivoFechamento:'Repetição automática desativada: o lead segue pela trilha de follow-up',concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()}).catch(()=>syncCriando.delete(k));
-      continue;
-    }
+    // Repetições antigas NÃO são canceladas automaticamente (evita conflito com navegadores em versão antiga).
+    // Elas ficam na Agenda até a atendente concluir; depois disso não se repetem se o lead tiver follow-up.
     if(l.assignee&&l.assignee!==c.atendente){
       await updateDoc(doc(db,'compromissos',c.id),{atendente:l.assignee}).catch(()=>{});
     }
@@ -7592,7 +7586,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13b</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13c</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7751,7 +7745,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13b</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13c</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
