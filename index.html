@@ -114,6 +114,7 @@ function showApp(){
   startLeadsListener();startPresence();
   startUsersListener();
   startConfigListener();
+  startVersaoListener();
   carregarCampanhas();
   if(isG)carregarPlanos().then(()=>{ if(currentTab==='estrategia')renderEstrategia(); });
   if(fuAlertInterval)clearInterval(fuAlertInterval);
@@ -807,6 +808,34 @@ function mergeCfg(d){
   };
 }
 let cfgComercial=mergeCfg({});
+// ── Controle de versão: quem estiver com versão antiga para de sincronizar e recebe aviso para atualizar ──
+const APP_VERSAO='2026-11-18a';
+let versaoRemota=null,avisoVersaoTimer=null;
+function versaoDesatualizada(){return !!versaoRemota&&versaoRemota>APP_VERSAO;}
+function startVersaoListener(){
+  onSnapshot(doc(db,'config','versao'),snap=>{
+    versaoRemota=snap.exists()?(snap.data().atual||null):null;
+    if(!versaoRemota||APP_VERSAO>versaoRemota){
+      setDoc(doc(db,'config','versao'),{atual:APP_VERSAO,publicadaEm:serverTimestamp()}).catch(()=>{});
+      return;
+    }
+    if(versaoDesatualizada())mostrarAvisoVersao();
+  },()=>{});
+}
+function algumModalAberto(){
+  return [...document.querySelectorAll('.modal-overlay,.modal-camp-overlay')].some(m=>getComputedStyle(m).display!=='none');
+}
+function mostrarAvisoVersao(){
+  if(document.getElementById('aviso-versao'))return;
+  const b=document.createElement('div');
+  b.id='aviso-versao';
+  b.innerHTML=`🔄 Há uma versão nova do CRM (${escHtml(versaoRemota)}). <button type="button" onclick="location.reload()">Atualizar agora</button>`;
+  document.body.appendChild(b);
+  // Atualiza sozinho em 1 minuto, se ninguém estiver com uma janela aberta
+  clearTimeout(avisoVersaoTimer);
+  const tentar=()=>{if(algumModalAberto()){avisoVersaoTimer=setTimeout(tentar,30000);return;}location.reload();};
+  avisoVersaoTimer=setTimeout(tentar,60000);
+}
 function startConfigListener(){
   onSnapshot(doc(db,'config','comercial'),snap=>{
     cfgComercial=mergeCfg(snap.exists()?snap.data():{});
@@ -1586,6 +1615,7 @@ function dataEntradaStatus(l){
 // ── Sincronização: garante 1 tarefa aberta por lead parado em Ag. Assinatura / Ag. Documentos ──
 function agendarSyncTarefas(){
   if(!leadsCarregados||!compromissosCarregados||!currentUser)return;
+  if(versaoDesatualizada())return; // navegador com versão antiga não mexe nas tarefas
   clearTimeout(syncTimer);
   syncTimer=setTimeout(()=>{sincronizarTarefasAuto().catch(e=>console.error('sync tarefas',e));},2500);
 }
@@ -1623,21 +1653,16 @@ async function sincronizarTarefasAuto(){
     const id=`${cfg.tipo}-${l.id}-${chave}-${n}`;
     if(syncCriando.has(id))continue;
     let base=entrada,dias=cfg.dias;
-    if(n>0){
-      // Já houve tarefa neste ciclo (concluída ou cancelada): ela sai da Agenda e o lead segue pela trilha de follow-up.
-      // Rede de segurança: só cria outra se o lead não tiver nenhum follow-up agendado.
-      // (Regra espelhada no passo 1, que só cancela repetição quando HÁ follow-up: assim nunca entra em ciclo.)
-      if(l.nextFollowup)continue;
-      const fim=doCiclo.map(c=>c.concluidoEmLocal?new Date(c.concluidoEmLocal):tsToDate(c.concluidoEm)).filter(d=>d&&!isNaN(d)).sort((a,b)=>b-a);
-      base=fim[0]||entrada;dias=cfg.repete;
-    }
+    // Já houve tarefa neste ciclo: ela não se repete sozinha.
+    // O próximo contato é escolhido por quem conclui a tarefa (obrigatório quando o lead não tem follow-up agendado).
+    if(n>0)continue;
     const quando=agendaTarefaAuto(base,dias);
     syncCriando.add(id);
     await setDoc(doc(db,'compromissos',id),{
       tipo:cfg.tipo,exigeNota:true,automatica:true,gatilhoDesde:chave,ciclo:n,
       atendente:l.assignee,leadId:l.id,leadNome:l.name||'Sem nome',
       data:quando.data,hora:quando.hora,nota:cfg.titulo,
-      status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp()
+      status:'pendente',historico:[],criadoPor:'Sistema',createdAt:serverTimestamp(),versao:APP_VERSAO
     }).catch(e=>{syncCriando.delete(id);console.error('criar tarefa',e);});
   }
   // 3) Autoauditoria semanal de cada atendente (Fase 3)
@@ -1670,6 +1695,14 @@ window.abrirConcluirTarefa=function(id){
   const rd=document.getElementById('ct-ret-data'),rh=document.getElementById('ct-ret-hora');
   if(rd){rd.value='';rd.min=localDateStr(new Date());}
   if(rh)rh.value=cfgComercial.expediente?.inicio||'08:30';
+  const lead=c.leadId?allLeads.find(x=>x.id===c.leadId):null;
+  const semFU=!!(c.automatica&&lead&&!lead.nextFollowup&&!['CONTRATO FECHADO','DESQUALIFICADO'].includes(lead.status));
+  document.getElementById('ct-id').dataset.semfu=semFU?'1':'';
+  const sf=document.getElementById('ct-semfu');if(sf)sf.style.display=semFU?'':'none';
+  const ms=document.getElementById('ct-mudar-status');if(ms)ms.checked=false;
+  const rl=document.getElementById('ct-ret-label');if(rl)rl.textContent=semFU?'📅 Próximo contato (obrigatório)':'📅 Agendar novo contato? (opcional)';
+  const rhint=document.getElementById('ct-ret-hint');
+  if(rhint)rhint.textContent=semFU?'A tarefa sai da Agenda agora e volta só na data escolhida.':'Preencha só se a cliente pediu retorno numa data, por exemplo "me liga segunda". Sem data, a tarefa sai da Agenda e o lead segue pela trilha de follow-up.';
   document.getElementById('modal-concluir-tarefa').style.display='flex';
   setTimeout(()=>document.getElementById('ct-nota')?.focus(),80);
 };
@@ -1683,6 +1716,9 @@ window.confirmarConcluirTarefa=async function(){
   const retData=c.leadId?(document.getElementById('ct-ret-data')?.value||''):'';
   const retHora=document.getElementById('ct-ret-hora')?.value||cfgComercial.expediente?.inicio||'08:30';
   if(retData&&retData<localDateStr(new Date()))return showToast('A data do novo contato não pode ser no passado','error');
+  const semFU=document.getElementById('ct-id').dataset.semfu==='1';
+  const vaiMudarStatus=!!document.getElementById('ct-mudar-status')?.checked;
+  if(semFU&&!retData&&!vaiMudarStatus)return showToast('Este lead não tem follow-up agendado: escolha a data do próximo contato ou marque que vai mudar o status','error');
   try{
     setBtnLoading('btn-ct-salvar',true);
     await updateDoc(doc(db,'compromissos',id),{status:'feito',notaConclusao:nota,concluidoPor:currentUser?.nome||'—',concluidoEm:serverTimestamp(),concluidoEmLocal:new Date().toISOString()});
@@ -1705,6 +1741,7 @@ window.confirmarConcluirTarefa=async function(){
       });
     }
     showToast(retData?`✅ Tarefa concluída. Novo contato agendado para ${dataCurta(retData)} às ${retHora}.`:'✅ Tarefa concluída e registrada no histórico do lead!');
+    if(semFU&&vaiMudarStatus&&!retData&&c.leadId)setTimeout(()=>openLead(c.leadId),400);
     fecharConcluirTarefa();
   }catch(e){showToast('Erro ao concluir: '+e.message,'error');}
   finally{setBtnLoading('btn-ct-salvar',false);}
@@ -6088,7 +6125,23 @@ function formatPhone(p){if(!p)return '';return '55'+p.replace(/\D/g,'').replace(
 function normalizePhone(p){if(!p)return '';return p.replace(/\D/g,'').replace(/^55/,'').replace(/^0/,'');}
 function formatDate(d){return d?new Date(d).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'—';}
 function formatDatetime(d){return d?new Date(d).toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—';}
-function showToast(msg,type='success',duration=3500,big=false){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+type+(big?' toast-big':'');setTimeout(()=>t.className='toast',duration);}
+let toastFila=[],toastAtivo=false,toastTimer=null;
+function showToast(msg,type='success',duration=3500,big=false){
+  // Erros e avisos grandes passam na frente; a fila guarda no máximo 6 avisos
+  const item={msg,type,duration,big};
+  if(type==='error'||big)toastFila.unshift(item);else toastFila.push(item);
+  if(toastFila.length>6)toastFila.length=6;
+  if(!toastAtivo)proximoToast();
+}
+function proximoToast(){
+  const t=document.getElementById('toast');
+  const it=toastFila.shift();
+  if(!t||!it){toastAtivo=false;return;}
+  toastAtivo=true;
+  t.textContent=it.msg;t.className='toast show '+it.type+(it.big?' toast-big':'');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{t.className='toast';setTimeout(proximoToast,250);},it.duration);
+}
 function setBtnLoading(id,l){const b=document.getElementById(id);if(!b)return;b.disabled=l;if(l)b.dataset.label=b.textContent;b.textContent=l?'Aguarde...':(b.dataset.label||b.textContent);}
 function fbErr(code){return({'auth/email-already-in-use':'E-mail já em uso.','auth/invalid-email':'E-mail inválido.','auth/wrong-password':'Senha incorreta.','auth/user-not-found':'Usuário não encontrado.','auth/weak-password':'Senha fraca.','auth/invalid-credential':'E-mail ou senha incorretos.'}[code]||'Erro: '+code);}
 </script>
@@ -7558,6 +7611,14 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
   *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
 
+/* Concluir tarefa: lead sem follow-up */
+.ct-semfu{font-size:.76rem;line-height:1.5;color:#F5A623;background:rgba(245,166,35,.1);border:1px solid rgba(245,166,35,.35);border-radius:9px;padding:.6rem .75rem;margin-bottom:.6rem}
+.ct-semfu strong{color:#F5A623}
+.ct-semfu-op{display:flex;align-items:center;gap:.4rem;margin-top:.45rem;font-weight:600;color:#C4C9D8;cursor:pointer}
+body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color:#B45309}body.light-theme .ct-semfu-op{color:#374151}
+/* Aviso de versão nova */
+#aviso-versao{position:fixed;top:0;left:0;right:0;z-index:20000;background:#4F6EF7;color:#fff;font-size:.8rem;font-weight:600;text-align:center;padding:.55rem 1rem;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+#aviso-versao button{margin-left:.6rem;background:#fff;color:#4F6EF7;border:none;border-radius:6px;padding:.3rem .75rem;font-weight:700;font-size:.76rem;cursor:pointer;font-family:'Inter',sans-serif}
 </style>
 </head>
 <body>
@@ -7586,7 +7647,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-13c</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-18a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7745,7 +7806,7 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-13c</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-18a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -8184,9 +8245,12 @@ body.light-theme .aud-tb-tit{color:#1A1D2E}
         <div class="cfg-hint">Conte onde o lead estava parado, o que foi feito e qual o próximo passo. Vai para o histórico do lead.</div>
       </div>
       <div class="f-group" id="ct-retorno-grupo">
-        <label class="f-label">📅 Agendar novo contato? (opcional)</label>
+        <div id="ct-semfu" class="ct-semfu" style="display:none">⚠️ <strong>Este lead não tem follow-up agendado.</strong> Escolha quando será o próximo contato. Se não houver mais o que fazer com ele, marque a opção abaixo e mude o status do lead.
+          <label class="ct-semfu-op"><input type="checkbox" id="ct-mudar-status"/> Vou mudar o status do lead agora (abrir o lead depois de concluir)</label>
+        </div>
+        <label class="f-label" id="ct-ret-label">📅 Agendar novo contato? (opcional)</label>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap"><input type="date" id="ct-ret-data" class="f-input" style="flex:1;min-width:150px"/><input type="time" id="ct-ret-hora" class="f-input" style="max-width:130px"/></div>
-        <div class="cfg-hint">Preencha só se a cliente pediu retorno numa data, por exemplo "me liga segunda". Sem data, a tarefa sai da Agenda e o lead segue pela trilha de follow-up.</div>
+        <div class="cfg-hint" id="ct-ret-hint">Preencha só se a cliente pediu retorno numa data, por exemplo "me liga segunda". Sem data, a tarefa sai da Agenda e o lead segue pela trilha de follow-up.</div>
       </div>
     </div>
     <div class="modal-foot"><div></div><div style="display:flex;gap:.4rem"><button class="btn-cancel" onclick="fecharConcluirTarefa()">Cancelar</button><button id="btn-ct-salvar" class="btn-save" onclick="confirmarConcluirTarefa()">Concluir</button></div></div>
