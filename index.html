@@ -65,6 +65,31 @@ const SEM_ATENDENTE_KEY   = '__SEM_ATENDENTE__';
 function getTrilha(tipo){ return tipo==='SM'?TRILHA_SM_LABELS:TRILHA_GERAL_LABELS; }
 function getTrilhaDias(tipo){ return tipo==='SM'?TRILHA_SM_DIAS:TRILHA_GERAL_DIAS; }
 
+// ─── SERVIÇOS (detalhe do lead). O campo tipo (SM/GERAL) continua regendo trilha, honorários e relatórios ───
+const SERVICOS=[['SM','Salário-Maternidade'],['AA','Auxílio-Acidente'],['BPC','BPC/LOAS'],['OUTROS','Outros Previdenciários']];
+const SERVICO_LABEL=Object.fromEntries(SERVICOS);
+const CAMP_SERV_OPCOES=[...SERVICOS,['TODOS','Canal geral (todos os serviços)']];
+const CAMP_GERAIS=['redes sociais','indicacao','organico','outro','google meu negocio'];
+let campanhasServicos={}; // { nomeDaCampanha: 'SM'|'AA'|'BPC'|'OUTROS'|'TODOS' } definido no Gerenciar Campanhas
+function tipoDoServico(s){return s==='SM'?'SM':'GERAL';}
+function servicoAutoCampanha(nome){
+  const n=String(nome||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+  if(!n)return null;
+  if(CAMP_GERAIS.includes(n))return 'TODOS';
+  if(/\bbpc\b|\bloas\b|zika/.test(n))return 'BPC';
+  if(/^aa\b|acidente/.test(n))return 'AA';
+  if(/\bsm\b|^l-?i{1,3}\b|existe um prazo|semanas|gravida|maternidade/.test(n))return 'SM';
+  return null; // a classificar
+}
+function servicoDaCampanha(nome){return campanhasServicos[nome]||servicoAutoCampanha(nome);}
+function servicoDoLead(l){
+  if(!l||!l.tipo)return 'SM';
+  if(SERVICO_LABEL[l.servico])return l.servico;
+  if(l.tipo==='SM')return 'SM';
+  const c=servicoDaCampanha(l.campaign);
+  return (c==='AA'||c==='BPC')?c:'OUTROS';
+}
+
 // ─── AUTH ───
 onAuthStateChanged(auth,async user=>{
   if(user){
@@ -809,7 +834,7 @@ function mergeCfg(d){
 }
 let cfgComercial=mergeCfg({});
 // ── Controle de versão: quem estiver com versão antiga para de sincronizar e recebe aviso para atualizar ──
-const APP_VERSAO='2026-11-18a';
+const APP_VERSAO='2026-11-22a';
 let versaoRemota=null,avisoVersaoTimer=null;
 function versaoDesatualizada(){return !!versaoRemota&&versaoRemota>APP_VERSAO;}
 function startVersaoListener(){
@@ -1583,7 +1608,7 @@ function nomeDra(){
   const g=allUsers.find(u=>u.role==='gestora'&&u.ativo!==false&&u.nome);
   return g?.nome||(currentUser?.role==='gestora'?currentUser.nome:'Dra.');
 }
-function servicoLead(l){return l?.tipo==='SM'?'Salário-Maternidade':'Previdenciário Geral'+(l?.campaign?` (${l.campaign})`:'');}
+function servicoLead(l){const s=servicoDoLead(l);return s==='OUTROS'?'Previdenciário Geral'+(l?.campaign?` (${l.campaign})`:''):s==='SM'?'Salário-Maternidade':SERVICO_LABEL[s];}
 
 // Repetição: só acontece quando o lead não tem follow-up agendado (rede de segurança)
 // ── Datas das tarefas automáticas (sempre dia útil, no início do expediente) ──
@@ -2286,7 +2311,7 @@ function renderChecklistLead(){
   const box=document.getElementById('checklist-conv-itens');if(!box)return;
   const l=editingLeadId?allLeads.find(x=>x.id===editingLeadId):null;
   if(!l){box.innerHTML='<span class="cfg-hint">Salve o lead para marcar os itens.</span>';return;}
-  const tipoAtual=document.getElementById('f-tipo')?.value||l.tipo;
+  const _sv=document.getElementById('f-tipo')?.value;const tipoAtual=_sv?tipoDoServico(_sv):l.tipo;
   box.innerHTML=chipsChecklist({...l,tipo:tipoAtual},'toggleChecklistLead');
 }
 window.toggleChecklistLead=async function(leadId,k){
@@ -4023,10 +4048,10 @@ window.openLead=function(id){
   document.getElementById('modal-lead-title').textContent=l?`Editar — ${l.name||'Sem Nome'}`:'Novo Lead';
   document.getElementById('f-name').value    =l?.name||'';
   document.getElementById('f-phone').value   =l?.phone||'';
-  document.getElementById('f-campaign').value=l?.campaign||'';
   document.getElementById('f-status').value  =l?.status||'';
   document.getElementById('f-status').classList.remove('campo-erro');
-  document.getElementById('f-tipo').value    =l?.tipo||'SM';
+  document.getElementById('f-tipo').value    =servicoDoLead(l);
+  atualizarSelectCampanha(true,l?.campaign||'');
   document.getElementById('f-assignee').value=l?.assignee||currentUser?.nome||'';
   document.getElementById('f-note').value    ='';
   document.getElementById('f-parto').value   =l?.dataParto?toDateInput(l.dataParto):'';
@@ -4152,7 +4177,8 @@ window.saveLead=async function(){
   const phone   =document.getElementById('f-phone').value.trim();
   const campaign=document.getElementById('f-campaign').value;
   const status  =document.getElementById('f-status').value;
-  const tipo    =document.getElementById('f-tipo').value;
+  const servico =document.getElementById('f-tipo').value;
+  const tipo    =tipoDoServico(servico);
   const assignee=document.getElementById('f-assignee').value;
   const note    =document.getElementById('f-note').value.trim();
   const partoVal=document.getElementById('f-parto').value;
@@ -4200,7 +4226,7 @@ window.saveLead=async function(){
       const trilhaDias=getTrilhaDias(tipo);
       const d=new Date();d.setDate(d.getDate()+trilhaDias[0]);
       await addDoc(collection(db,'leads'),{
-        name,phone,campaign,status,tipo,assignee,currentNote:note,
+        name,phone,campaign,status,tipo,servico,assignee,currentNote:note,
         nextFollowup:Timestamp.fromDate(d),dataParto,dataPrimeiroContato,etapaFollowup:0,valorHonorarios,
         ...camposTempo,
         dataFechamentoContrato,
@@ -4216,7 +4242,7 @@ window.saveLead=async function(){
       const existing=allLeads.find(l=>l.id===editingLeadId);
       const statusChanged=existing?.status&&existing.status!==status;
       const partoChanged=!!partoVal&&partoVal!==(existing?.dataParto?toDateInput(existing.dataParto):'');
-      const upd={name,phone,campaign,status,tipo,assignee,lastContact:serverTimestamp()};
+      const upd={name,phone,campaign,status,tipo,servico,assignee,lastContact:serverTimestamp()};
       if(note)upd.currentNote=note;
       if(dataParto)upd.dataParto=dataParto;
       if(valorHonorarios)upd.valorHonorarios=valorHonorarios;
@@ -4299,13 +4325,15 @@ window.importarExcel=async function(input){
         const atendMatch=nomesConhecidos.find(n=>obsL.startsWith(String(n).toLowerCase()));
         const atend=atendMatch||'';
         if(!atend)semAtend++;
-        const tipo=(camp.toUpperCase().includes('SM')||obsL.includes('salário maternidade'))?'SM':'GERAL';
+        const _sc=servicoDaCampanha(camp);
+        const servico=(_sc&&_sc!=='TODOS')?_sc:((camp.toUpperCase().includes('SM')||obsL.includes('salário maternidade'))?'SM':'OUTROS');
+        const tipo=tipoDoServico(servico);
         let cAt=new Date();
         if(ds>0){const ep=new Date(1899,11,30);cAt=new Date(ep.getTime()+ds*86400000);}
         const nf=new Date(cAt);nf.setDate(nf.getDate()+1);
         try{
           await addDoc(collection(db,'leads'),{
-            name:nome,phone:tel,campaign:camp,status,tipo,assignee:atend,
+            name:nome,phone:tel,campaign:camp,status,tipo,servico,assignee:atend,
             currentNote:obs,nextFollowup:Timestamp.fromDate(nf),dataParto:null,
             etapaFollowup:0,followupHistory:[],
             createdAt:Timestamp.fromDate(cAt),lastContact:Timestamp.fromDate(cAt),
@@ -4832,19 +4860,24 @@ async function carregarCampanhas() {
     const snap = await getDoc(doc(db, 'config', 'campanhas'));
     if (snap.exists()) {
       campanhasDinamicas = snap.data().lista || [];
+      campanhasServicos = snap.data().servicos || {};
     } else {
       campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
-      await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas });
+      await salvarConfigCampanhas();
     }
   } catch(e) {
     campanhasDinamicas = ['SM - 01','SM - 02','SM - 03','SM - V3','Redes Sociais','Indicação','Orgânico','Outro'];
   }
-  atualizarSelectCampanha();
+  atualizarSelectCampanha(true);
+}
+function salvarConfigCampanhas(){
+  return setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas, servicos: campanhasServicos });
 }
 
 window.adicionarNovaCampanha = async function() {
   // Remove existing modal if open
   document.getElementById('modal-camp')?.remove();
+  const servAtualForm = document.getElementById('f-tipo')?.value || 'SM';
 
   const html2 = `<div class="modal-camp-overlay" id="modal-camp">
     <div class="modal-camp-box">
@@ -4857,6 +4890,7 @@ window.adicionarNovaCampanha = async function() {
           <input class="modal-camp-input" id="camp-nova-input" placeholder="Nome da nova campanha..." onkeydown="if(event.key==='Enter')salvarNovaCampanha()"/>
           <button class="btn-meta btn-meta-primary" onclick="salvarNovaCampanha()">+ Adicionar</button>
         </div>
+        <div class="modal-camp-serv-row"><span>Serviço da nova campanha</span><select class="modal-camp-serv" id="camp-nova-serv">${CAMP_SERV_OPCOES.map(([v,t])=>`<option value="${v}"${v===servAtualForm?' selected':''}>${t}</option>`).join('')}</select></div>
         <div style="font-size:.68rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem;">Campanhas cadastradas</div>
         <div class="modal-camp-list" id="camp-list-modal"></div>
       </div>
@@ -4874,7 +4908,13 @@ window.renderCampList = function() {
     el.innerHTML = '<div class="modal-camp-empty">Nenhuma campanha cadastrada</div>';
     return;
   }
-  el.innerHTML = campanhasDinamicas.map((c,i) => {
+  const ordemServ = ['SM','AA','BPC','OUTROS','TODOS',''];
+  const tituloServ = { SM:'Salário-Maternidade', AA:'Auxílio-Acidente', BPC:'BPC/LOAS', OUTROS:'Outros Previdenciários', TODOS:'Canais gerais (aparecem em todos)', '':'A classificar (aparecem em todos até definir)' };
+  const itens = campanhasDinamicas.map((c,i) => ({ c, i, s: servicoDaCampanha(c) || '' }));
+  el.innerHTML = ordemServ.map(sv => {
+    const grupo = itens.filter(x => x.s === sv);
+    if (!grupo.length) return '';
+    return `<div class="modal-camp-grupo${sv===''?' a-classificar':''}">${tituloServ[sv]}</div>` + grupo.map(({c,i,s}) => {
     const nLeads = allLeads.filter(l => l.campaign === c).length;
     if (campEditIdx === i) return `
     <div class="modal-camp-item editando">
@@ -4886,12 +4926,25 @@ window.renderCampList = function() {
     <div class="modal-camp-item">
       <span class="modal-camp-item-name">📢 ${escHtml(c)}<span class="modal-camp-item-qtd">${nLeads} lead${nLeads===1?'':'s'}</span></span>
       <span class="modal-camp-acoes">
+        <select class="modal-camp-serv" title="Serviço desta campanha" onchange="definirServicoCampanha(${i},this.value)">${s===''?'<option value="" selected>A classificar</option>':''}${CAMP_SERV_OPCOES.map(([v,t])=>`<option value="${v}"${v===s?' selected':''}>${v==='TODOS'?'Canal geral':t}</option>`).join('')}</select>
         <button class="modal-camp-item-edit" onclick="editarCampanha(${i})" title="Editar nome">✏️</button>
         <button class="modal-camp-item-del" onclick="excluirCampanha(${i})" title="Remover campanha">✕</button>
       </span>
     </div>`;
   }).join('');
+  }).join('');
 }
+window.definirServicoCampanha = async function(i, v) {
+  const nome = campanhasDinamicas[i];
+  if (!nome || !v) return;
+  const anterior = campanhasServicos[nome];
+  campanhasServicos[nome] = v;
+  try { await salvarConfigCampanhas(); }
+  catch(e) { if (anterior) campanhasServicos[nome] = anterior; else delete campanhasServicos[nome]; renderCampList(); showToast('Erro ao salvar: ' + e.message, 'error'); return; }
+  atualizarSelectCampanha(true);
+  renderCampList();
+  showToast(`"${nome}" agora é ${v==='TODOS'?'canal geral':SERVICO_LABEL[v]}`);
+};
 let campEditIdx = null;
 let campRenomeando = false;
 window.editarCampanha = function(i) {
@@ -4939,9 +4992,11 @@ window.renomearCampanha = async function(idx) {
     // 3) Lista de campanhas
     if (existente) campanhasDinamicas.splice(idx, 1);
     else campanhasDinamicas[idx] = novo;
-    await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas });
+    if (!existente && campanhasServicos[antigo]) campanhasServicos[novo] = campanhasServicos[antigo];
+    delete campanhasServicos[antigo];
+    await salvarConfigCampanhas();
     campEditIdx = null;
-    atualizarSelectCampanha();
+    atualizarSelectCampanha(true);
     renderCampList();
     showToast(existente ? `✅ Campanhas juntadas em "${existente}" (${resumo} atualizados)` : `✅ Campanha renomeada (${resumo} atualizados)`);
   } catch(e) {
@@ -4955,11 +5010,12 @@ window.salvarNovaCampanha = async function() {
   if (!n) { input?.focus(); return; }
   if (campanhasDinamicas.includes(n)) { showToast('Campanha já existe'); return; }
   campanhasDinamicas.push(n);
-  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
-  atualizarSelectCampanha();
+  campanhasServicos[n] = document.getElementById('camp-nova-serv')?.value || 'TODOS';
+  try { await salvarConfigCampanhas(); } catch(e){}
+  atualizarSelectCampanha(true);
   if (input) input.value = '';
   renderCampList();
-  showToast('Campanha "' + n + '" adicionada!');
+  showToast('Campanha "' + n + '" adicionada em ' + (campanhasServicos[n]==='TODOS'?'canais gerais':SERVICO_LABEL[campanhasServicos[n]]) + '!');
   input?.focus();
 };
 
@@ -4972,20 +5028,35 @@ window.excluirCampanha = async function(idx) {
     return;
   }
   campanhasDinamicas.splice(idx, 1);
-  try { await setDoc(doc(db, 'config', 'campanhas'), { lista: campanhasDinamicas }); } catch(e){}
-  atualizarSelectCampanha();
+  delete campanhasServicos[nome];
+  try { await salvarConfigCampanhas(); } catch(e){}
+  atualizarSelectCampanha(true);
   renderCampList();
   showToast('Campanha removida');
 };
 
-function atualizarSelectCampanha() {
+// manterAtual: mantém a campanha já escolhida mesmo que seja de outro serviço (lead antigo).
+// atual: valor a selecionar (usado ao abrir um lead).
+function atualizarSelectCampanha(manterAtual, atual) {
   const sel = document.getElementById('f-campaign');
   if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">Selecione...</option>' +
-    campanhasDinamicas.map(c => `<option value="${c}">${c}</option>`).join('');
-  if (cur) sel.value = cur;
+  const cur = atual !== undefined ? atual : sel.value;
+  const serv = document.getElementById('f-tipo')?.value || 'SM';
+  const opt = c => `<option value="${escHtml(c)}">${escHtml(c)}</option>`;
+  const doServ = campanhasDinamicas.filter(c => servicoDaCampanha(c) === serv);
+  const gerais = campanhasDinamicas.filter(c => servicoDaCampanha(c) === 'TODOS');
+  const semServ = campanhasDinamicas.filter(c => !servicoDaCampanha(c));
+  const visiveis = [...doServ, ...gerais, ...semServ];
+  let h = '<option value="">Selecione...</option>';
+  if (doServ.length) h += `<optgroup label="Campanhas de ${SERVICO_LABEL[serv]}">${doServ.map(opt).join('')}</optgroup>`;
+  if (gerais.length) h += `<optgroup label="Canais gerais">${gerais.map(opt).join('')}</optgroup>`;
+  if (semServ.length) h += `<optgroup label="A classificar">${semServ.map(opt).join('')}</optgroup>`;
+  const manter = cur && !visiveis.includes(cur) && manterAtual;
+  if (manter) h += `<optgroup label="Campanha atual do lead">${opt(cur)}</optgroup>`;
+  sel.innerHTML = h;
+  sel.value = (cur && (visiveis.includes(cur) || manter)) ? cur : '';
 }
+window.atualizarSelectCampanha = atualizarSelectCampanha;
 
 // ── Plan calculations ──
 function calcularPlano(plano) {
@@ -6925,14 +6996,21 @@ body.light-theme .fin-kpi,.fin-month,.fin-roi-bar,.fin-sim,.fin-sim-res-item{bac
 
 /* ── Modal de campanhas ── */
 .modal-camp-overlay{position:fixed;inset:0;background:#000000cc;z-index:1100;display:flex;align-items:center;justify-content:center;padding:1rem;}
-.modal-camp-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:420px;max-height:85vh;overflow-y:auto;}
+.modal-camp-box{background:#0F1420;border:1px solid #2A2F45;border-radius:14px;width:100%;max-width:520px;max-height:85vh;overflow-y:auto;}
 .modal-camp-head{display:flex;align-items:center;justify-content:space-between;padding:.85rem 1.1rem;border-bottom:1px solid #1E2235;}
 .modal-camp-title{font-size:.88rem;font-weight:700;color:#F1F3F9;}
 .modal-camp-body{padding:1rem 1.1rem;}
 .modal-camp-input-row{display:flex;gap:.5rem;margin-bottom:1rem;}
 .modal-camp-input{flex:1;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;color:#F1F3F9;font-size:.82rem;outline:none;}
 .modal-camp-input:focus{border-color:#4F6EF7;}
-.modal-camp-list{display:flex;flex-direction:column;gap:.35rem;max-height:280px;overflow-y:auto;}
+.modal-camp-list{display:flex;flex-direction:column;gap:.35rem;max-height:360px;overflow-y:auto;}
+.modal-camp-serv-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin:-.4rem 0 1rem;font-size:.72rem;color:#9CA3AF}
+.modal-camp-serv{background:#0F1420;border:1px solid #2A2F45;border-radius:6px;color:#C4C9D8;font-size:.7rem;padding:.2rem .35rem;cursor:pointer;outline:none;max-width:170px}
+.modal-camp-serv:focus{border-color:#4F6EF7}
+.modal-camp-grupo{font-size:.64rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#4F6EF7;margin:.55rem 0 .1rem}
+.modal-camp-grupo:first-child{margin-top:0}
+.modal-camp-grupo.a-classificar{color:#F59E0B}
+body.light-theme .modal-camp-serv{background:#fff;border-color:#D1D5DB;color:#1A1D2E}
 .modal-camp-item{display:flex;align-items:center;justify-content:space-between;background:#13161F;border:1px solid #1E2235;border-radius:8px;padding:.45rem .75rem;}
 .modal-camp-item-name{font-size:.8rem;color:#C4C9D8;}
 .modal-camp-item-del{background:none;border:none;color:#EF444466;font-size:.85rem;cursor:pointer;padding:.1rem .3rem;border-radius:4px;transition:color .15s;}
@@ -7647,7 +7725,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-18a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-22a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7806,7 +7884,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-18a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-22a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -7932,7 +8010,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       <div class="form-grid">
         <div class="f-group"><label class="f-label">Nome</label><input id="f-name" class="f-input" type="text" placeholder="Nome do lead"/></div>
         <div class="f-group"><label class="f-label">Telefone / WhatsApp</label><input id="f-phone" class="f-input" type="tel" placeholder="(87) 99999-0000" oninput="maskPhone(this)"/></div>
-        <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField();calcHonorarios()"><option value="SM">Salário Maternidade</option><option value="GERAL">Previdenciário Geral</option></select></div>
+        <div class="f-group"><label class="f-label">Tipo de Serviço</label><select id="f-tipo" class="f-select" onchange="togglePartoField();calcHonorarios();atualizarSelectCampanha(false)"><option value="SM">Salário-Maternidade</option><option value="AA">Auxílio-Acidente</option><option value="BPC">BPC/LOAS</option><option value="OUTROS">Outros Previdenciários</option></select></div>
         <div class="f-group"><label class="f-label">Campanha</label><div class="campaign-add-wrap"><select id="f-campaign" class="f-select" style="flex:1"></select><button class="btn-add-campaign" onclick="adicionarNovaCampanha()" title="Adicionar nova campanha">+ Nova</button></div></div>
         <div class="f-group"><label class="f-label">Status</label><select id="f-status" class="f-select" onchange="this.classList.remove('campo-erro');toggleHonorariosField()"><option value="" disabled>Selecione o status...</option><option value="EM ANDAMENTO">Em Andamento</option><option value="QUALIFICADO">Qualificado</option><option value="AGUARDANDO DOCUMENTOS">📄 Ag. Documentos</option><option value="AGUARDANDO ASSINATURA">✍️ Ag. Assinatura</option><option value="CONTRATO FECHADO">Contrato Fechado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="SEM RESPOSTA">Sem Resposta</option></select></div>
         <div class="f-group"><label class="f-label">Atendente</label><select id="f-assignee" class="f-select"></select></div>
