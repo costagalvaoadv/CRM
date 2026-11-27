@@ -834,7 +834,7 @@ function mergeCfg(d){
 }
 let cfgComercial=mergeCfg({});
 // ── Controle de versão: quem estiver com versão antiga para de sincronizar e recebe aviso para atualizar ──
-const APP_VERSAO='2026-11-22a';
+const APP_VERSAO='2026-11-27a';
 let versaoRemota=null,avisoVersaoTimer=null;
 function versaoDesatualizada(){return !!versaoRemota&&versaoRemota>APP_VERSAO;}
 function startVersaoListener(){
@@ -3814,7 +3814,8 @@ window.avancarEtapaFollowup=avancarEtapa;
 
 // ─── MODAL LISTA DE LEADS CLICÁVEL ───
 window.abrirListaLeads = function(leadIds, titulo) {
-  const leads = leadIds.map(id => allLeads.find(l => l.id === id)).filter(Boolean);
+  const leads = leadIds.map(id => allLeads.find(l => l.id === id)).filter(Boolean)
+    .sort((a,b) => (chegadaLead(b)?.getTime()||0) - (chegadaLead(a)?.getTime()||0));
   document.getElementById('lead-list-title').textContent = titulo + ` (${leads.length})`;
   const el = document.getElementById('lead-list-content');
   if (!leads.length) {
@@ -3831,6 +3832,7 @@ window.abrirListaLeads = function(leadIds, titulo) {
             ${l.tipo ? `<span class="tipo-tag tipo-${l.tipo==='SM'?'sm':'geral'}">${l.tipo==='SM'?'SM':'Geral'}</span>` : ''}
             <span class="status-pill" style="color:${sm.color};background:${sm.bg}">${sm.label}</span>
             <span class="llist-resp">${l.assignee || '—'}</span>
+            ${chegadaListaHTML(l)}
           </div>
         </div>
         ${wa ? `<a href="https://wa.me/${wa}" target="_blank" class="btn-wa-xs" onclick="event.stopPropagation()">WhatsApp</a>` : ''}
@@ -3839,6 +3841,17 @@ window.abrirListaLeads = function(leadIds, titulo) {
   }
   document.getElementById('modal-lead-list').style.display = 'flex';
 };
+// Data de chegada na lista: "Chegou em 25/11 às 09:42 (há 2 dias)"
+function chegadaListaHTML(l){
+  const d=chegadaLead(l);
+  if(!d||isNaN(d))return '';
+  const hoje=new Date();
+  const dd=String(d.getDate()).padStart(2,'0'),mm=String(d.getMonth()+1).padStart(2,'0');
+  const data=d.getFullYear()===hoje.getFullYear()?`${dd}/${mm}`:`${dd}/${mm}/${String(d.getFullYear()).slice(-2)}`;
+  const dias=Math.round((new Date(hoje.getFullYear(),hoje.getMonth(),hoje.getDate())-new Date(d.getFullYear(),d.getMonth(),d.getDate()))/86400000);
+  const rel=dias<=0?'hoje':dias===1?'ontem':`há ${dias} dias`;
+  return `<span class="llist-cheg" title="Data e hora em que o lead entrou em contato">📅 Chegou em ${data} às ${horaStr(d)} (${rel})</span>`;
+}
 window.fecharListaLeads = () => document.getElementById('modal-lead-list').style.display = 'none';
 
 // Abrir lista a partir dos cards de métricas do dashboard (filtra pelo mês atual)
@@ -6602,6 +6615,8 @@ thead th{padding:.65rem .9rem;text-align:left;font-size:.65rem;font-weight:700;t
 .llist-name{font-size:.85rem;font-weight:700;color:#F1F3F9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .llist-meta{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
 .llist-resp{font-size:.68rem;color:#6B7280}
+.llist-cheg{font-size:.68rem;color:#9CA3AF;white-space:nowrap}
+body.light-theme .llist-cheg{color:#4B5563}
 body.light-theme .llist-item{background:#F8F9FC;border-color:#E2E5EE}
 body.light-theme .llist-name{color:#1A1D2E}
 
@@ -7725,7 +7740,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-22a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-27a</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7884,7 +7899,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-22a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-27a</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
