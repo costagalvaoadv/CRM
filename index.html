@@ -771,12 +771,14 @@ function renderTarefaHoje(){
   }
 }
 window.irParaAgenda=function(nome){
+  if(currentTab!=='kanban'){window.switchTab('kanban');setTimeout(()=>window.irParaAgenda(nome),200);return;}
   if(currentUser?.role==='gestora')window.setAgFilter(nome||'TODOS');
   const wrap=document.getElementById('ag-list-wrap');
   if(wrap&&wrap.classList.contains('fu-collapsed'))window.toggleAgPanel();
   document.getElementById('ag-panel')?.scrollIntoView({behavior:'smooth',block:'start'});
 };
 window.irParaFollowup=function(nome){
+  if(currentTab!=='kanban'){window.switchTab('kanban');setTimeout(()=>window.irParaFollowup(nome),200);return;}
   if(nome)window.setFuFilter(nome);
   const wrap=document.getElementById('fu-stages-wrap');
   if(wrap&&wrap.classList.contains('fu-collapsed'))window.toggleFuPanel();
@@ -834,7 +836,7 @@ function mergeCfg(d){
 }
 let cfgComercial=mergeCfg({});
 // ── Controle de versão: quem estiver com versão antiga para de sincronizar e recebe aviso para atualizar ──
-const APP_VERSAO='2026-11-27a';
+const APP_VERSAO='2026-11-27b';
 let versaoRemota=null,avisoVersaoTimer=null;
 function versaoDesatualizada(){return !!versaoRemota&&versaoRemota>APP_VERSAO;}
 function startVersaoListener(){
@@ -3877,7 +3879,7 @@ window.abrirMetricaLeads = function(status) {
   let titulo = `Todos os Leads — ${periodoLabel}`;
   if (status !== 'TODOS') {
     leads = leads.filter(l => l.status === status);
-    titulo = `${STATUS_META[status]?.label || status} — ${periodoLabel}`;
+    titulo = `${status==='QUALIFICADO'?'Qualificados em aberto':(STATUS_META[status]?.label || status)} — ${periodoLabel}`;
   }
   abrirListaLeads(leads.map(l => l.id), titulo);
 };
@@ -4452,6 +4454,8 @@ window.renderRelatorios=function(){
   const taxa=leads.length?Math.round(leads.filter(l=>isQualificadoOuPosterior(l.status)).length/leads.length*100):0;
   document.getElementById('rel-total').textContent   =leadsAll.length;
   document.getElementById('rel-qualif').textContent  =leadsAll.filter(l=>isQualificadoOuPosterior(l.status)).length;
+  {const _qa=leadsAll.filter(l=>l.status==='QUALIFICADO').length,_qs=leadsAll.filter(l=>isQualificadoOuPosterior(l.status)).length-_qa;
+   const _kq=document.getElementById('kpi-qualif');if(_kq)_kq.title=`${_qa} em Qualificado · ${_qs} em Ag. Documentos, Ag. Assinatura ou Contrato Fechado`;}
   document.getElementById('rel-contrato').textContent=contratosPeriodo.length;
   document.getElementById('rel-desq').textContent    =leadsAll.filter(l=>l.status==='DESQUALIFICADO').length;
   document.getElementById('rel-taxa').textContent    =taxa+'%';
@@ -6184,6 +6188,8 @@ window.trocarPlano=function(id){
 
 window.switchTab=function(tab){
   currentTab=tab;
+  // Topo (período, cards, alertas, tarefas, follow-ups, agenda) só aparece no Kanban
+  document.querySelector('main')?.classList.toggle('aba-conteudo',tab!=='kanban');
   window.scrollTo({top:0,behavior:'smooth'});
   ['kanban','table','equipe','relatorios','estrategia','indicacao','autoauditorias'].forEach(t=>{
     document.getElementById('tab-'+t)?.classList.toggle('tab-active',t===tab);
@@ -6264,6 +6270,13 @@ header{background:#0B0D14;border-bottom:1px solid #1E2235;padding:0 1rem;height:
 .btn-hdr-primary{background:#4F6EF7;border-color:#4F6EF7;color:#fff}
 .btn-hdr-primary:hover{background:#3B5BDB;border-color:#3B5BDB;color:#fff}
 main{padding:1rem;max-width:100%;margin:0 auto;overflow-x:hidden}
+main.aba-conteudo>#meta-alerta,main.aba-conteudo>#dash-period-bar,main.aba-conteudo>.metrics-grid,main.aba-conteudo>#aa-area,main.aba-conteudo>#tarefa-hoje-card,main.aba-conteudo>#fu-panel,main.aba-conteudo>#ag-panel{display:none!important}
+.aba-head{display:flex;align-items:flex-end;justify-content:space-between;flex-wrap:wrap;gap:.6rem;padding:.2rem 0 .85rem;margin-bottom:1rem;border-bottom:1px solid #1E2235}
+.aba-titulo{font-size:1.25rem;font-weight:800;letter-spacing:-.01em;color:#F1F3F9;line-height:1.2}
+.aba-sub{font-size:.76rem;color:#6B7280;margin-top:.25rem}
+body.light-theme .aba-head{border-bottom-color:#E2E5EE}
+body.light-theme .aba-titulo{color:#1A1D2E}
+.rel-kpi-desc{font-size:.6rem;color:#6B7280;margin-top:.15rem;line-height:1.3}
 .metrics-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:.6rem;margin-bottom:1.25rem}
 .metric-card{background:#13161F;border:1px solid #1E2235;border-radius:10px;padding:.9rem 1.1rem}
 .metric-label{font-size:.65rem;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.2rem}
@@ -7740,7 +7753,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
 </div>
 <div id="screen-app" style="display:none;flex-direction:column;min-height:100vh">
   <header>
-    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-27a</span></div>
+    <div class="h-brand">COSTA GALVÃO | CRM <span class="h-versao" title="Versão do sistema. Confira se é a mais recente depois de cada atualização.">versão 2026-11-27b</span></div>
     <div class="h-center"><div id="online-users"></div></div>
     <div class="h-right">
       <div class="h-user"><span class="h-user-name" id="header-name">—</span><span class="h-user-role" id="header-role">—</span></div>
@@ -7782,7 +7795,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
     <div class="metrics-grid">
       <div class="metric-card mc-blue clickable-card" onclick="abrirMetricaLeads('TODOS')">  <div class="metric-label">Leads no Período</div>  <div class="metric-value" id="m-total">—</div></div>
       <div class="metric-card mc-amber clickable-card" onclick="abrirMetricaLeads('EM ANDAMENTO')"> <div class="metric-label">Em Andamento</div>  <div class="metric-value" id="m-andamento">—</div></div>
-      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados</div>  <div class="metric-value" id="m-qualif">—</div><div class="metric-pct" id="m-qualif-pct"></div></div>
+      <div class="metric-card mc-green clickable-card" onclick="abrirMetricaLeads('QUALIFICADO')"> <div class="metric-label">Qualificados em aberto</div>  <div class="metric-value" id="m-qualif">—</div><div class="metric-pct" id="m-qualif-pct"></div></div>
       <div class="metric-card mc-amber2 clickable-card" onclick="abrirMetricaLeads('AGUARDANDO DOCUMENTOS')"><div class="metric-label">Ag. Documentos</div><div class="metric-value" id="m-agdocs">—</div></div>
       <div class="metric-card mc-cyan clickable-card" onclick="abrirMetricaLeads('AGUARDANDO ASSINATURA')"><div class="metric-label">Ag. Assinatura</div> <div class="metric-value" id="m-agass">—</div></div>
       <div class="metric-card mc-purple clickable-card" onclick="abrirMetricaLeads('CONTRATO FECHADO')"><div class="metric-label">Contratos</div>     <div class="metric-value" id="m-contrato">—</div><div class="metric-pct" id="m-contrato-pct"></div></div>
@@ -7843,6 +7856,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       </div>
     </div>
     <div id="view-table" class="hidden">
+      <div class="aba-head"><div><div class="aba-titulo">📋 Tabela de Leads</div><div class="aba-sub">Todos os leads, com busca e filtros por status e tempo de resposta</div></div></div>
       <div class="table-controls">
         <input class="search-input" type="text" placeholder="Buscar nome ou telefone..." oninput="onSearch(this.value)"/>
         <select class="search-input" style="width:auto;cursor:pointer" onchange="setFiltroFaixa(this.value)" title="Filtrar pelo tempo de resposta">
@@ -7873,6 +7887,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       </div>
     </div>
     <div id="view-relatorios" class="hidden">
+      <div class="aba-head"><div><div class="aba-titulo">📊 Relatórios</div><div class="aba-sub">Números do período: leads, qualificação, contratos e diagnóstico do funil</div></div></div>
       <div class="rel-controls">
         <div class="rel-group"><label class="rel-label">Período</label><select id="rel-periodo" class="rel-select" onchange="renderRelatorios()"><option value="mes-atual">Mês Atual</option><option value="mes-anterior">Mês Anterior</option><option value="3-meses">Últimos 3 Meses</option><option value="6-meses">Últimos 6 Meses</option><option value="especifica">Data Específica</option></select></div>
         <div class="rel-group" id="rel-data-range" style="display:none;gap:.4rem;flex-direction:row;align-items:flex-end">
@@ -7884,7 +7899,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       </div>
       <div class="rel-kpis">
         <div class="rel-kpi" id="kpi-total"    onclick="relKpiFilter=null;renderRelatorios()"><div class="rel-kpi-label">Total Leads</div><div class="rel-kpi-val" id="rel-total">—</div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).map(l=>l.id),'Total de Leads')">👁 Ver</button></div>
-        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO_OU_POSTERIOR')" title="Inclui leads que avançaram no funil (Ag. Documentos, Ag. Assinatura, Contrato Fechado)"><div class="rel-kpi-label">Qualificados</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>isQualificadoOuPosterior(l.status)).map(l=>l.id),'Qualificados')">👁 Ver</button></div>
+        <div class="rel-kpi" id="kpi-qualif"   onclick="clickKpi('QUALIFICADO_OU_POSTERIOR')"><div class="rel-kpi-label">Qualificados no período</div><div class="rel-kpi-val" id="rel-qualif" style="color:#10B981">—</div><div class="rel-kpi-desc">De Qualificado a Contrato Fechado</div><div class="rel-kpi-pct" id="rel-qualif-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>isQualificadoOuPosterior(l.status)).map(l=>l.id),'Qualificados no período')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-contrato" onclick="clickKpi('CONTRATO FECHADO')"><div class="rel-kpi-label">Contratos</div><div class="rel-kpi-val" id="rel-contrato" style="color:#8B5CF6">—</div><div class="rel-kpi-pct" id="rel-contrato-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getContratosFechadosPeriodo().map(l=>l.id),'Contratos Fechados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-desq"     onclick="clickKpi('DESQUALIFICADO')"><div class="rel-kpi-label">Desqualificados</div><div class="rel-kpi-val" id="rel-desq" style="color:#EF4444">—</div><div class="rel-kpi-pct" id="rel-desq-pct"></div><button class="kpi-ver-btn" onclick="event.stopPropagation();abrirListaLeads(getLeadsFiltrados(true).filter(l=>l.status==='DESQUALIFICADO').map(l=>l.id),'Desqualificados')">👁 Ver</button></div>
         <div class="rel-kpi" id="kpi-taxa"><div class="rel-kpi-label">Taxa Qualif.</div><div class="rel-kpi-val" id="rel-taxa" style="color:#4F6EF7">—</div></div>
@@ -7899,7 +7914,7 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       <div class="chart-card" id="fora-exp-card" style="margin-bottom:1rem"></div>
       <div class="chart-card" id="funil-diag-card" style="margin-bottom:1rem">
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.85rem">
-          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-27a</span></div>
+          <div class="chart-title" style="margin-bottom:0">🔍 Diagnóstico do Funil <span style="font-size:.55rem;font-weight:400;color:#3A3F55" title="Versão do arquivo, para conferir se o navegador carregou a última atualização">build 2026-11-27b</span></div>
           <div class="funil-diag-comp-controls">
             <span class="funil-diag-vs">Mês A</span>
             <input type="month" id="funil-mes-a" class="rel-date funil-comp-date" onchange="renderFunilDiagnostico()" oninput="renderFunilDiagnostico()">
@@ -7922,8 +7937,8 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       </div>
     </div>
     <div id="view-estrategia" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
-        <div><div style="font-size:.95rem;font-weight:700" id="est-titulo">🎯 Painel Estratégico</div><div style="font-size:.72rem;color:#6B7280;margin-top:.2rem" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
+      <div class="aba-head">
+        <div><div class="aba-titulo" id="est-titulo">🎯 Painel Estratégico</div><div class="aba-sub" id="est-subtitulo">Visão analítica para decisões e intensificação de follow-up</div></div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap">
           <button class="btn-hdr" onclick="imprimirRelatorio()" style="background:#8B5CF6;color:#fff;border-color:#8B5CF6">🖨️ Imprimir / PDF</button>
           <button class="btn-hdr" onclick="renderEstrategia()">↻ Atualizar</button>
@@ -7973,24 +7988,24 @@ body.light-theme .ct-semfu{color:#B45309}body.light-theme .ct-semfu strong{color
       <div id="estrategia-content"></div>
     </div>
     <div id="view-equipe" class="hidden">
-      <div class="equipe-header"><span class="equipe-title">Gestão de Equipe</span><div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn-hdr" onclick="abrirModalDistribuir()">🔀 Distribuir sem atendente</button><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div></div>
+      <div class="aba-head"><div><div class="aba-titulo">👥 Gestão de Equipe</div><div class="aba-sub">Colaboradoras, distribuição de leads e configurações do comercial</div></div><div style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="btn-hdr" onclick="abrirModalDistribuir()">🔀 Distribuir sem atendente</button><button class="btn-hdr btn-hdr-primary" onclick="abrirModalEquipe(null)">+ Nova Colaboradora</button></div></div>
       <div id="equipe-lista"></div>
       <div id="cfg-comercial-wrap" class="est-section" style="margin-top:1.25rem;display:none"></div>
     </div>
     <!-- FASE 3: AUTOAUDITORIAS (GESTORA) -->
     <div id="view-autoauditorias" class="hidden">
-      <div style="margin-bottom:1rem">
-        <div style="font-size:.95rem;font-weight:700">🪞 Autoauditorias da equipe</div>
-        <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Resumo semanal de cada atendente: números, correções feitas, conferência das conversões, reflexão e compromissos</div>
-      </div>
+      <div class="aba-head"><div>
+        <div class="aba-titulo">🪞 Autoauditorias da Equipe</div>
+        <div class="aba-sub">Resumo semanal de cada atendente: números, correções feitas, conferência das conversões, reflexão e compromissos</div>
+      </div></div>
       <div id="aa-painel"></div>
     </div>
     <!-- INDICAÇÃO VIEW -->
     <div id="view-indicacao" class="hidden">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem">
+      <div class="aba-head">
         <div>
-          <div style="font-size:.95rem;font-weight:700">🤝 Operação de Indicação Ativa</div>
-          <div style="font-size:.72rem;color:#6B7280;margin-top:.2rem">Clientes com contrato fechado — transforme cada contrato em novas indicações</div>
+          <div class="aba-titulo">🤝 Operação de Indicação Ativa</div>
+          <div class="aba-sub">Clientes com contrato fechado — transforme cada contrato em novas indicações</div>
         </div>
         <div style="display:flex;gap:.5rem;flex-wrap:wrap">
           <button class="ind-filter-btn ind-filter-active" id="ind-f-todos" onclick="setIndFiltro('todos',this)">Todos</button>
